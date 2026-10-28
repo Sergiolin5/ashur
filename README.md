@@ -3,12 +3,14 @@
 Personal multi-device assistant. The core lives on the always-on server; every
 other device is a node that comes and goes.
 
-Status: v0, milestones 1–2 (core skeleton and simulated nodes). No real device yet.
+Status: v0. Core running on ZimaOS; node agent and inventory module ready for the first Windows node.
 
 ## Layout
 
 ```
 core/      server API, SQLite storage, offline sweep
+node/      node agent: enrollment, heartbeat, task loop, yield policies
+modules/   capabilities (module.yaml + action.py + selftest.py); inventory first
 shared/    protocol messages used by core and nodes
 sim/       simulated nodes and churn scenarios
 tests/     unit and scenario tests
@@ -37,6 +39,20 @@ In ZimaOS: App Store → **+** → Install a customized app → import
 `deploy/zimaos-compose.yaml`. On first start the core prints its enroll and admin
 keys once in the app log and saves them to `/DATA/AppData/ashur/keys.json`.
 Check it from any tailnet device: `http://<server>:8711/health`.
+
+## Add a Windows node
+
+In PowerShell, as your normal user, with Tailscale on:
+
+```powershell
+irm https://raw.githubusercontent.com/Sergiolin5/ashur/main/deploy/install_windows.ps1 | iex
+```
+
+It installs Python if needed, asks for the device name, the server's Tailscale
+name, the yield policy and the enroll key (typed once, never saved), runs the
+self-test and starts the agent at every logon. Running it again updates the code.
+The first join queues a read-only inventory scan, which waits until the machine
+is idle (Full mode).
 
 ## Rules
 

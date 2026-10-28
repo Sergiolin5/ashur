@@ -16,8 +16,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 
 from core.db import DB, hash_token
 from shared.protocol import (
-    OFFLINE_AFTER_S, Heartbeat, Mode, NewTask, NodeStatus, RegisterRequest,
-    RegisterResponse, Task, TaskResult, Weight,
+    OFFLINE_AFTER_S, Heartbeat, InventoryBatch, Mode, NewTask, NodeStatus,
+    RegisterRequest, RegisterResponse, Task, TaskResult, Weight,
 )
 
 # Which task weights a node may take in each mode.
@@ -101,6 +101,11 @@ def create_app(
         db.log(now, req.device_id, "reregister" if existed else "register",
                {"persona": req.persona, "os": req.os, "modules": req.modules,
                 "simulated": req.simulated})
+        if not existed and not req.simulated and "inventory" in req.modules:
+            # Read tier: a first scan needs no approval. Heavy, so it waits for Full mode.
+            tid = db.add_task("inventory", {}, Weight.HEAVY.value, now, target=req.device_id)
+            db.log(now, req.device_id, "task_queued",
+                   {"task_id": tid, "module": "inventory", "reason": "first join"})
         return RegisterResponse(device_id=req.device_id, token=token)
 
     @app.post("/nodes/{node_id}/heartbeat")
@@ -141,6 +146,13 @@ def create_app(
                {"task_id": task_id, "error": res.error})
         return {"ok": True}
 
+    @app.post("/nodes/{node_id}/inventory")
+    def inventory_upload(batch: InventoryBatch, node: dict = Depends(require_node)):
+        if batch.reset:
+            db.inventory_reset(node["id"])
+        n = db.inventory_add(node["id"], [r.model_dump() for r in batch.rows])
+        return {"ok": True, "stored": n}
+
     # --- Sergio / Ashur endpoints ---------------------------------------
     @app.get("/")
     def root():
@@ -172,8 +184,9 @@ def create_app(
     @app.post("/tasks", dependencies=[Depends(require_admin)])
     def add_task(t: NewTask):
         now = clock()
-        tid = db.add_task(t.module, t.payload, t.weight.value, now)
-        db.log(now, None, "task_queued", {"task_id": tid, "module": t.module, "weight": t.weight.value})
+        tid = db.add_task(t.module, t.payload, t.weight.value, now, target=t.target)
+        db.log(now, t.target, "task_queued",
+               {"task_id": tid, "module": t.module, "weight": t.weight.value})
         return {"task_id": tid}
 
     @app.get("/tasks/{task_id}", dependencies=[Depends(require_admin)])
@@ -190,6 +203,14 @@ def create_app(
         requeued = db.requeue_tasks_of(node_id)
         db.log(clock(), node_id, "revoked", {"requeued_tasks": requeued})
         return {"ok": True}
+
+    @app.get("/inventory", dependencies=[Depends(require_admin)])
+    def inventory_summary():
+        return db.inventory_summary()
+
+    @app.get("/inventory/{node_id}", dependencies=[Depends(require_admin)])
+    def inventory_list(node_id: str, runnable: bool = False, limit: int = 100, offset: int = 0):
+        return db.inventory_rows(node_id, runnable, min(limit, 1000), offset)
 
     @app.get("/log", dependencies=[Depends(require_admin)])
     def log(limit: int = 200):

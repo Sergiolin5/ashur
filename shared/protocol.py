@@ -67,6 +67,21 @@ class NewTask(BaseModel):
     module: str
     payload: dict[str, Any] = {}
     weight: Weight = Weight.LIGHT
+    target: Optional[str] = None      # only this node may take it
+
+
+class InventoryRow(BaseModel):
+    path: str = Field(max_length=4096)
+    size: Optional[int] = None
+    kind: str = "file"                # file, folder_summary, sensitive
+    modified: Optional[float] = None
+    hash: Optional[str] = None
+    runnable: bool = False
+
+
+class InventoryBatch(BaseModel):
+    reset: bool = False               # first batch of a scan clears the node's old rows
+    rows: list[InventoryRow] = Field(default_factory=list, max_length=5000)
 
 
 class Task(BaseModel):

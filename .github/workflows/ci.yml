@@ -6,7 +6,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,3 +20,21 @@ jobs:
       - run: python -m pytest -q
       - name: Replay the evening churn scenario
         run: python -m sim.scenario sim/scenarios/evening_churn.yaml
+
+      - name: Windows signals work on a real Windows machine
+        if: runner.os == 'Windows'
+        run: python -c "from node.policy import SignalReader; print(SignalReader().read())"
+      - name: Installer script parses
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/deploy/install_windows.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+          "install_windows.ps1: no syntax errors"
+      - name: Node self-test on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "device_id: ci`ncore_url: http://127.0.0.1:9`nmodules: [inventory]`nyield_policy: shared_main_machine" | Set-Content node-ci.yaml
+          python -m node.agent --config node-ci.yaml --selftest

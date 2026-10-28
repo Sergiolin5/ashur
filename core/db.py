@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     weight      TEXT NOT NULL,
     status      TEXT NOT NULL,
     node_id     TEXT,
+    target      TEXT,                   -- only this node may take it (NULL = any)
     result      TEXT,                   -- JSON object
     created     REAL NOT NULL,
     finished    REAL
@@ -70,7 +71,14 @@ class DB:
         self.lock = threading.Lock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            self._migrate()
             self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns that older databases on the server don't have yet."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(tasks)")}
+        if "target" not in cols:
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN target TEXT")
 
     # --- session log -----------------------------------------------------
     def log(self, ts: float, node_id: Optional[str], event: str, detail: dict | None = None):
@@ -144,11 +152,13 @@ class DB:
         return d
 
     # --- tasks -----------------------------------------------------------
-    def add_task(self, module: str, payload: dict, weight: str, now: float) -> int:
+    def add_task(self, module: str, payload: dict, weight: str, now: float,
+                 target: Optional[str] = None) -> int:
         with self.lock:
             cur = self.conn.execute(
-                "INSERT INTO tasks (module, payload, weight, status, created) VALUES (?, ?, ?, 'queued', ?)",
-                (module, json.dumps(payload), weight, now),
+                "INSERT INTO tasks (module, payload, weight, status, target, created)"
+                " VALUES (?, ?, ?, 'queued', ?, ?)",
+                (module, json.dumps(payload), weight, target, now),
             )
             self.conn.commit()
             return cur.lastrowid
@@ -163,8 +173,9 @@ class DB:
             r = self.conn.execute(
                 f"""SELECT * FROM tasks WHERE status = 'queued'
                     AND module IN ({m_ph}) AND weight IN ({w_ph})
+                    AND (target IS NULL OR target = ?)
                     ORDER BY id LIMIT 1""",
-                (*modules, *weights),
+                (*modules, *weights, node_id),
             ).fetchone()
             if not r:
                 return None
@@ -209,3 +220,39 @@ class DB:
         with self.lock:
             rows = self.conn.execute("SELECT status, COUNT(*) n FROM tasks GROUP BY status").fetchall()
         return {r["status"]: r["n"] for r in rows}
+
+    # --- inventory ---------------------------------------------------------
+    def inventory_reset(self, node_id: str) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM inventory WHERE node_id = ?", (node_id,))
+            self.conn.commit()
+
+    def inventory_add(self, node_id: str, rows: list[dict]) -> int:
+        """Upsert a batch; the approved flag survives rescans."""
+        with self.lock:
+            self.conn.executemany(
+                """INSERT INTO inventory (node_id, path, size, kind, modified, hash, runnable, approved)
+                   VALUES (:node_id, :path, :size, :kind, :modified, :hash, :runnable, 0)
+                   ON CONFLICT(node_id, path) DO UPDATE SET size=:size, kind=:kind,
+                     modified=:modified, hash=:hash, runnable=:runnable""",
+                [{"node_id": node_id, "path": r["path"], "size": r.get("size"),
+                  "kind": r.get("kind"), "modified": r.get("modified"), "hash": r.get("hash"),
+                  "runnable": int(bool(r.get("runnable")))} for r in rows],
+            )
+            self.conn.commit()
+        return len(rows)
+
+    def inventory_summary(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                """SELECT node_id, COUNT(*) entries, COALESCE(SUM(size), 0) bytes,
+                          SUM(runnable) runnable, SUM(approved) approved
+                   FROM inventory GROUP BY node_id ORDER BY node_id"""
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def inventory_rows(self, node_id: str, runnable_only: bool, limit: int, offset: int) -> list[dict]:
+        q = "SELECT * FROM inventory WHERE node_id = ?" + (" AND runnable = 1" if runnable_only else "")
+        q += " ORDER BY size DESC LIMIT ? OFFSET ?"
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(q, (node_id, limit, offset)).fetchall()]

@@ -12,13 +12,18 @@ import secrets
 import time
 from typing import Callable, Optional
 
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import HTMLResponse
 
 from core.db import DB, hash_token
 from shared.protocol import (
     OFFLINE_AFTER_S, Heartbeat, InventoryBatch, Mode, NewTask, NodeStatus,
     RegisterRequest, RegisterResponse, Task, TaskResult, Weight,
 )
+
+UI_PAGE = Path(__file__).parent / "ui" / "index.html"
 
 # Which task weights a node may take in each mode.
 WEIGHTS_FOR_MODE = {
@@ -71,9 +76,10 @@ def create_app(
         if task:
             task.cancel()
 
-    app = FastAPI(title="Ashur core", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Ashur core", version="0.3.0", lifespan=lifespan)
     app.state.db = db
     app.state.sweep = sweep
+    progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch
 
     # --- auth ------------------------------------------------------------
     def require_admin(x_admin_key: str = Header(default="")):
@@ -126,7 +132,7 @@ def create_app(
     def next_task(node: dict = Depends(require_node)):
         sweep()
         mode = Mode(node["mode"])
-        t = db.claim_task(node["id"], node["modules"], WEIGHTS_FOR_MODE[mode])
+        t = db.claim_task(node["id"], node["modules"], WEIGHTS_FOR_MODE[mode], now=clock())
         if not t:
             return None
         db.log(clock(), node["id"], "task_start", {"task_id": t["id"], "module": t["module"]})
@@ -150,15 +156,36 @@ def create_app(
     def inventory_upload(batch: InventoryBatch, node: dict = Depends(require_node)):
         if batch.reset:
             db.inventory_reset(node["id"])
+            progress[node["id"]] = {"entries": 0}
         n = db.inventory_add(node["id"], [r.model_dump() for r in batch.rows])
+        p = progress.setdefault(node["id"], {"entries": 0})
+        p["entries"] += n
+        p["updated"] = clock()
+        if batch.rows:
+            last = batch.rows[-1].path.replace("\\", "/")
+            p["folder"] = last.rsplit("/", 1)[0] if "/" in last else last
         return {"ok": True, "stored": n}
 
     # --- Sergio / Ashur endpoints ---------------------------------------
-    @app.get("/")
+    @app.get("/", response_class=HTMLResponse)
     def root():
-        """What the ZimaOS "open" button shows."""
-        return {"service": "ashur-core", "version": app.version,
-                "message": "Ashur core is running. Nodes connect here; see /health."}
+        """The status page the ZimaOS "open" button shows. Data needs the admin key."""
+        return HTMLResponse(UI_PAGE.read_text(encoding="utf-8"),
+                            headers={"Cache-Control": "no-store",
+                                     "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:"})
+
+    @app.get("/api/overview", dependencies=[Depends(require_admin)])
+    def overview():
+        sweep()
+        now = clock()
+        running = []
+        for t in db.running_tasks():
+            p = progress.get(t["node_id"], {})
+            running.append({**t, "elapsed_s": round(now - t["started"], 1) if t["started"] else None,
+                            "entries": p.get("entries"), "folder": p.get("folder")})
+        return {"version": app.version, "now": now, "status": status(), "running": running,
+                "queued": db.queued_tasks(), "inventory": db.inventory_summary(),
+                "activity": db.log_rows(30)}
 
     @app.get("/health")
     def health():

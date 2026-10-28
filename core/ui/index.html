@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ashur">
+<title>Ashur</title>
+<style>
+  :root {
+    --bg: #F2F2F7;
+    --row: #FFFFFF;
+    --label: #000000;
+    --secondary: #8A8A8E;
+    --separator: rgba(60, 60, 67, 0.18);
+    --tint: #5856D6;
+    --green: #34C759;
+    --amber: #FF9F0A;
+    --gray: #AEAEB2;
+    --red: #FF3B30;
+    --field: #E9E9EE;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --row: #1C1C1E;
+      --label: #FFFFFF;
+      --secondary: #8D8D93;
+      --separator: rgba(84, 84, 88, 0.55);
+      --tint: #7D7AFF;
+      --green: #30D158;
+      --amber: #FFB340;
+      --gray: #636366;
+      --red: #FF453A;
+      --field: #2C2C2E;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--label);
+    font: 17px/1.29 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(40px, env(safe-area-inset-bottom));
+  }
+  header { padding: 28px 4px 18px; }
+  h1 {
+    margin: 0;
+    font: 700 34px/1.12 -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+    letter-spacing: 0.01em;
+  }
+  .subtitle { margin-top: 4px; color: var(--secondary); font-size: 15px; }
+  .subtitle .live { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+                    background: var(--green); margin-right: 6px; vertical-align: 1px; }
+  .subtitle.stale .live { background: var(--red); }
+  .subtitle.locked .live { background: var(--gray); }
+
+  section { margin-top: 26px; }
+  h2 {
+    margin: 0 0 7px 16px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--secondary);
+    letter-spacing: 0;
+  }
+  .group { background: var(--row); border-radius: 12px; overflow: hidden; }
+  .row {
+    display: flex; align-items: center; gap: 12px;
+    min-height: 44px; padding: 11px 16px;
+    position: relative;
+  }
+  .row + .row::before {
+    content: ""; position: absolute; top: 0; right: 0; left: 16px;
+    border-top: 0.5px solid var(--separator);
+  }
+  .row.indent + .row.indent::before { left: 37px; }
+  .row .main { flex: 1; min-width: 0; }
+  .row .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .detail { color: var(--secondary); font-size: 15px; margin-top: 1px;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .value { color: var(--secondary); font-size: 15px; white-space: nowrap;
+                font-variant-numeric: tabular-nums; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--gray); }
+  .dot.full { background: var(--green); }
+  .dot.light { background: var(--amber); }
+  .dot.offline { background: var(--red); }
+  .empty { color: var(--secondary); }
+  .note { margin: 7px 16px 0; color: var(--secondary); font-size: 13px; }
+
+  /* the one thing that moves: the node at work */
+  .work { display: block; padding: 16px; }
+  .work .who { color: var(--secondary); font-size: 15px; }
+  .work .count {
+    margin-top: 2px;
+    font: 600 40px/1.1 -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .work .count small { font-size: 17px; font-weight: 400; color: var(--secondary); letter-spacing: 0; }
+  .work .folder { margin-top: 6px; color: var(--secondary); font-size: 13px;
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .bar { margin-top: 12px; height: 3px; border-radius: 2px; background: var(--field); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 30%; border-radius: 2px; background: var(--tint);
+           animation: sweep 1.8s ease-in-out infinite; }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+  @media (prefers-reduced-motion: reduce) { .bar i { animation: none; width: 100%; opacity: .5; } }
+
+  /* sign in */
+  .signin { padding: 16px; }
+  .signin p { margin: 0 0 12px; color: var(--secondary); font-size: 15px; }
+  input {
+    width: 100%; font: inherit; color: var(--label);
+    background: var(--field); border: 0; border-radius: 10px; padding: 11px 12px;
+  }
+  button {
+    margin-top: 12px; width: 100%; font-family: inherit; font-size: 17px; font-weight: 600; line-height: 1;
+    color: #fff; background: var(--tint); border: 0; border-radius: 12px; padding: 14px;
+  }
+  .error { color: var(--red); font-size: 15px; margin-top: 10px; }
+  .link { background: none; color: var(--tint); font-weight: 400; padding: 12px 16px; text-align: left; margin: 0; }
+  :focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Ashur</h1>
+    <div class="subtitle" id="subtitle"><span class="live"></span><span id="subtitle-text">Conectando…</span></div>
+  </header>
+
+  <section id="signin" hidden>
+    <div class="group signin">
+      <p>Introduce la clave de administrador de keys.json. Se guarda solo en este navegador.</p>
+      <form id="signin-form">
+        <input id="key" type="password" autocomplete="current-password" placeholder="Clave de administrador" aria-label="Clave de administrador">
+        <button type="submit">Conectar</button>
+        <div class="error" id="signin-error" hidden></div>
+      </form>
+    </div>
+  </section>
+
+  <div id="dashboard" hidden>
+    <section>
+      <h2>Trabajando ahora</h2>
+      <div class="group" id="working"></div>
+      <div class="note" id="queued-note" hidden></div>
+    </section>
+
+    <section>
+      <h2>Dispositivos</h2>
+      <div class="group" id="devices"></div>
+    </section>
+
+    <section>
+      <h2>Inventario</h2>
+      <div class="group" id="inventory"></div>
+    </section>
+
+    <section>
+      <h2>Actividad reciente</h2>
+      <div class="group" id="activity"></div>
+    </section>
+
+    <section>
+      <div class="group"><button class="link" id="signout" type="button">Olvidar la clave en este navegador</button></div>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const KEY = "ashur.adminKey";
+  const MODE = {
+    full: "Disponible", light: "Uso ligero", busy: "Ocupado",
+    off: "En pausa", offline: "Desconectado"
+  };
+  const MODULE = { inventory: "Inventario" };
+  const OS = { windows: "Windows", macos: "macOS", linux: "Linux" };
+  const $ = (id) => document.getElementById(id);
+
+  let key = null;
+  try { key = localStorage.getItem(KEY); } catch (e) {}
+  let timer = null;
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+  function row(opts) {
+    const r = el("div", "row" + (opts.dot ? " indent" : ""));
+    if (opts.dot) r.append(el("span", "dot " + opts.dot));
+    const m = el("div", "main");
+    m.append(el("div", "title", opts.title));
+    if (opts.detail) m.append(el("div", "detail", opts.detail));
+    r.append(m);
+    if (opts.value) r.append(el("div", "value", opts.value));
+    return r;
+  }
+  function fill(id, nodes, emptyText) {
+    const g = $(id);
+    g.replaceChildren(...(nodes.length ? nodes : [row({ title: emptyText })]));
+    if (!nodes.length) g.firstChild.querySelector(".title").classList.add("empty");
+  }
+  const nf = new Intl.NumberFormat("es-CO");
+  function ago(seconds) {
+    if (seconds === null || seconds === undefined) return "";
+    const s = Math.max(0, Math.round(seconds));
+    if (s < 60) return "hace " + s + " s";
+    if (s < 3600) return "hace " + Math.floor(s / 60) + " min";
+    if (s < 86400) return "hace " + Math.floor(s / 3600) + " h";
+    return "hace " + Math.floor(s / 86400) + " d";
+  }
+  function duration(seconds) {
+    const s = Math.max(0, Math.round(seconds || 0));
+    if (s < 60) return s + " s";
+    if (s < 3600) return Math.floor(s / 60) + " min";
+    return Math.floor(s / 3600) + " h " + Math.floor((s % 3600) / 60) + " min";
+  }
+  function bytes(b) {
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0, v = b || 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (i ? v.toFixed(v < 10 ? 1 : 0) : v) + " " + u[i];
+  }
+  function clock(ts) {
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
+  }
+  function describe(ev) {
+    const d = ev.detail || {};
+    const mod = MODULE[d.module] || d.module || "tarea";
+    switch (ev.event) {
+      case "register": return "Se unió a Ashur";
+      case "reregister": return "Volvió a registrarse";
+      case "offline": return "Se desconectó";
+      case "back_online": return "Volvió a conectarse";
+      case "mode_change": return ({ full: "Quedó disponible", light: "Pasó a uso ligero",
+                                    busy: "Se ocupó", off: "Se pausó" })[d.to] || ("Cambió a " + d.to);
+      case "task_queued": return "Nueva tarea: " + mod.toLowerCase() + (d.reason === "first join" ? " inicial" : "");
+      case "task_start": return "Empezó " + mod.toLowerCase();
+      case "task_done": return "Terminó la tarea " + d.task_id;
+      case "task_failed": return "Falló la tarea " + d.task_id;
+      case "revoked": return "Acceso revocado";
+      default: return ev.event;
+    }
+  }
+
+  function render(data) {
+    const now = data.now;
+    const nodes = data.status.nodes;
+    const byId = Object.fromEntries(nodes.map((n) => [n.device_id, n]));
+
+    // working now
+    const working = data.running.map((t) => {
+      const w = el("div", "work");
+      w.append(el("div", "who", (MODULE[t.module] || t.module) + " en " + t.node_id + ", " + duration(t.elapsed_s)));
+      const c = el("div", "count", t.entries !== null && t.entries !== undefined ? nf.format(t.entries) : "Empezando");
+      if (t.entries !== null && t.entries !== undefined) {
+        c.append(" ", el("small", null, t.entries === 1 ? "elemento" : "elementos"));
+      }
+      w.append(c);
+      if (t.folder) w.append(el("div", "folder", "‎" + t.folder));
+      const bar = el("div", "bar"); bar.append(el("i")); w.append(bar);
+      return w;
+    });
+    fill("working", working, "Nada en curso.");
+
+    const waiting = data.queued.length;
+    const qn = $("queued-note");
+    if (waiting) {
+      const blocked = data.queued.filter((q) => q.weight === "heavy" && q.target && byId[q.target] && byId[q.target].mode !== "full");
+      let text = waiting === 1 ? "1 tarea en espera." : waiting + " tareas en espera.";
+      if (blocked.length) {
+        const names = [...new Set(blocked.map((q) => q.target))].join(", ");
+        text += " Las de " + names + " empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.";
+      }
+      qn.textContent = text; qn.hidden = false;
+    } else { qn.hidden = true; }
+
+    // devices
+    fill("devices", nodes.map((n) => row({
+      dot: n.mode,
+      title: n.device_id,
+      detail: (OS[n.os] || n.os) + ", " + MODE[n.mode].toLowerCase(),
+      value: ago(n.last_seen_s_ago)
+    })), "Ningún dispositivo todavía.");
+
+    // inventory
+    fill("inventory", data.inventory.map((i) => row({
+      title: i.node_id,
+      detail: nf.format(i.entries) + (i.entries === 1 ? " elemento, " : " elementos, ") +
+              nf.format(i.runnable || 0) + ((i.runnable || 0) === 1 ? " ejecutable" : " ejecutables"),
+      value: bytes(i.bytes)
+    })), "Aún no hay inventarios.");
+
+    // activity
+    fill("activity", data.activity.slice(0, 15).map((ev) => row({
+      title: describe(ev),
+      detail: ev.node_id || "Núcleo",
+      value: clock(ev.ts)
+    })), "Sin actividad.");
+
+    const online = data.status.online;
+    $("subtitle").classList.remove("stale", "locked");
+    $("subtitle-text").textContent = "Núcleo " + data.version + ", " + online +
+      (online === 1 ? " dispositivo conectado" : " dispositivos conectados");
+  }
+
+  async function refresh() {
+    if (!key) return showSignin();
+    try {
+      const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store" });
+      if (r.status === 401) return showSignin("La clave no es correcta.");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      render(await r.json());
+      $("signin").hidden = true; $("dashboard").hidden = false;
+    } catch (e) {
+      $("subtitle").classList.add("stale");
+      $("subtitle-text").textContent = "Sin conexión con el núcleo. Reintentando…";
+    }
+  }
+  function showSignin(error) {
+    key = null;
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    $("dashboard").hidden = true; $("signin").hidden = false;
+    $("subtitle").classList.add("locked");
+    $("subtitle-text").textContent = "Necesita tu clave";
+    const er = $("signin-error");
+    er.hidden = !error; er.textContent = error || "";
+    $("key").focus();
+  }
+  function loop() {
+    clearTimeout(timer);
+    if (document.visibilityState === "visible") refresh();
+    timer = setTimeout(loop, 3000);
+  }
+
+  $("signin-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = $("key").value.trim();
+    if (!v) return;
+    key = v;
+    try { localStorage.setItem(KEY, v); } catch (err) {}
+    $("key").value = "";
+    loop();
+  });
+  $("signout").addEventListener("click", () => showSignin());
+  document.addEventListener("visibilitychange", loop);
+  loop();
+})();
+</script>
+</body>
+</html>

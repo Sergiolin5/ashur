@@ -170,9 +170,32 @@ def test_keys_generated_once_and_kept(tmp_path, monkeypatch):
     assert load_or_create_keys(str(keys))[:2] == (e1, a1)
 
 
-def test_root_is_friendly(env):
+def test_root_is_the_status_page_and_holds_no_data(env):
     c, _ = env
-    assert c.get("/").json()["service"] == "ashur-core"
+    register(c)
+    r = c.get("/")
+    assert r.status_code == 200 and "<title>Ashur</title>" in r.text
+    assert "mac" not in r.text.split("<script>")[0]               # node names only come from the API
+    assert "Content-Security-Policy" in r.headers
+
+
+def test_overview_needs_admin_and_shows_live_progress(env):
+    c, clock = env
+    h = register(c)
+    assert c.get("/api/overview").status_code == 401
+    tid = c.post("/tasks", headers=A, json={"module": "inventory", "weight": "heavy"}).json()["task_id"]
+    c.get("/nodes/mac/tasks/next", headers=h)
+    for _ in range(6):                                            # 90 s of heartbeats
+        clock.now += 15
+        beat(c, h)
+    c.post("/nodes/mac/inventory", headers=h, json={"reset": True, "rows": [
+        {"path": "C:\\Users\\s\\Documents\\a.pdf", "size": 1}, {"path": "C:\\Users\\s\\Music\\b.mp3", "size": 2}]})
+    o = c.get("/api/overview", headers=A).json()
+    run = o["running"][0]
+    assert run["id"] == tid and run["entries"] == 2 and run["elapsed_s"] == 90
+    assert run["folder"] == "C:/Users/s/Music"
+    assert o["status"]["online"] == 1 and o["inventory"][0]["entries"] == 2
+    assert any(a["event"] == "task_start" for a in o["activity"])
 
 
 def test_first_real_join_queues_one_targeted_scan(env):

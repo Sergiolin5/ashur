@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     status      TEXT NOT NULL,
     node_id     TEXT,
     target      TEXT,                   -- only this node may take it (NULL = any)
+    started     REAL,
     result      TEXT,                   -- JSON object
     created     REAL NOT NULL,
     finished    REAL
@@ -83,6 +84,8 @@ class DB:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(tasks)")}
         if "target" not in cols:
             self.conn.execute("ALTER TABLE tasks ADD COLUMN target TEXT")
+        if "started" not in cols:
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN started REAL")
 
     # --- session log -----------------------------------------------------
     def log(self, ts: float, node_id: Optional[str], event: str, detail: dict | None = None):
@@ -167,7 +170,8 @@ class DB:
             self.conn.commit()
             return cur.lastrowid
 
-    def claim_task(self, node_id: str, modules: list[str], weights: list[str]) -> Optional[dict]:
+    def claim_task(self, node_id: str, modules: list[str], weights: list[str],
+                   now: Optional[float] = None) -> Optional[dict]:
         """Atomically hand the oldest matching queued task to a node."""
         if not modules or not weights:
             return None
@@ -184,7 +188,8 @@ class DB:
             if not r:
                 return None
             self.conn.execute(
-                "UPDATE tasks SET status = 'running', node_id = ? WHERE id = ?", (node_id, r["id"])
+                "UPDATE tasks SET status = 'running', node_id = ?, started = ? WHERE id = ?",
+                (node_id, now, r["id"])
             )
             self.conn.commit()
         return self.get_task(r["id"])
@@ -214,7 +219,8 @@ class DB:
                 "SELECT id FROM tasks WHERE status = 'running' AND node_id = ?", (node_id,)
             ).fetchall()]
             self.conn.execute(
-                "UPDATE tasks SET status = 'queued', node_id = NULL WHERE status = 'running' AND node_id = ?",
+                "UPDATE tasks SET status = 'queued', node_id = NULL, started = NULL"
+                " WHERE status = 'running' AND node_id = ?",
                 (node_id,),
             )
             self.conn.commit()
@@ -260,3 +266,18 @@ class DB:
         q += " ORDER BY size DESC LIMIT ? OFFSET ?"
         with self.lock:
             return [dict(r) for r in self.conn.execute(q, (node_id, limit, offset)).fetchall()]
+
+    def running_tasks(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id, module, node_id, started, weight FROM tasks WHERE status = 'running' ORDER BY id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def queued_tasks(self, limit: int = 20) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id, module, target, weight, created FROM tasks WHERE status = 'queued'"
+                " ORDER BY id LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]

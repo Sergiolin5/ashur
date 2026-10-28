@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,4 +37,12 @@ jobs:
         shell: pwsh
         run: |
           "device_id: ci`ncore_url: http://127.0.0.1:9`nmodules: [inventory]`nyield_policy: shared_main_machine" | Set-Content node-ci.yaml
+          python -m node.agent --config node-ci.yaml --selftest
+
+      - name: macOS idle time and installer syntax
+        if: runner.os == 'macOS'
+        run: |
+          bash -n deploy/install_mac.sh
+          python -c "from node.policy import SignalReader; print(SignalReader().read())"
+          printf 'device_id: ci\ncore_url: http://127.0.0.1:9\nmodules: [inventory]\nyield_policy: portable\n' > node-ci.yaml
           python -m node.agent --config node-ci.yaml --selftest

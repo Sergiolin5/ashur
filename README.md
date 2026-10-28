@@ -54,6 +54,18 @@ self-test and starts the agent at every logon. Running it again updates the code
 The first join queues a read-only inventory scan, which waits until the machine
 is idle (Full mode).
 
+## Add a Mac node
+
+In Terminal, as your normal user, with Tailscale on:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sergiolin5/ashur/main/deploy/install_mac.sh | bash
+```
+
+Same questions and rules as on Windows; the agent runs as a LaunchAgent at login.
+macOS blocks Documents, Desktop and Downloads until the agent's Python is given
+Full Disk Access; without it the inventory of those folders is skipped.
+
 ## Rules
 
 - Nodes always call the core; the core never calls a node.

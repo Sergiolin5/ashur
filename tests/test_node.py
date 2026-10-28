@@ -240,3 +240,10 @@ def test_config_written_by_powershell_with_bom_loads(tmp_path):
 def test_clean_key_forgives_copy_paste(raw):
     from node.agent import clean_key
     assert clean_key(raw) == "abc123"
+
+
+def test_parse_mac_idle():
+    from node.policy import parse_mac_idle_ns
+    sample = '    |   "HIDIdleTime" = 615000000000\n    |   "HIDSomething" = 1'
+    assert parse_mac_idle_ns(sample) == 615.0
+    assert parse_mac_idle_ns("nothing here") is None

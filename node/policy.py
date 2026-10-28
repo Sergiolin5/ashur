@@ -97,12 +97,31 @@ def _windows_fullscreen() -> bool:
             and rect.right >= m.right and rect.bottom >= m.bottom)
 
 
+def parse_mac_idle_ns(ioreg_output: str) -> Optional[float]:
+    """HIDIdleTime from `ioreg -c IOHIDSystem`, in nanoseconds -> seconds."""
+    for line in ioreg_output.splitlines():
+        if '"HIDIdleTime"' in line:
+            try:
+                return int(line.rsplit("=", 1)[1].strip()) / 1e9
+            except ValueError:
+                return None
+    return None
+
+
+def _mac_idle_s() -> Optional[float]:
+    import subprocess
+    out = subprocess.run(["ioreg", "-c", "IOHIDSystem", "-d", "4"], capture_output=True,
+                         text=True, timeout=5).stdout
+    return parse_mac_idle_ns(out)
+
+
 class SignalReader:
     def __init__(self):
         import psutil
         self.psutil = psutil
         self.me = psutil.Process()
         self.windows = platform.system() == "Windows"
+        self.mac = platform.system() == "Darwin"
         psutil.cpu_percent(None)
         self._own_cpu()
 
@@ -122,6 +141,11 @@ class SignalReader:
                 idle, fullscreen = _windows_idle_s(), _windows_fullscreen()
             except Exception as e:  # never let a signal crash the agent
                 log.warning("could not read Windows signals: %s", e)
+        elif self.mac:
+            try:
+                idle = _mac_idle_s()           # fullscreen is not detected on macOS yet
+            except Exception as e:
+                log.warning("could not read macOS idle time: %s", e)
         other = max(0.0, self.psutil.cpu_percent(None) - self._own_cpu())
         batt = None
         try:

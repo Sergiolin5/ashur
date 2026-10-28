@@ -234,3 +234,9 @@ def test_config_written_by_powershell_with_bom_loads(tmp_path):
     p.write_text("persona: x\n")
     with pytest.raises(SystemExit):
         load_config(p)
+
+
+@pytest.mark.parametrize("raw", ['abc123', ' "abc123" ', '"abc123",', "'abc123'", "abc123\x16", "\tabc123\r\n"])
+def test_clean_key_forgives_copy_paste(raw):
+    from node.agent import clean_key
+    assert clean_key(raw) == "abc123"

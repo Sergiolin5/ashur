@@ -71,6 +71,14 @@ def config_from_env() -> dict:
     return cfg
 
 
+def clean_key(raw: str) -> str:
+    """Forgive what copying from keys.json tends to add: spaces, quotes, a trailing comma."""
+    k = "".join(ch for ch in raw if ch.isprintable()).strip().rstrip(",").strip()
+    if len(k) >= 2 and k[0] == k[-1] and k[0] in "\"'":
+        k = k[1:-1]
+    return k.strip()
+
+
 def load_config(path: Path) -> dict:
     """utf-8-sig: Windows PowerShell 5.1 writes UTF-8 with a BOM."""
     cfg = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
@@ -237,8 +245,9 @@ def main(argv=None) -> int:
         return 0 if not missing else 1
 
     if args.enroll or not agent.token:
-        key = enroll_key_from_env() or getpass.getpass("Enroll key: ")
-        agent.register(key.strip())
+        key = clean_key(enroll_key_from_env() or getpass.getpass("Enroll key: "))
+        print(f"Clave recibida: {len(key)} caracteres (la enroll key correcta tiene 43).")
+        agent.register(key)
         if args.enroll:
             print(f"Registered as {agent.device_id}. The agent will start on next logon.")
             return 0

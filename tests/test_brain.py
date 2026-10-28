@@ -103,7 +103,8 @@ def test_budget_cap_stops_calling_claude(tmp_path):
     first = c.post("/api/chat", headers=A, json={"message": "hola"}).json()
     assert first["spent_usd"] == pytest.approx(2.0)
     second = c.post("/api/chat", headers=A, json={"message": "hola otra vez"}).json()
-    assert "tope" in second["reply"] and len(fake.calls) == 1                   # no second API call
+    assert len(fake.calls) == 1                                                 # no second API call
+    assert "tope" in second["note"] and second["provider"] == "none"            # tried local; none online
 
 
 def test_budget_resets_next_month(tmp_path):
@@ -122,9 +123,17 @@ def test_session_log_never_stores_words(tmp_path):
     assert "privado" not in str(log) and "secreta" not in str(log)
 
 
-def test_no_api_key_is_a_clear_503(tmp_path, monkeypatch):
+def test_no_api_key_and_no_local_model_says_so(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    r = TestClient(app).post("/api/chat", headers=A, json={"message": "hola"}).json()
+    assert r["provider"] == "none" and "modelo local" in r["reply"]
+
+
+def test_claude_only_mode_without_key_is_a_clear_503(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None,
+                     brain_settings=BrainSettings(brain="claude"))
     r = TestClient(app).post("/api/chat", headers=A, json={"message": "hola"})
     assert r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"]
 
@@ -139,7 +148,8 @@ def test_api_failure_is_a_clear_502(tmp_path):
         def create(self, **kw):
             raise ConnectionError("down")
 
-    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None, brain_client=Broken())
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None, brain_client=Broken(),
+                     brain_settings=BrainSettings(brain="claude"))
     r = TestClient(app).post("/api/chat", headers=A, json={"message": "hola"})
     assert r.status_code == 502 and "ConnectionError" in r.json()["detail"]
 
@@ -166,7 +176,98 @@ def test_api_rejection_shows_anthropics_reason(tmp_path):
 
     app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None, brain_client=NoCredit())
     c = TestClient(app)
-    r = c.post("/api/chat", headers=A, json={"message": "hola"})
-    assert r.status_code == 502 and "credit balance is too low" in r.json()["detail"]
+    r = c.post("/api/chat", headers=A, json={"message": "hola"}).json()
+    assert "credit balance is too low" in r["note"]                              # auto mode: says why, tries local
     err = next(x for x in c.get("/log", headers=A).json() if x["event"] == "chat_error")
     assert "credit balance" in err["detail"]["reason"]
+
+
+
+# --- the local model path ------------------------------------------------------
+
+import threading
+import time as _time
+
+
+def fake_llm_node(c, device="mac-m1", reply="Hola desde la Mac.", fail=None, mode="light"):
+    """A node with the llm module that answers one chat task through the real protocol."""
+    token = c.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+                   json={"device_id": device, "os": "macos", "modules": ["inventory", "llm"],
+                         "simulated": True}).json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+    c.post(f"/nodes/{device}/heartbeat", headers=h, json={"mode": mode})
+    seen = {}
+
+    def serve():
+        t = c.get(f"/nodes/{device}/tasks/next", headers=h, params={"wait": 5, "modules": "llm"}).json()
+        if not t:
+            return
+        seen["payload"] = t["payload"]
+        body = {"ok": False, "error": fail} if fail else {"ok": True, "result": {"text": reply}}
+        c.post(f"/tasks/{t['id']}/result", headers=h, json=body)
+
+    th = threading.Thread(target=serve, daemon=True)
+    th.start()
+    return th, seen
+
+
+def test_local_model_answers_when_there_is_no_claude(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    c = TestClient(app)
+    th, seen = fake_llm_node(c)
+    r = c.post("/api/chat", headers=A, json={"message": "hola"}).json()
+    th.join(5)
+    assert r["reply"] == "Hola desde la Mac." and r["provider"] == "local" and r["device"] == "mac-m1"
+    assert r["cost_usd"] == 0
+    assert "modelo local" in seen["payload"]["system"] and seen["payload"]["messages"][-1]["content"] == "hola"
+    task = c.get("/tasks/1", headers=A).json()
+    assert task["payload"] == {} and task["result"] is None              # the words don't stay in tasks
+    assert c.get("/api/chat/history", headers=A).json()["messages"][-1]["content"] == "Hola desde la Mac."
+
+
+def test_local_model_failure_is_reported(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    c = TestClient(app)
+    th, _ = fake_llm_node(c, fail="Ollama no responde")
+    r = c.post("/api/chat", headers=A, json={"message": "hola"}).json()
+    th.join(5)
+    assert r["provider"] == "none" and "Ollama no responde" in r["reply"]
+    assert c.get("/api/chat/history", headers=A).json()["messages"] == []   # unanswered: not saved
+
+
+def test_paused_node_is_not_asked(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    c = TestClient(app)
+    fake_llm_node(c, device="ryzen9", mode="off")                        # gaming: not available
+    r = c.post("/api/chat", headers=A, json={"message": "hola"}).json()
+    assert r["provider"] == "none" and "Ningún dispositivo" in r["reply"]
+
+
+def test_local_timeout_cancels_the_task(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ASHUR_LOCAL_TIMEOUT_S", "0.5")
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    c = TestClient(app)
+    c.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+           json={"device_id": "mac-m1", "os": "macos", "modules": ["llm"], "simulated": True})
+    r = c.post("/api/chat", headers=A, json={"message": "hola"}).json()   # nobody picks it up
+    assert "no respondió a tiempo" in r["reply"]
+    assert c.get("/tasks/1", headers=A).json()["status"] == "failed"
+
+
+def test_long_poll_returns_as_soon_as_work_arrives(tmp_path):
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    c = TestClient(app)
+    token = c.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+                   json={"device_id": "mac-m1", "os": "macos", "modules": ["inventory", "llm"],
+                         "simulated": True}).json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+    c.post("/tasks", headers=A, json={"module": "inventory"})            # not llm: must be ignored
+    threading.Timer(0.6, lambda: c.post("/tasks", headers=A, json={"module": "llm"})).start()
+    t0 = _time.monotonic()
+    t = c.get("/nodes/mac-m1/tasks/next", headers=h, params={"wait": 5, "modules": "llm"}).json()
+    took = _time.monotonic() - t0
+    assert t["module"] == "llm" and 0.5 < took < 3

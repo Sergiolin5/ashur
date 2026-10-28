@@ -57,6 +57,7 @@ class RegisterResponse(BaseModel):
 
 class Heartbeat(BaseModel):
     mode: Mode
+    modules: Optional[list[str]] = None   # sent on the first beat after start, so new modules are known
     load_pct: Optional[float] = None
     free_gpu_mem_gb: Optional[float] = None
     battery_pct: Optional[float] = None

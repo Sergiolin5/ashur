@@ -56,6 +56,7 @@ class BrainSettings:
     price_out_per_mtok: float = 10.0
     max_tokens: int = 1024
     history_messages: int = 20
+    brain: str = "auto"                  # auto: Claude if it works, else a local model; or claude | local
 
     @classmethod
     def from_env(cls) -> "BrainSettings":
@@ -63,11 +64,27 @@ class BrainSettings:
         return cls(model=e("ASHUR_MODEL", cls.model),
                    monthly_budget_usd=float(e("ASHUR_MONTHLY_BUDGET_USD", cls.monthly_budget_usd)),
                    price_in_per_mtok=float(e("ASHUR_PRICE_IN_PER_MTOK", cls.price_in_per_mtok)),
-                   price_out_per_mtok=float(e("ASHUR_PRICE_OUT_PER_MTOK", cls.price_out_per_mtok)))
+                   price_out_per_mtok=float(e("ASHUR_PRICE_OUT_PER_MTOK", cls.price_out_per_mtok)),
+                   brain=e("ASHUR_BRAIN", cls.brain))
 
 
 class BrainUnavailable(Exception):
-    """No API key on the server."""
+    """No way to think at all: no API key and no local model configured."""
+
+
+class LocalUnavailable(Exception):
+    """No device with a local model can answer right now; the message says why, in Spanish."""
+
+
+def api_error_reason(e: Exception) -> str:
+    """The human-readable reason Anthropic gives, e.g. a low credit balance. Never contains the key."""
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        msg = err.get("message") if isinstance(err, dict) else None
+        if msg:
+            return str(msg)
+    return str(getattr(e, "message", "") or e) or "sin detalle"
 
 
 def month_start(ts: float) -> float:
@@ -82,13 +99,14 @@ def _get(obj: Any, name: str, default=None):
 class Brain:
     def __init__(self, db, data_dir: str, clock: Callable[[], float],
                  network: Callable[[], dict], settings: Optional[BrainSettings] = None,
-                 client: Any = None):
+                 client: Any = None, local: Optional[Callable[[str, list], tuple[str, str]]] = None):
         self.db = db
         self.persona_path = Path(data_dir) / "persona.md"
         self.clock = clock
         self.network = network
         self.s = settings or BrainSettings.from_env()
         self._client = client
+        self.local = local                   # (system, messages) -> (reply, device_id)
 
     # --- plumbing ---------------------------------------------------------
     def client(self):
@@ -162,24 +180,20 @@ class Brain:
         return f"Herramienta desconocida: {name}"
 
     # --- conversation -----------------------------------------------------
-    def chat(self, text: str, channel: str = "app") -> dict:
-        text = text.strip()
-        now = self.clock()
-        if self.spent_this_month() >= self.s.monthly_budget_usd:
-            reply = (f"Llegué al tope de US${self.s.monthly_budget_usd:.2f} de este mes, así que no voy a "
-                     "llamar a Claude hasta el próximo mes. Puedes subir el tope en la configuración del servidor.")
-            self.db.log(now, None, "chat_blocked_budget", {"channel": channel})
-            return {"reply": reply, "cost_usd": 0.0, **self.budget()}
-
-        client = self.client()
+    def _history(self, text: str) -> list[dict]:
         history = [{"role": m["role"], "content": m["content"]}
                    for m in self.db.recent_messages(self.s.history_messages)]
-        while history and history[0]["role"] != "user":   # the API wants a user turn first
+        while history and history[0]["role"] != "user":   # a conversation must start with Sergio
             history.pop(0)
-        messages = history + [{"role": "user", "content": text}]
+        return history + [{"role": "user", "content": text}]
+
+    def _has_claude(self) -> bool:
+        return self._client is not None or bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+
+    def _chat_claude(self, messages: list[dict]) -> tuple[str, float, list[str]]:
+        client = self.client()
         system = self._system()
         cost_total, reply_parts, tools_used = 0.0, [], []
-
         for _ in range(MAX_TOOL_ROUNDS + 1):
             resp = client.messages.create(model=self.s.model, max_tokens=self.s.max_tokens,
                                           system=system, tools=TOOLS, messages=messages)
@@ -208,12 +222,62 @@ class Brain:
             if self.spent_this_month() >= self.s.monthly_budget_usd:
                 reply_parts = ["(Me detuve a mitad de la respuesta: se alcanzó el tope de gasto del mes.)"]
                 break
-
         reply = "\n\n".join(p for p in reply_parts if p).strip() or "(Sin respuesta.)"
+        return reply, cost_total, tools_used
+
+    def _local_system(self) -> str:
+        net = json.dumps(self.network(), ensure_ascii=False, default=str)
+        return (f"{self._system()}\n\n"
+                "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
+                "No tienes herramientas: no puedes guardar ni borrar recuerdos; si te lo piden, dilo con "
+                "claridad. Responde breve y en español.\n\n"
+                f"Estado actual de tus dispositivos: {net}")
+
+    def chat(self, text: str, channel: str = "app") -> dict:
+        text = text.strip()
+        now = self.clock()
+        messages = self._history(text)
+        over_budget = self.spent_this_month() >= self.s.monthly_budget_usd
+        want_claude = self.s.brain in ("auto", "claude") and self._has_claude()
+        provider, device, note = None, None, None
+        reply, cost, tools = "", 0.0, []
+
+        if want_claude and not over_budget:
+            try:
+                reply, cost, tools = self._chat_claude([dict(m) for m in messages])
+                provider = "claude"
+            except BrainUnavailable:
+                raise
+            except Exception as e:
+                if self.s.brain == "claude" or self.local is None:
+                    raise
+                reason = api_error_reason(e)
+                self.db.log(self.clock(), None, "chat_error", {"error": type(e).__name__, "reason": reason[:300]})
+                note = f"Claude no respondió ({reason}). Respondí con un modelo local."
+
+        if provider is None:
+            if self.local is None or self.s.brain == "claude":
+                if over_budget:
+                    self.db.log(now, None, "chat_blocked_budget", {"channel": channel})
+                    return {"reply": f"Llegué al tope de US${self.s.monthly_budget_usd:.2f} de este mes, así que "
+                                     "no voy a llamar a Claude hasta el próximo mes. Puedes subir el tope en la "
+                                     "configuración del servidor.", "cost_usd": 0.0, "provider": "none", **self.budget()}
+                raise BrainUnavailable("Falta ANTHROPIC_API_KEY en el servidor y no hay modelo local configurado.")
+            if over_budget and want_claude:
+                note = "Llegué al tope de gasto del mes con Claude. Respondí con un modelo local."
+            try:
+                reply, device = self.local(self._local_system(), messages)
+                provider = "local"
+            except LocalUnavailable as e:
+                self.db.log(self.clock(), None, "chat_unanswered", {"channel": channel, "reason": str(e)[:200]})
+                return {"reply": str(e), "note": note, "provider": "none", "cost_usd": 0.0, **self.budget()}
+
+        reply = (reply or "").strip() or "(Sin respuesta.)"
         end = self.clock()
         self.db.add_message(now, channel, "user", text)
         self.db.add_message(end, channel, "assistant", reply)
-        # the session log is paper data: lengths and cost only, never the words
-        self.db.log(end, None, "chat", {"channel": channel, "chars_in": len(text), "chars_out": len(reply),
-                                         "cost_usd": round(cost_total, 5), "tools": tools_used})
-        return {"reply": reply, "cost_usd": round(cost_total, 5), "tools": tools_used, **self.budget()}
+        # the session log is paper data: lengths, cost and where it ran; never the words
+        self.db.log(end, device, "chat", {"channel": channel, "provider": provider, "chars_in": len(text),
+                                           "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools})
+        return {"reply": reply, "note": note, "provider": provider, "device": device,
+                "cost_usd": round(cost, 5), "tools": tools, **self.budget()}

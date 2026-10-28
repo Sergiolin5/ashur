@@ -26,6 +26,7 @@ from node.policy import Policy, Thresholds
 from shared.protocol import HEARTBEAT_INTERVAL_S, Mode
 
 log = logging.getLogger("ashur.node")
+REALTIME_MODULES = {"llm"}            # answered within seconds, outside the heartbeat cycle
 
 
 def state_dir() -> Path:
@@ -115,6 +116,7 @@ class Agent:
         self.stopping = threading.Event()
         self.worker: Optional[threading.Thread] = None
         self.mode: Optional[Mode] = None
+        self.announced = False                # modules are re-announced once per start
 
     # --- transport -------------------------------------------------------
     def _headers(self) -> dict:
@@ -164,10 +166,17 @@ class Agent:
         if mode != self.mode:
             log.info("mode %s -> %s", self.mode.value if self.mode else "-", mode.value)
             self.mode = mode
-        self.post(f"/nodes/{self.device_id}/heartbeat", {"mode": mode.value})
+        beat = {"mode": mode.value}
+        if not self.announced:
+            beat["modules"] = sorted(self.modules)
+        self.post(f"/nodes/{self.device_id}/heartbeat", beat)
+        self.announced = True
         if self.worker and self.worker.is_alive():
             return
-        task = self.get(f"/nodes/{self.device_id}/tasks/next").json()
+        batch = sorted(m for m in self.modules if m not in REALTIME_MODULES)
+        if not batch:
+            return
+        task = self.get(f"/nodes/{self.device_id}/tasks/next?modules={','.join(batch)}").json()
         if task:
             self.worker = threading.Thread(target=self._run_task, args=(task,), daemon=True)
             self.worker.start()
@@ -188,7 +197,23 @@ class Agent:
         except Exception as e:
             log.warning("could not report task %s: %s", task["id"], e)
 
+    def realtime_loop(self) -> None:
+        """Chat work (module llm) is long-polled so a reply doesn't wait for the next heartbeat."""
+        wanted = ",".join(sorted(m for m in self.modules if m in REALTIME_MODULES))
+        while not self.stopping.is_set():
+            try:
+                task = self.get(f"/nodes/{self.device_id}/tasks/next?wait=25&modules={wanted}").json()
+                if task:
+                    self._run_task(task)
+            except NeedsEnrollment:
+                log.error("the core rejected this node's token; chat work stops")
+                return
+            except httpx.HTTPError:
+                self.stopping.wait(5)
+
     def run_forever(self) -> None:
+        if any(m in REALTIME_MODULES for m in self.modules):
+            threading.Thread(target=self.realtime_loop, daemon=True, name="realtime").start()
         backoff = HEARTBEAT_INTERVAL_S
         while not self.stopping.is_set():
             try:
@@ -198,7 +223,7 @@ class Agent:
                 raise
             except httpx.HTTPError as e:
                 log.warning("core unreachable (%s); retrying in %ss", e.__class__.__name__, backoff)
-                backoff = min(backoff * 2, 300)
+                backoff = min(backoff * 2, 60)
             self.stopping.wait(backoff)
 
 

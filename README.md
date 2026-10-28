@@ -66,6 +66,13 @@ Same questions and rules as on Windows; the agent runs as a LaunchAgent at login
 macOS blocks Documents, Desktop and Downloads until the agent's Python is given
 Full Disk Access; without it the inventory of those folders is skipped.
 
+## Local model (no API credit needed)
+
+Ashur answers with Claude when the API key works and with a local model otherwise
+(`ASHUR_BRAIN=auto`; `local` skips Claude). A node offers a local model with the
+`llm` module: install Ollama on it, pull a model, and add `llm` to its modules.
+Ollama stays on 127.0.0.1; the core sends chat work through the node agent.
+
 ## Rules
 
 - Nodes always call the core; the core never calls a node.

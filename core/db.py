@@ -156,6 +156,11 @@ class DB:
                 )
             self.conn.commit()
 
+    def set_node_modules(self, node_id: str, modules: list[str]) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE nodes SET modules = ? WHERE id = ?", (json.dumps(sorted(modules)), node_id))
+            self.conn.commit()
+
     def revoke_node(self, node_id: str) -> bool:
         with self.lock:
             cur = self.conn.execute(
@@ -224,6 +229,19 @@ class DB:
                 "UPDATE tasks SET status = ?, result = ?, finished = ? WHERE id = ?",
                 ("done" if ok else "failed", json.dumps(result), now, task_id),
             )
+            self.conn.commit()
+
+    def cancel_task(self, task_id: int, reason: str, now: float) -> None:
+        with self.lock:
+            self.conn.execute(
+                "UPDATE tasks SET status = 'failed', result = ?, finished = ? WHERE id = ? AND status IN ('queued', 'running')",
+                (json.dumps({"ok": False, "error": reason}), now, task_id))
+            self.conn.commit()
+
+    def clear_payload(self, task_id: int) -> None:
+        """Chat tasks carry Sergio's words; once answered they only live in the messages table."""
+        with self.lock:
+            self.conn.execute("UPDATE tasks SET payload = '{}', result = NULL WHERE id = ?", (task_id,))
             self.conn.commit()
 
     def requeue_tasks_of(self, node_id: str) -> list[int]:

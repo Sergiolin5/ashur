@@ -21,7 +21,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.brain import Brain, BrainSettings, BrainUnavailable
+from core.brain import Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason
 from core.db import DB, hash_token
 from shared.protocol import (
     OFFLINE_AFTER_S, Heartbeat, InventoryBatch, Mode, NewTask, NodeStatus,
@@ -42,17 +42,6 @@ WEIGHTS_FOR_MODE = {
 
 def _same(a: str, b: str) -> bool:
     return bool(a) and bool(b) and hmac.compare_digest(a, b)
-
-
-def api_error_reason(e: Exception) -> str:
-    """The human-readable reason Anthropic gives, e.g. a low credit balance. Never contains the key."""
-    body = getattr(e, "body", None)
-    if isinstance(body, dict):
-        err = body.get("error") if isinstance(body.get("error"), dict) else body
-        msg = err.get("message") if isinstance(err, dict) else None
-        if msg:
-            return str(msg)
-    return str(getattr(e, "message", "") or e) or "sin detalle"
 
 
 def create_app(
@@ -94,7 +83,7 @@ def create_app(
         if task:
             task.cancel()
 
-    app = FastAPI(title="Ashur core", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="Ashur core", version="0.5.0", lifespan=lifespan)
     app.state.db = db
     app.state.sweep = sweep
     progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch
@@ -140,6 +129,9 @@ def create_app(
         now = clock()
         prev = node["mode"]
         db.set_node_mode(node["id"], hb.mode.value, last_seen=now)
+        if hb.modules is not None and sorted(hb.modules) != sorted(node["modules"]):
+            db.set_node_modules(node["id"], hb.modules)
+            db.log(now, node["id"], "modules_changed", {"from": node["modules"], "to": sorted(hb.modules)})
         if prev == Mode.OFFLINE.value:
             db.log(now, node["id"], "back_online", {"mode": hb.mode.value})
         elif prev != hb.mode.value:
@@ -147,10 +139,20 @@ def create_app(
         return {"ok": True}
 
     @app.get("/nodes/{node_id}/tasks/next", response_model=Optional[Task])
-    def next_task(node: dict = Depends(require_node)):
+    def next_task(node: dict = Depends(require_node), wait: float = 0, modules: Optional[str] = None):
+        """wait > 0 holds the request open (long poll) so chat replies don't wait for a heartbeat."""
         sweep()
-        mode = Mode(node["mode"])
-        t = db.claim_task(node["id"], node["modules"], WEIGHTS_FOR_MODE[mode], now=clock())
+        mine = node["modules"]
+        if modules:
+            wanted = {m.strip() for m in modules.split(",")}
+            mine = [m for m in mine if m in wanted]
+        deadline = time.monotonic() + max(0.0, min(wait, 25.0))
+        while True:
+            fresh = db.get_node(node["id"]) or node
+            t = db.claim_task(node["id"], mine, WEIGHTS_FOR_MODE[Mode(fresh["mode"])], now=clock())
+            if t or time.monotonic() >= deadline:
+                break
+            time.sleep(0.25)
         if not t:
             return None
         db.log(clock(), node["id"], "task_start", {"task_id": t["id"], "module": t["module"]})
@@ -215,8 +217,33 @@ def create_app(
                               "elementos": progress.get(t["node_id"], {}).get("entries")}
                              for t in db.running_tasks()]}
 
+    local_timeout_s = float(os.environ.get("ASHUR_LOCAL_TIMEOUT_S", "120"))
+
+    def local_complete(system: str, messages: list) -> tuple[str, str]:
+        """Ask a node with a local model (module 'llm') and wait for its answer."""
+        sweep()
+        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")]
+        if not ready:
+            raise LocalUnavailable("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
+                                   "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
+        tid = db.add_task("llm", {"system": system, "messages": messages}, Weight.LIGHT.value, clock())
+        deadline = time.monotonic() + local_timeout_s
+        try:
+            while time.monotonic() < deadline:
+                t = db.get_task(tid)
+                if t["status"] == "done":
+                    return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]
+                if t["status"] == "failed":
+                    err = (t["result"] or {}).get("error") or "sin detalle"
+                    raise LocalUnavailable(f"El modelo local falló en {t['node_id']}: {err}")
+                time.sleep(0.2)
+            db.cancel_task(tid, "timeout", clock())
+            raise LocalUnavailable("El modelo local no respondió a tiempo. Puede estar ocupado o recién despertando.")
+        finally:
+            db.clear_payload(tid)
+
     brain = Brain(db, os.path.dirname(os.path.abspath(db_path)), clock, network_for_brain,
-                  settings=brain_settings, client=brain_client)
+                  settings=brain_settings, client=brain_client, local=local_complete)
     app.state.brain = brain
 
     class ChatIn(BaseModel):
@@ -227,7 +254,7 @@ def create_app(
     def chat(body: ChatIn):
         try:
             return brain.chat(body.message, body.channel)
-        except BrainUnavailable as e:
+        except (BrainUnavailable, LocalUnavailable) as e:
             raise HTTPException(503, str(e))
         except Exception as e:  # API down, bad key, no credit, network: say exactly why
             reason = api_error_reason(e)

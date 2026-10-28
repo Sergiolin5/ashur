@@ -247,3 +247,87 @@ def test_parse_mac_idle():
     sample = '    |   "HIDIdleTime" = 615000000000\n    |   "HIDSomething" = 1'
     assert parse_mac_idle_ns(sample) == 615.0
     assert parse_mac_idle_ns("nothing here") is None
+
+
+# --- local model module (Ollama faked with httpx.MockTransport) -----------------
+
+import httpx as _httpx
+
+
+def fake_ollama(reply="Hola, soy el modelo local.", models=("qwen2.5:3b",)):
+    seen = {}
+
+    def handler(req):
+        if req.url.path == "/api/tags":
+            return _httpx.Response(200, json={"models": [{"name": m} for m in models]})
+        if req.url.path == "/api/chat":
+            import json as _j
+            seen["body"] = _j.loads(req.content)
+            return _httpx.Response(200, json={"message": {"role": "assistant", "content": reply},
+                                              "eval_count": 12, "total_duration": 2_500_000_000})
+        return _httpx.Response(404)
+    return _httpx.Client(transport=_httpx.MockTransport(handler)), seen
+
+
+def test_llm_module_calls_local_ollama():
+    from types import SimpleNamespace
+    from modules.llm.action import run
+    client, seen = fake_ollama()
+    out = run({"system": "Eres Ashur.", "messages": [{"role": "user", "content": "hola"}]},
+              SimpleNamespace(config={}), client=client)
+    assert out["text"] == "Hola, soy el modelo local." and out["model"] == "qwen2.5:3b" and out["seconds"] == 2.5
+    assert seen["body"]["messages"][0] == {"role": "system", "content": "Eres Ashur."}
+    assert seen["body"]["stream"] is False
+
+
+def test_llm_module_refuses_a_remote_ollama():
+    from types import SimpleNamespace
+    from modules.llm.action import run
+    with pytest.raises(ValueError):
+        run({}, SimpleNamespace(config={"ollama_url": "http://192.168.1.20:11434"}))
+
+
+def test_llm_module_without_models_says_what_to_do():
+    from types import SimpleNamespace
+    from modules.llm.action import run
+    client, _ = fake_ollama(models=())
+    with pytest.raises(RuntimeError, match="ollama pull"):
+        run({"messages": []}, SimpleNamespace(config={}), client=client)
+
+
+def test_chat_goes_from_core_to_the_mac_and_back(tmp_path, monkeypatch):
+    """Full path: chat on the core -> llm task -> agent's realtime loop -> fake Ollama -> reply."""
+    import threading
+    import modules.llm.action as llm
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    ollama, seen = fake_ollama("Estoy en tu Mac.")
+    monkeypatch.setattr(llm, "httpx", ollama)               # module-level calls go to the fake
+    app = create_app(str(tmp_path / "core.db"), ENROLL, ADMIN, sweep_every_s=None)
+    c = TestClient(app)
+    cfg = {"device_id": "mac-m1", "core_url": "http://x", "modules": ["llm"], "yield_policy": "always_full"}
+    agent = Agent(cfg, client=c, policy=Policy("always_full"), state=tmp_path / "s")
+    agent.load_modules()
+    assert "llm" in agent.modules
+    agent.register(ENROLL)
+    agent.tick()                                            # heartbeat: mode full; no batch pull
+    th = threading.Thread(target=agent.realtime_loop, daemon=True)
+    th.start()
+    r = c.post("/api/chat", headers=A, json={"message": "¿dónde estás?"}).json()
+    agent.stopping.set()
+    assert r["reply"] == "Estoy en tu Mac." and r["device"] == "mac-m1" and r["provider"] == "local"
+    assert seen["body"]["messages"][-1]["content"] == "¿dónde estás?"
+
+
+def test_restarted_agent_announces_new_modules(core, tmp_path):
+    c, _ = core
+    agent = make_agent(c, tmp_path)                         # registers with [inventory]
+    agent.load_modules()
+    agent.register(ENROLL)
+    agent.tick()
+    assert c.get("/status", headers=A).json()["nodes"][0]["modules"] == ["inventory"]
+    again = make_agent(c, tmp_path)                         # same token, now with llm too
+    again.load_modules()
+    again.modules["llm"] = again.modules["inventory"]       # stand-in: llm loaded on this start
+    again.tick()
+    assert c.get("/status", headers=A).json()["nodes"][0]["modules"] == ["inventory", "llm"]
+    assert any(r["event"] == "modules_changed" for r in c.get("/log", headers=A).json())

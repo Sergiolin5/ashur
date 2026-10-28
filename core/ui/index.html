@@ -323,7 +323,10 @@
       case "task_done": return "Terminó la tarea " + d.task_id;
       case "task_failed": return "Falló la tarea " + d.task_id;
       case "revoked": return "Acceso revocado";
-      case "chat": return d.channel === "atajo" ? "Conversación desde el Atajo" : "Conversación";
+      case "chat": return (d.channel === "atajo" ? "Conversación desde el Atajo" : "Conversación") +
+                          (d.provider === "local" ? ", modelo local" : d.provider === "claude" ? ", Claude" : "");
+      case "chat_unanswered": return "Mensaje sin responder";
+      case "modules_changed": return "Cambió sus capacidades: " + (d.to || []).join(", ");
       case "chat_blocked_budget": return "Mensaje bloqueado por el tope de gasto";
       case "chat_error": return "No pudo hablar con Claude";
       case "memory_saved": return "Guardó un recuerdo";
@@ -512,9 +515,18 @@
       wait.remove();
       if (!r.ok) {
         bubble("note bad", (data && data.detail) || "No pude responder.");
+      } else if (data.provider === "none") {
+        if (data.note) bubble("note", data.note);
+        bubble("note bad", data.reply);
+        showBudget(data);
       } else {
         bubble("ashur", data.reply);
-        if ((data.tools || []).includes("remember")) bubble("note", "Ashur guardó un recuerdo.");
+        const said = [];
+        if (data.provider === "local") said.push("Respondió el modelo local en " + data.device + ".");
+        if ((data.tools || []).includes("remember")) said.push("Ashur guardó un recuerdo.");
+        if (data.note && data.provider !== "local") said.unshift(data.note);
+        else if (data.note) said.unshift(data.note.replace(/ Respondí con un modelo local\.$/, ""));
+        if (said.length) bubble("note", said.join(" "));
         showBudget(data);
       }
     } catch (err) {

@@ -142,6 +142,12 @@ def create_app(
         return {"ok": True}
 
     # --- Sergio / Ashur endpoints ---------------------------------------
+    @app.get("/")
+    def root():
+        """What the ZimaOS "open" button shows."""
+        return {"service": "ashur-core", "version": app.version,
+                "message": "Ashur core is running. Nodes connect here; see /health."}
+
     @app.get("/health")
     def health():
         """Open to anyone on the tailnet: proves the core is up, reveals nothing."""

@@ -165,3 +165,8 @@ def test_keys_generated_once_and_kept(tmp_path, monkeypatch):
     assert not created and e1 and a1 and e1 != a1
     from_env()                                   # a restart keeps the same keys
     assert load_or_create_keys(str(keys))[:2] == (e1, a1)
+
+
+def test_root_is_friendly(env):
+    c, _ = env
+    assert c.get("/").json()["service"] == "ashur-core"

@@ -27,7 +27,7 @@ SENSITIVE_DIR_PATHS = [  # matched against the lower-case path with forward slas
     "/library/application support/firefox/profiles",
 ]
 SENSITIVE_FILE_EXT = {".kdbx", ".pem", ".key", ".pfx", ".p12", ".ppk", ".keychain-db"}
-SENSITIVE_FILE_NAMES = {".env", "wallet.dat", "id_rsa", "id_ed25519", "id_ecdsa", "credentials"}
+SENSITIVE_FILE_NAMES = {".env", "keys.json", "node_token", "wallet.dat", "id_rsa", "id_ed25519", "id_ecdsa", "credentials"}
 
 # Summarized wherever they appear: tool caches, never Sergio's own files.
 SUMMARY_ANYWHERE = {
@@ -195,7 +195,8 @@ def scan(roots: Iterable[str], emit: Callable[[dict], None], stop: Callable[[], 
 
 def run(payload: dict, ctx) -> dict:
     """Task entry point. ctx.upload(rows, reset) sends batches; ctx.should_stop() ends early."""
-    roots = payload.get("roots") or default_roots()
+    cfg = getattr(ctx, "config", {}) or {}
+    roots = payload.get("roots") or cfg.get("inventory_roots") or default_roots()
     batch, first = [], [True]
     started = time.time()
 

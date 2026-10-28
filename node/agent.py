@@ -29,6 +29,8 @@ log = logging.getLogger("ashur.node")
 
 
 def state_dir() -> Path:
+    if os.environ.get("ASHUR_STATE"):
+        return Path(os.environ["ASHUR_STATE"])
     if platform.system() == "Windows":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         return base / "Ashur"
@@ -48,6 +50,36 @@ class TaskContext:
 
     def should_stop(self) -> bool:
         return self.agent.stopping.is_set()
+
+    @property
+    def config(self) -> dict:
+        return self.agent.cfg
+
+
+def config_from_env() -> dict:
+    """Container nodes are configured with environment variables instead of a file."""
+    cfg = {
+        "device_id": os.environ["ASHUR_DEVICE_ID"],
+        "persona": os.environ.get("ASHUR_PERSONA", os.environ["ASHUR_DEVICE_ID"]),
+        "core_url": os.environ["ASHUR_CORE_URL"],
+        "modules": [m.strip() for m in os.environ.get("ASHUR_MODULES", "inventory").split(",") if m.strip()],
+        "yield_policy": os.environ.get("ASHUR_YIELD_POLICY", "always_full"),
+    }
+    roots = os.environ.get("ASHUR_INVENTORY_ROOTS")
+    if roots:
+        cfg["inventory_roots"] = [r for r in roots.split(os.pathsep) if r]
+    return cfg
+
+
+def enroll_key_from_env() -> Optional[str]:
+    if os.environ.get("ASHUR_ENROLL_KEY"):
+        return os.environ["ASHUR_ENROLL_KEY"]
+    path = os.environ.get("ASHUR_ENROLL_KEY_FILE")
+    if path and os.path.exists(path):
+        import json
+        with open(path) as f:
+            return json.load(f)["enroll_key"]
+    return None
 
 
 class Agent:
@@ -174,12 +206,14 @@ def setup_logging(folder: Path) -> None:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Ashur node agent")
-    p.add_argument("--config", type=Path, default=state_dir() / "node.yaml")
+    p.add_argument("--config", type=Path, default=None,
+                   help="node.yaml (default: the state folder; environment variables if absent)")
     p.add_argument("--enroll", action="store_true", help="register with the core (asks for the enroll key)")
     p.add_argument("--selftest", action="store_true", help="load modules, print results and exit")
     args = p.parse_args(argv)
 
-    cfg = yaml.safe_load(args.config.read_text())
+    path = args.config or state_dir() / "node.yaml"
+    cfg = yaml.safe_load(path.read_text()) if path.exists() else config_from_env()
     setup_logging(state_dir())
     agent = Agent(cfg)
     agent.load_modules()
@@ -194,7 +228,7 @@ def main(argv=None) -> int:
         return 0 if not missing else 1
 
     if args.enroll or not agent.token:
-        key = os.environ.get("ASHUR_ENROLL_KEY") or getpass.getpass("Enroll key: ")
+        key = enroll_key_from_env() or getpass.getpass("Enroll key: ")
         agent.register(key.strip())
         if args.enroll:
             print(f"Registered as {agent.device_id}. The agent will start on next logon.")

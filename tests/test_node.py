@@ -191,3 +191,36 @@ def test_revoked_agent_must_reenroll(core, tmp_path):
     c.post("/nodes/ryzen9/revoke", headers=A)
     with pytest.raises(NeedsEnrollment):
         agent.tick()
+
+
+def test_container_node_config_and_enroll_key_file(tmp_path, monkeypatch):
+    import json, os as _os
+    from node.agent import config_from_env, enroll_key_from_env, state_dir
+    monkeypatch.setenv("ASHUR_DEVICE_ID", "zima-server")
+    monkeypatch.setenv("ASHUR_CORE_URL", "http://127.0.0.1:8711")
+    monkeypatch.setenv("ASHUR_INVENTORY_ROOTS", _os.pathsep.join(["/host/DATA", "/x"]))
+    monkeypatch.setenv("ASHUR_STATE", str(tmp_path / "st"))
+    cfg = config_from_env()
+    assert cfg["modules"] == ["inventory"] and cfg["yield_policy"] == "always_full"
+    assert cfg["inventory_roots"] == ["/host/DATA", "/x"]
+    assert state_dir() == tmp_path / "st"
+    monkeypatch.delenv("ASHUR_ENROLL_KEY", raising=False)
+    keys = tmp_path / "keys.json"
+    keys.write_text(json.dumps({"enroll_key": "EK", "admin_key": "AK"}))
+    monkeypatch.setenv("ASHUR_ENROLL_KEY_FILE", str(keys))
+    assert enroll_key_from_env() == "EK"                       # never the admin key
+
+
+def test_server_node_scans_its_configured_roots(core, tmp_path):
+    c, _ = core
+    data = tmp_path / "DATA"
+    make_disk(data)
+    cfg = {"device_id": "zima-server", "core_url": "http://x", "modules": ["inventory"],
+           "yield_policy": "always_full", "inventory_roots": [str(data)]}
+    agent = Agent(cfg, client=c, policy=Policy("always_full"), state=tmp_path / "s")
+    agent.load_modules()
+    agent.register(ENROLL)                                     # first join queues a scan with no roots
+    agent.tick()
+    agent.worker.join(timeout=10)
+    task = c.get("/tasks/1", headers=A).json()
+    assert task["status"] == "done" and task["result"]["result"]["roots"] == [str(data)]

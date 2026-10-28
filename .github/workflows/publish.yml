@@ -25,7 +25,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - name: Core image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/core.Dockerfile
@@ -34,3 +35,13 @@ jobs:
           tags: |
             ghcr.io/sergiolin5/ashur-core:latest
             ghcr.io/sergiolin5/ashur-core:${{ github.sha }}
+      - name: Node image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/node.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/sergiolin5/ashur-node:latest
+            ghcr.io/sergiolin5/ashur-node:${{ github.sha }}

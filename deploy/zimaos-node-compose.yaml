@@ -1,0 +1,26 @@
+# Ashur node on the ZimaOS server itself: inventories the server's storage.
+# App Store -> "+" -> Install a customized app -> Import.
+# Read-only everywhere: it can see /DATA but cannot change a single file.
+name: ashur-node
+services:
+  ashur-node:
+    image: ghcr.io/sergiolin5/ashur-node:latest
+    container_name: ashur-node
+    restart: unless-stopped
+    network_mode: host                 # reaches the core at 127.0.0.1:8711
+    volumes:
+      - /DATA/AppData/ashur-node:/state
+      - /DATA:/host/DATA:ro
+      - /DATA/AppData/ashur/keys.json:/run/ashur/keys.json:ro
+    environment:
+      ASHUR_DEVICE_ID: zima-server
+      ASHUR_CORE_URL: http://127.0.0.1:8711
+      ASHUR_MODULES: inventory
+      ASHUR_YIELD_POLICY: always_full
+      ASHUR_INVENTORY_ROOTS: /host/DATA
+      ASHUR_ENROLL_KEY_FILE: /run/ashur/keys.json
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M

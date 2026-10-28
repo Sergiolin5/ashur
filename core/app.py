@@ -44,6 +44,17 @@ def _same(a: str, b: str) -> bool:
     return bool(a) and bool(b) and hmac.compare_digest(a, b)
 
 
+def api_error_reason(e: Exception) -> str:
+    """The human-readable reason Anthropic gives, e.g. a low credit balance. Never contains the key."""
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        msg = err.get("message") if isinstance(err, dict) else None
+        if msg:
+            return str(msg)
+    return str(getattr(e, "message", "") or e) or "sin detalle"
+
+
 def create_app(
     db_path: str,
     enroll_key: str,
@@ -218,9 +229,10 @@ def create_app(
             return brain.chat(body.message, body.channel)
         except BrainUnavailable as e:
             raise HTTPException(503, str(e))
-        except Exception as e:  # API down, bad key, network: say so plainly
-            db.log(clock(), None, "chat_error", {"error": type(e).__name__})
-            raise HTTPException(502, f"No pude hablar con Claude ({type(e).__name__}).")
+        except Exception as e:  # API down, bad key, no credit, network: say exactly why
+            reason = api_error_reason(e)
+            db.log(clock(), None, "chat_error", {"error": type(e).__name__, "reason": reason[:300]})
+            raise HTTPException(502, f"No pude hablar con Claude ({type(e).__name__}): {reason}")
 
     @app.get("/api/chat/history", dependencies=[Depends(require_admin)])
     def chat_history(limit: int = 50):

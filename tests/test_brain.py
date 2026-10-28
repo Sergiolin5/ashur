@@ -150,3 +150,23 @@ def test_empty_text_next_to_a_tool_call_is_not_sent_back(tmp_path):
     c.post("/api/chat", headers=A, json={"message": "hola"})
     echoed = fake.calls[1]["messages"][-2]["content"]
     assert [b["type"] for b in echoed] == ["tool_use"]
+
+
+def test_api_rejection_shows_anthropics_reason(tmp_path):
+    class Rejected(Exception):
+        body = {"type": "error", "error": {"type": "invalid_request_error",
+                "message": "Your credit balance is too low to access the Anthropic API."}}
+
+    class NoCredit:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kw):
+            raise Rejected("400")
+
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None, brain_client=NoCredit())
+    c = TestClient(app)
+    r = c.post("/api/chat", headers=A, json={"message": "hola"})
+    assert r.status_code == 502 and "credit balance is too low" in r.json()["detail"]
+    err = next(x for x in c.get("/log", headers=A).json() if x["event"] == "chat_error")
+    assert "credit balance" in err["detail"]["reason"]

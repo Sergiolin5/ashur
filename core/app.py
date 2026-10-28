@@ -71,7 +71,7 @@ def create_app(
         if task:
             task.cancel()
 
-    app = FastAPI(title="Ashur core", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Ashur core", version="0.2.0", lifespan=lifespan)
     app.state.db = db
     app.state.sweep = sweep
 

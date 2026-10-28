@@ -30,6 +30,14 @@ export ASHUR_ENROLL_KEY=... ASHUR_ADMIN_KEY=...
 uvicorn --factory core.app:from_env --port 8000
 ```
 
+## Deploy on ZimaOS
+
+GitHub Actions publishes `ghcr.io/sergiolin5/ashur-core` on every push to `main`.
+In ZimaOS: App Store → **+** → Install a customized app → import
+`deploy/zimaos-compose.yaml`. On first start the core prints its enroll and admin
+keys once in the app log and saves them to `/DATA/AppData/ashur/keys.json`.
+Check it from any tailnet device: `http://<server>:8711/health`.
+
 ## Rules
 
 - Nodes always call the core; the core never calls a node.

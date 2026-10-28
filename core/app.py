@@ -6,7 +6,9 @@ Run locally:  ASHUR_ENROLL_KEY=... ASHUR_ADMIN_KEY=... uvicorn --factory core.ap
 import asyncio
 import contextlib
 import hmac
+import json
 import os
+import secrets
 import time
 from typing import Callable, Optional
 
@@ -140,6 +142,11 @@ def create_app(
         return {"ok": True}
 
     # --- Sergio / Ashur endpoints ---------------------------------------
+    @app.get("/health")
+    def health():
+        """Open to anyone on the tailnet: proves the core is up, reveals nothing."""
+        return {"ok": True, "service": "ashur-core", "version": app.version}
+
     @app.get("/status", dependencies=[Depends(require_admin)])
     def status():
         sweep()
@@ -185,10 +192,37 @@ def create_app(
     return app
 
 
+def load_or_create_keys(keys_path: str) -> tuple[str, str, bool]:
+    """Read the enroll and admin keys from the data volume, creating them on first start.
+
+    Returns (enroll_key, admin_key, created). The file never leaves the server.
+    """
+    if os.path.exists(keys_path):
+        with open(keys_path) as f:
+            k = json.load(f)
+        return k["enroll_key"], k["admin_key"], False
+    k = {"enroll_key": secrets.token_urlsafe(32), "admin_key": secrets.token_urlsafe(32)}
+    os.makedirs(os.path.dirname(keys_path) or ".", exist_ok=True)
+    fd = os.open(keys_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(k, f)
+    return k["enroll_key"], k["admin_key"], True
+
+
 def from_env() -> FastAPI:
-    """Entry point: `uvicorn --factory core.app:from_env`. Secrets come from the environment only."""
-    return create_app(
-        db_path=os.environ.get("ASHUR_DB", "ashur.db"),
-        enroll_key=os.environ.get("ASHUR_ENROLL_KEY", ""),
-        admin_key=os.environ.get("ASHUR_ADMIN_KEY", ""),
-    )
+    """Entry point: `uvicorn --factory core.app:from_env`.
+
+    Keys come from ASHUR_ENROLL_KEY / ASHUR_ADMIN_KEY when set; otherwise from
+    keys.json next to the database, generated on first start.
+    """
+    db_path = os.environ.get("ASHUR_DB", "ashur.db")
+    enroll = os.environ.get("ASHUR_ENROLL_KEY", "")
+    admin = os.environ.get("ASHUR_ADMIN_KEY", "")
+    if not (enroll and admin):
+        keys_path = os.path.join(os.path.dirname(os.path.abspath(db_path)), "keys.json")
+        enroll, admin, created = load_or_create_keys(keys_path)
+        if created:
+            print(f"[ashur] First start: generated keys in {keys_path}.\n"
+                  f"[ashur]   enroll key: {enroll}\n[ashur]   admin key:  {admin}\n"
+                  f"[ashur] They are shown only this once; keep them somewhere safe.", flush=True)
+    return create_app(db_path=db_path, enroll_key=enroll, admin_key=admin)

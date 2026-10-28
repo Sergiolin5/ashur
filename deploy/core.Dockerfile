@@ -1,7 +1,6 @@
-# Ashur core for ZimaOS. Secrets come from an env file at run time, never baked in.
-#   docker build -f deploy/core.Dockerfile -t ashur-core .
-#   docker run -d --name ashur-core --restart unless-stopped \
-#     --env-file .env -v ashur-data:/data -p 8000:8000 ashur-core
+# Ashur core. Built and published to ghcr.io/sergiolin5/ashur-core by GitHub Actions.
+# On ZimaOS, install it with deploy/zimaos-compose.yaml. No secret is baked in:
+# keys are generated on first start into /data/keys.json.
 FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .

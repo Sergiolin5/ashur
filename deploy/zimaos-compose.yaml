@@ -1,0 +1,19 @@
+# Ashur core for ZimaOS: App Store -> "+" -> Install a customized app -> Import.
+# The image is built and published by GitHub Actions on every push to main.
+# Keys are generated on first start into /DATA/AppData/ashur/keys.json.
+name: ashur
+services:
+  ashur-core:
+    image: ghcr.io/sergiolin5/ashur-core:latest
+    container_name: ashur-core
+    restart: unless-stopped
+    ports:
+      - "8711:8000"
+    volumes:
+      - /DATA/AppData/ashur:/data
+    environment:
+      ASHUR_DB: /data/ashur.db
+    deploy:
+      resources:
+        limits:
+          memory: 512M

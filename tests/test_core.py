@@ -143,3 +143,25 @@ def test_revoke(env):
     h = register(c)
     assert c.post("/nodes/mac/revoke", headers=A).status_code == 200
     assert beat(c, h).status_code == 401
+
+
+def test_health_is_open_and_reveals_nothing(env):
+    c, _ = env
+    r = c.get("/health")
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert "nodes" not in r.json()
+
+
+def test_keys_generated_once_and_kept(tmp_path, monkeypatch):
+    import os
+    from core.app import from_env, load_or_create_keys
+    monkeypatch.delenv("ASHUR_ENROLL_KEY", raising=False)
+    monkeypatch.delenv("ASHUR_ADMIN_KEY", raising=False)
+    monkeypatch.setenv("ASHUR_DB", str(tmp_path / "ashur.db"))
+    from_env()
+    keys = tmp_path / "keys.json"
+    assert keys.exists() and (os.stat(keys).st_mode & 0o777) == 0o600
+    e1, a1, created = load_or_create_keys(str(keys))
+    assert not created and e1 and a1 and e1 != a1
+    from_env()                                   # a restart keeps the same keys
+    assert load_or_create_keys(str(keys))[:2] == (e1, a1)

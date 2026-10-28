@@ -15,7 +15,9 @@ from typing import Callable, Optional
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+
+from shared.codebundle import build_bundle, code_version, has_node_code
 
 from typing import Any
 
@@ -52,6 +54,7 @@ def create_app(
     sweep_every_s: Optional[float] = 5.0,
     brain_settings: Optional[BrainSettings] = None,
     brain_client: Any = None,
+    node_code_root: Optional[str] = None,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -83,10 +86,21 @@ def create_app(
         if task:
             task.cancel()
 
-    app = FastAPI(title="Ashur core", version="0.5.0", lifespan=lifespan)
+    app = FastAPI(title="Ashur core", version="0.6.0", lifespan=lifespan)
     app.state.db = db
     app.state.sweep = sweep
     progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch
+    code_root = Path(node_code_root) if node_code_root else Path(__file__).resolve().parent.parent
+    _code_cache: dict = {}
+
+    def node_code() -> tuple[Optional[str], bytes]:
+        """The node code this core ships (its own copy of shared/, node/, modules/)."""
+        if "v" not in _code_cache:
+            if has_node_code(code_root):
+                _code_cache["v"], _code_cache["b"] = code_version(code_root), build_bundle(code_root)
+            else:
+                _code_cache["v"], _code_cache["b"] = None, b""
+        return _code_cache["v"], _code_cache["b"]
 
     # --- auth ------------------------------------------------------------
     def require_admin(x_admin_key: str = Header(default="")):
@@ -132,11 +146,33 @@ def create_app(
         if hb.modules is not None and sorted(hb.modules) != sorted(node["modules"]):
             db.set_node_modules(node["id"], hb.modules)
             db.log(now, node["id"], "modules_changed", {"from": node["modules"], "to": sorted(hb.modules)})
+        if hb.code_version and hb.code_version != node.get("code_version"):
+            db.set_node_code_version(node["id"], hb.code_version)
+            if node.get("code_version"):
+                db.log(now, node["id"], "code_updated", {"from": node["code_version"], "to": hb.code_version})
+        if hb.fresh_start:
+            lost = db.requeue_tasks_of(node["id"])
+            if lost:
+                db.log(now, node["id"], "restart_requeued", {"requeued_tasks": lost})
         if prev == Mode.OFFLINE.value:
             db.log(now, node["id"], "back_online", {"mode": hb.mode.value})
         elif prev != hb.mode.value:
             db.log(now, node["id"], "mode_change", {"from": prev, "to": hb.mode.value})
-        return {"ok": True}
+        return {"ok": True, "code_version": node_code()[0]}
+
+    @app.get("/nodes/{node_id}/code")
+    def node_code_info(node: dict = Depends(require_node)):
+        version, _ = node_code()
+        if not version:
+            raise HTTPException(404, "this core ships no node code")
+        return {"version": version}
+
+    @app.get("/nodes/{node_id}/code/bundle")
+    def node_code_bundle(node: dict = Depends(require_node)):
+        version, data = node_code()
+        if not version:
+            raise HTTPException(404, "this core ships no node code")
+        return Response(data, media_type="application/gzip", headers={"X-Code-Version": version})
 
     @app.get("/nodes/{node_id}/tasks/next", response_model=Optional[Task])
     def next_task(node: dict = Depends(require_node), wait: float = 0, modules: Optional[str] = None):
@@ -167,6 +203,10 @@ def create_app(
         if t["status"] != "running":
             raise HTTPException(409, f"task is {t['status']}")
         now = clock()
+        if res.requeue:
+            db.requeue_task(task_id)
+            db.log(now, t["node_id"], "task_yielded", {"task_id": task_id, "module": t["module"]})
+            return {"ok": True, "requeued": True}
         db.finish_task(task_id, res.ok, res.model_dump(), now)
         db.log(now, t["node_id"], "task_done" if res.ok else "task_failed",
                {"task_id": task_id, "error": res.error})
@@ -205,7 +245,7 @@ def create_app(
                             "entries": p.get("entries"), "folder": p.get("folder")})
         return {"version": app.version, "now": now, "status": status(), "running": running,
                 "queued": db.queued_tasks(), "inventory": db.inventory_summary(),
-                "activity": db.log_rows(30), "budget": brain.budget()}
+                "activity": db.log_rows(30), "budget": brain.budget(), "node_code_version": node_code()[0]}
 
     # --- the brain -------------------------------------------------------
     def network_for_brain() -> dict:
@@ -288,7 +328,7 @@ def create_app(
         nodes = [
             NodeStatus(
                 device_id=n["id"], persona=n["persona"], os=n["os"], mode=Mode(n["mode"]),
-                modules=n["modules"], simulated=n["simulated"],
+                modules=n["modules"], simulated=n["simulated"], code_version=n.get("code_version"),
                 last_seen_s_ago=None if n["last_seen"] is None else round(now - n["last_seen"], 1),
             )
             for n in db.nodes()

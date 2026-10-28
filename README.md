@@ -73,6 +73,14 @@ Ashur answers with Claude when the API key works and with a local model otherwis
 `llm` module: install Ollama on it, pull a model, and add `llm` to its modules.
 Ollama stays on 127.0.0.1; the core sends chat work through the node agent.
 
+## Updates
+
+Nodes run `node.boot`, which starts the agent and applies the code the core ships.
+Updating the core image on ZimaOS updates every node within a heartbeat; a version
+that crashes within two minutes is rolled back and never retried. The container node
+updates by image tag instead. Long tasks checkpoint their progress: a restart, a
+sleep or Sergio needing the machine pauses them, and they resume where they stopped.
+
 ## Rules
 
 - Nodes always call the core; the core never calls a node.

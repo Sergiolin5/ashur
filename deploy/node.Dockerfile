@@ -9,5 +9,7 @@ COPY shared ./shared
 COPY node ./node
 COPY modules ./modules
 ENV ASHUR_STATE=/state
+# containers update by image tag, not by the core's code bundle
+ENV ASHUR_SELF_UPDATE=0
 VOLUME /state
 CMD ["python", "-m", "node.agent"]

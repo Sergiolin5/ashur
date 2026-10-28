@@ -7,6 +7,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY shared ./shared
 COPY core ./core
+# the node code this core ships to its nodes (they update themselves from it)
+COPY node ./node
+COPY modules ./modules
+COPY requirements-node.txt .
 ENV ASHUR_DB=/data/ashur.db
 VOLUME /data
 EXPOSE 8000

@@ -58,6 +58,8 @@ class RegisterResponse(BaseModel):
 class Heartbeat(BaseModel):
     mode: Mode
     modules: Optional[list[str]] = None   # sent on the first beat after start, so new modules are known
+    code_version: Optional[str] = None    # first beat: which code this agent runs
+    fresh_start: Optional[bool] = None    # first beat: whatever the core thinks it was running is gone
     load_pct: Optional[float] = None
     free_gpu_mem_gb: Optional[float] = None
     battery_pct: Optional[float] = None
@@ -96,6 +98,7 @@ class Task(BaseModel):
 
 class TaskResult(BaseModel):
     ok: bool
+    requeue: bool = False                 # paused (yield, restart): put it back, it will resume
     result: dict[str, Any] = {}
     error: Optional[str] = None
     log_lines: list[str] = []
@@ -109,3 +112,4 @@ class NodeStatus(BaseModel):
     modules: list[str]
     last_seen_s_ago: Optional[float]
     simulated: bool
+    code_version: Optional[str] = None

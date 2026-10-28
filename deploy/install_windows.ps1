@@ -98,7 +98,9 @@ try {
 } finally { Pop-Location }
 
 # 7. Start at logon, inside your session (needed to see idle time and fullscreen apps)
-$action   = New-ScheduledTaskAction -Execute $vpyw -Argument "-m node.agent --config `"$Config`"" -WorkingDirectory $App
+# node.boot keeps the agent running and applies the code updates the core ships
+foreach ($f in @("current", "pending", "previous")) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Home_ $f) }
+$action   = New-ScheduledTaskAction -Execute $vpyw -Argument "-m node.boot --config `"$Config`"" -WorkingDirectory $App
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `

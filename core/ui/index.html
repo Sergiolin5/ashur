@@ -327,6 +327,9 @@
                           (d.provider === "local" ? ", modelo local" : d.provider === "claude" ? ", Claude" : "");
       case "chat_unanswered": return "Mensaje sin responder";
       case "modules_changed": return "Cambió sus capacidades: " + (d.to || []).join(", ");
+      case "code_updated": return "Actualizó su código";
+      case "restart_requeued": return "Reinició y devolvió su tarea a la cola";
+      case "task_yielded": return "Pausó " + mod.toLowerCase() + " para liberar el equipo";
       case "chat_blocked_budget": return "Mensaje bloqueado por el tope de gasto";
       case "chat_error": return "No pudo hablar con Claude";
       case "memory_saved": return "Guardó un recuerdo";
@@ -371,7 +374,9 @@
     fill("devices", nodes.map((n) => row({
       dot: n.mode,
       title: n.device_id,
-      detail: (OS[n.os] || n.os) + ", " + MODE[n.mode].toLowerCase(),
+      detail: (OS[n.os] || n.os) + ", " + MODE[n.mode].toLowerCase() +
+              (data.node_code_version && n.code_version && n.code_version !== data.node_code_version
+                ? ", código por actualizar" : ""),
       value: ago(n.last_seen_s_ago)
     })), "Ningún dispositivo todavía.");
 

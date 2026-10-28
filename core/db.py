@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     mode        TEXT NOT NULL,
     token_hash  TEXT NOT NULL,
     simulated   INTEGER NOT NULL DEFAULT 0,
-    last_seen   REAL
+    last_seen   REAL,
+    code_version TEXT
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +101,9 @@ class DB:
             self.conn.execute("ALTER TABLE tasks ADD COLUMN target TEXT")
         if "started" not in cols:
             self.conn.execute("ALTER TABLE tasks ADD COLUMN started REAL")
+        ncols = {r["name"] for r in self.conn.execute("PRAGMA table_info(nodes)")}
+        if "code_version" not in ncols:
+            self.conn.execute("ALTER TABLE nodes ADD COLUMN code_version TEXT")
 
     # --- session log -----------------------------------------------------
     def log(self, ts: float, node_id: Optional[str], event: str, detail: dict | None = None):
@@ -154,6 +158,17 @@ class DB:
                 self.conn.execute(
                     "UPDATE nodes SET mode = ?, last_seen = ? WHERE id = ?", (mode, last_seen, node_id)
                 )
+            self.conn.commit()
+
+    def set_node_code_version(self, node_id: str, version: str) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE nodes SET code_version = ? WHERE id = ?", (version, node_id))
+            self.conn.commit()
+
+    def requeue_task(self, task_id: int) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE tasks SET status = 'queued', node_id = NULL, started = NULL, result = NULL"
+                              " WHERE id = ? AND status = 'running'", (task_id,))
             self.conn.commit()
 
     def set_node_modules(self, node_id: str, modules: list[str]) -> None:

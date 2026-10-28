@@ -134,8 +134,13 @@ def _folder_size(path: str, stop: Callable[[], bool]) -> tuple[int, int]:
 
 
 def scan(roots: Iterable[str], emit: Callable[[dict], None], stop: Callable[[], bool] = lambda: False,
-         hash_files: bool = False, hash_limit: int = 64 << 20, max_entries: Optional[int] = None) -> dict:
+         hash_files: bool = False, hash_limit: int = 64 << 20, max_entries: Optional[int] = None,
+         skip: Optional[set] = None, on_done: Optional[Callable[[str], None]] = None,
+         done_depth: int = 3) -> dict:
+    """Walk depth-first. on_done(folder) fires once every row under that folder was emitted
+    (folders up to done_depth levels below a root); skip holds folders already finished."""
     stats = {"entries": 0, "bytes": 0, "runnable": 0, "sensitive": 0, "summaries": 0, "errors": 0}
+    skip = skip if skip is not None else set()
 
     def out(row: dict) -> bool:
         emit(row)
@@ -146,13 +151,23 @@ def scan(roots: Iterable[str], emit: Callable[[dict], None], stop: Callable[[], 
         stats["summaries"] += row["kind"] == "folder_summary"
         return max_entries is not None and stats["entries"] >= max_entries
 
+    roots = list(roots)
     root_set = {_norm(r) for r in roots}
-    stack = [(r, "user") for r in roots]
+    stack = [("dir", r, "user", 0) for r in reversed(roots)]
     while stack:
         if stop():
             stats["stopped"] = True
             break
-        folder, mode = stack.pop()
+        item = stack.pop()
+        if item[0] == "done":
+            if on_done and item[2] <= done_depth:
+                on_done(item[1])
+            continue
+        _, folder, mode, depth = item
+        if _norm(folder) in skip:
+            stats["skipped"] = stats.get("skipped", 0) + 1
+            continue
+        stack.append(("done", folder, depth))          # pops only after everything below it
         for e in _entries(folder):
             if _skip_link(e):
                 continue
@@ -169,11 +184,16 @@ def scan(roots: Iterable[str], emit: Callable[[dict], None], stop: Callable[[], 
                             return stats
                     elif kind == "summary" and mode != "programs":
                         size, n = _folder_size(e.path, stop)
+                        if stop():                                 # cut short: don't record a wrong size
+                            stats["stopped"] = True
+                            return stats
                         if out({"path": e.path, "kind": "folder_summary", "size": size,
                                 "hash": None, "runnable": False, "modified": None}):
                             return stats
                     else:
-                        stack.append((e.path, "programs" if kind == "programs" or mode == "programs" else mode))
+                        stack.append(("dir", e.path,
+                                      "programs" if kind == "programs" or mode == "programs" else mode,
+                                      depth + 1))
                 elif e.is_file(follow_symlinks=False):
                     if is_sensitive_file(e.name):
                         if out({"path": e.path, "kind": "sensitive"}):
@@ -193,17 +213,52 @@ def scan(roots: Iterable[str], emit: Callable[[dict], None], stop: Callable[[], 
     return stats
 
 
+CHECKPOINT = "inventory_checkpoint.json"
+
+
 def run(payload: dict, ctx) -> dict:
-    """Task entry point. ctx.upload(rows, reset) sends batches; ctx.should_stop() ends early."""
+    """Task entry point. ctx.upload(rows, reset) sends batches; ctx.should_stop() ends early.
+
+    Progress is checkpointed per finished folder, so a scan cut by a restart, a sleep or
+    Sergio sitting down resumes where it stopped instead of starting over.
+    """
+    import json
+
     cfg = getattr(ctx, "config", {}) or {}
     roots = payload.get("roots") or cfg.get("inventory_roots") or default_roots()
-    batch, first = [], [True]
+    task_id = getattr(ctx, "task_id", None)
+    state = getattr(ctx, "state_dir", None)
+    ck_path = Path(state) / CHECKPOINT if state and task_id is not None else None
+
+    done: set = set()
+    resumed = False
+    if ck_path and ck_path.exists():
+        try:
+            ck = json.loads(ck_path.read_text(encoding="utf-8"))
+            if ck.get("task_id") == task_id and ck.get("roots") == roots:
+                done, resumed = set(ck.get("done", [])), True
+        except (ValueError, OSError):
+            pass
+    already = len(done)
+
+    batch, pending_done, first = [], [], [not resumed]   # a resumed scan never wipes earlier rows
     started = time.time()
+
+    def save():
+        if ck_path:
+            tmp = ck_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"task_id": task_id, "roots": roots, "done": sorted(done)}),
+                           encoding="utf-8")
+            os.replace(tmp, ck_path)
 
     def flush():
         ctx.upload(batch[:], reset=first[0])
         first[0] = False
         batch.clear()
+        if pending_done:                     # only now are those folders' rows safely on the core
+            done.update(pending_done)
+            pending_done.clear()
+            save()
 
     def emit(row):
         batch.append(row)
@@ -211,7 +266,11 @@ def run(payload: dict, ctx) -> dict:
             flush()
 
     stats = scan(roots, emit, stop=ctx.should_stop, hash_files=bool(payload.get("hash")),
-                 max_entries=payload.get("max_entries"))
+                 max_entries=payload.get("max_entries"), skip=done,
+                 on_done=lambda folder: pending_done.append(_norm(folder)))
     flush()
-    stats.update(roots=roots, seconds=round(time.time() - started, 1))
+    if not stats.get("stopped") and ck_path and ck_path.exists():
+        ck_path.unlink()
+    stats.update(roots=roots, seconds=round(time.time() - started, 1),
+                 resumed=resumed, folders_already_done=already)
     return stats

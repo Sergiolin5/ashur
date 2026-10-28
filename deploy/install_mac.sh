@@ -81,7 +81,9 @@ fi
 say "Autoprueba:"
 "$PY" -m node.agent --config "$CONFIG" --selftest || say "Algún módulo no pasó la autoprueba; revisa $STATE/agent.log"
 
-# 7. Start at login, inside your session
+# 7. Start at login, inside your session. node.boot keeps the agent running and
+#    applies the code updates the core ships; a fresh install starts from this copy.
+rm -f "$STATE/current" "$STATE/pending" "$STATE/previous"
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -91,7 +93,7 @@ cat > "$PLIST" <<EOF
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$PY</string><string>-m</string><string>node.agent</string>
+    <string>$PY</string><string>-m</string><string>node.boot</string>
     <string>--config</string><string>$CONFIG</string>
   </array>
   <key>WorkingDirectory</key><string>$APP</string>

@@ -43,14 +43,26 @@ class NeedsEnrollment(Exception):
 
 
 class TaskContext:
-    def __init__(self, agent: "Agent"):
+    def __init__(self, agent: "Agent", task: Optional[dict] = None):
         self.agent = agent
+        self.task = task or {}
+        self.task_id = self.task.get("id")
+        self.state_dir = agent.state
 
     def upload(self, rows: list[dict], reset: bool = False) -> None:
         self.agent.post(f"/nodes/{self.agent.device_id}/inventory", {"reset": reset, "rows": rows})
 
     def should_stop(self) -> bool:
-        return self.agent.stopping.is_set()
+        """True when the agent is shutting down, or when Sergio needs the machine back:
+        heavy work only runs in Full mode, light work stops when the node is busy or off."""
+        if self.agent.stopping.is_set():
+            return True
+        mode = self.agent.mode
+        if mode is None:
+            return False
+        if self.task.get("weight") == "heavy":
+            return mode != Mode.FULL
+        return mode in (Mode.BUSY, Mode.OFF)
 
     @property
     def config(self) -> dict:
@@ -100,9 +112,32 @@ def enroll_key_from_env() -> Optional[str]:
     return None
 
 
+CODE_ROOT = Path(__file__).resolve().parent.parent
+EXIT_UPDATE = 75
+UPDATE_RETRY_S = 3600
+
+
+def install_requirements(req: Path) -> None:
+    """Install new node dependencies into this same Python (pip, or uv for uv-made venvs)."""
+    import shutil
+    import subprocess
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        return
+    uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
+    if Path(uv).exists():
+        r = subprocess.run([uv, "pip", "install", "-q", "--python", sys.executable, "-r", str(req)],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+    raise RuntimeError(f"could not install node requirements: {(r.stderr or r.stdout)[-300:]}")
+
+
 class Agent:
     def __init__(self, config: dict, client: Optional[httpx.Client] = None,
-                 policy: Optional[Policy] = None, state: Optional[Path] = None):
+                 policy: Optional[Policy] = None, state: Optional[Path] = None,
+                 self_update: Optional[bool] = None, code_version: Optional[str] = None):
         self.cfg = config
         self.device_id = config["device_id"]
         self.state = state or state_dir()
@@ -117,6 +152,27 @@ class Agent:
         self.worker: Optional[threading.Thread] = None
         self.mode: Optional[Mode] = None
         self.announced = False                # modules are re-announced once per start
+        # self-update only under node.boot, which can restart the agent on new code
+        self.self_update = (os.environ.get("ASHUR_BOOT") == "1" and os.environ.get("ASHUR_SELF_UPDATE", "1") != "0"
+                            if self_update is None else self_update)
+        self.code_version = code_version or os.environ.get("ASHUR_CODE_VERSION") or self._own_version()
+        self.update_ready = False
+        self._update_failed: dict[str, float] = {}
+        self.realtime: Optional[threading.Thread] = None
+
+    @staticmethod
+    def _own_version() -> str:
+        try:
+            from shared.codebundle import code_version
+            return code_version(CODE_ROOT)
+        except Exception:
+            return "unknown"
+
+    def _bad_versions(self) -> set:
+        try:
+            return set((self.state / "bad_versions").read_text(encoding="utf-8").split())
+        except OSError:
+            return set()
 
     # --- transport -------------------------------------------------------
     def _headers(self) -> dict:
@@ -168,10 +224,16 @@ class Agent:
             self.mode = mode
         beat = {"mode": mode.value}
         if not self.announced:
-            beat["modules"] = sorted(self.modules)
-        self.post(f"/nodes/{self.device_id}/heartbeat", beat)
+            beat.update(modules=sorted(self.modules), code_version=self.code_version, fresh_start=True)
+        reply = self.post(f"/nodes/{self.device_id}/heartbeat", beat)
         self.announced = True
-        if self.worker and self.worker.is_alive():
+        try:
+            target = reply.json().get("code_version")
+        except ValueError:
+            target = None
+        if target:
+            self.maybe_update(target)
+        if self.stopping.is_set() or (self.worker and self.worker.is_alive()):
             return
         batch = sorted(m for m in self.modules if m not in REALTIME_MODULES)
         if not batch:
@@ -181,19 +243,61 @@ class Agent:
             self.worker = threading.Thread(target=self._run_task, args=(task,), daemon=True)
             self.worker.start()
 
+    # --- code updates from the core -----------------------------------------
+    def maybe_update(self, target: str) -> None:
+        if (not self.self_update or target == self.code_version or target in self._bad_versions()
+                or time.monotonic() < self._update_failed.get(target, 0)):
+            return
+        try:
+            self.stage_update(target)
+        except Exception as e:
+            log.warning("update to %s failed: %s; retrying in an hour", target, e)
+            self._update_failed[target] = time.monotonic() + UPDATE_RETRY_S
+            return
+        log.info("update %s staged; restarting on the new code", target)
+        self.update_ready = True
+        self.stopping.set()
+
+    def stage_update(self, target: str) -> None:
+        import shutil
+        from shared.codebundle import code_version, extract_bundle
+        r = self.client.get(f"/nodes/{self.device_id}/code/bundle", headers=self._headers(), timeout=120)
+        if r.status_code == 401:
+            raise NeedsEnrollment(r.text)
+        r.raise_for_status()
+        versions = self.state / "versions"
+        tmp = versions / f".tmp-{target}"
+        shutil.rmtree(tmp, ignore_errors=True)
+        extract_bundle(r.content, tmp)
+        got = code_version(tmp)
+        if got != target:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise ValueError(f"bundle content is {got}, expected {target}")
+        new_req, old_req = tmp / "requirements-node.txt", CODE_ROOT / "requirements-node.txt"
+        if new_req.exists() and (not old_req.exists() or new_req.read_bytes() != old_req.read_bytes()):
+            install_requirements(new_req)
+        dest = versions / target
+        shutil.rmtree(dest, ignore_errors=True)
+        os.replace(tmp, dest)
+        (self.state / "pending").write_text(target, encoding="utf-8")
+
+    # --- tasks ------------------------------------------------------------
     def _run_task(self, task: dict) -> None:
         name = task["module"]
         log.info("task %s started (%s)", task["id"], name)
         try:
             mod = self.modules[name]
-            result = mod.run(task.get("payload") or {}, TaskContext(self))
-            body = {"ok": True, "result": result}
+            result = mod.run(task.get("payload") or {}, TaskContext(self, task))
+            if isinstance(result, dict) and result.get("stopped"):
+                body = {"ok": True, "requeue": True, "result": result}   # paused; it will resume
+            else:
+                body = {"ok": True, "result": result}
         except Exception as e:
             log.exception("task %s failed", task["id"])
             body = {"ok": False, "error": f"{type(e).__name__}: {e}", "log_lines": [str(e)]}
         try:
             self.post(f"/tasks/{task['id']}/result", body)
-            log.info("task %s finished ok=%s", task["id"], body["ok"])
+            log.info("task %s %s", task["id"], "paused" if body.get("requeue") else f"finished ok={body['ok']}")
         except Exception as e:
             log.warning("could not report task %s: %s", task["id"], e)
 
@@ -212,19 +316,26 @@ class Agent:
                 self.stopping.wait(5)
 
     def run_forever(self) -> None:
-        if any(m in REALTIME_MODULES for m in self.modules):
-            threading.Thread(target=self.realtime_loop, daemon=True, name="realtime").start()
         backoff = HEARTBEAT_INTERVAL_S
         while not self.stopping.is_set():
             try:
                 self.tick()
                 backoff = HEARTBEAT_INTERVAL_S
+                # chat work starts after the first beat, so its fresh_start can't requeue a live task
+                if (self.realtime is None and not self.stopping.is_set()
+                        and any(m in REALTIME_MODULES for m in self.modules)):
+                    self.realtime = threading.Thread(target=self.realtime_loop, daemon=True, name="realtime")
+                    self.realtime.start()
             except NeedsEnrollment:
                 raise
             except httpx.HTTPError as e:
                 log.warning("core unreachable (%s); retrying in %ss", e.__class__.__name__, backoff)
                 backoff = min(backoff * 2, 60)
             self.stopping.wait(backoff)
+        # finishing up: a running task notices `stopping`, checkpoints and reports itself paused
+        for t in (self.worker, self.realtime):
+            if t and t.is_alive():
+                t.join(timeout=180)
 
 
 def lower_priority() -> None:
@@ -280,6 +391,8 @@ def main(argv=None) -> int:
     lower_priority()
     try:
         agent.run_forever()
+        if agent.update_ready:
+            return EXIT_UPDATE
     except NeedsEnrollment as e:
         log.error("the core no longer accepts this node (%s); run again with --enroll", e)
         return 2

@@ -1,0 +1,36 @@
+# An evening at home: the desktop is free, then Sergio starts gaming,
+# the Legion Go runs out of battery, the Mac sleeps and wakes again.
+name: evening-churn
+duration_s: 900
+tick_s: 15
+
+tasks:
+  - {at: 0,   module: inventory, weight: heavy, count: 6}
+  - {at: 0,   module: inventory, weight: light, count: 6}
+  - {at: 300, module: inventory, weight: light, count: 6}
+
+nodes:
+  - id: sim-ryzen9
+    os: windows
+    task_seconds: 45
+    timeline:
+      - {at: 0,   do: join}
+      - {at: 240, do: mode, mode: light}   # Sergio sits down
+      - {at: 420, do: mode, mode: "off"}   # fullscreen game
+      - {at: 780, do: mode, mode: full}    # idle again
+
+  - id: sim-legion-go
+    os: windows
+    task_seconds: 90
+    timeline:
+      - {at: 60,  do: join}
+      - {at: 330, do: vanish}              # battery dies mid-task
+
+  - id: sim-mac-m1
+    os: macos
+    task_seconds: 60
+    timeline:
+      - {at: 0,   do: join}
+      - {at: 180, do: mode, mode: light}
+      - {at: 360, do: vanish}              # lid closed
+      - {at: 600, do: join}                # lid opened

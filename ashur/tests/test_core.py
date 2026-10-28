@@ -1,0 +1,145 @@
+import pytest
+from fastapi.testclient import TestClient
+
+from core.app import create_app
+from sim.scenario import VirtualClock
+
+ENROLL, ADMIN = "test-enroll", "test-admin"
+A = {"X-Admin-Key": ADMIN}
+
+
+@pytest.fixture
+def env(tmp_path):
+    clock = VirtualClock()
+    app = create_app(str(tmp_path / "t.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None)
+    return TestClient(app), clock
+
+
+def register(c, device_id="mac", modules=("inventory",)):
+    r = c.post("/nodes/register", headers={"X-Enroll-Key": ENROLL},
+               json={"device_id": device_id, "os": "macos", "modules": list(modules)})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def beat(c, h, device_id="mac", mode="full"):
+    return c.post(f"/nodes/{device_id}/heartbeat", headers=h, json={"mode": mode})
+
+
+def test_refuses_to_start_without_secrets(tmp_path):
+    with pytest.raises(RuntimeError):
+        create_app(str(tmp_path / "x.db"), "", "")
+
+
+def test_register_needs_enroll_key(env):
+    c, _ = env
+    r = c.post("/nodes/register", json={"device_id": "mac", "os": "macos"})
+    assert r.status_code == 401
+    r = c.post("/nodes/register", headers={"X-Enroll-Key": "wrong"},
+               json={"device_id": "mac", "os": "macos"})
+    assert r.status_code == 401
+
+
+def test_bad_device_id_rejected(env):
+    c, _ = env
+    r = c.post("/nodes/register", headers={"X-Enroll-Key": ENROLL},
+               json={"device_id": "../etc", "os": "x"})
+    assert r.status_code == 422
+
+
+def test_node_token_is_per_node(env):
+    c, _ = env
+    h_mac = register(c, "mac")
+    register(c, "ryzen9")
+    assert beat(c, h_mac, "ryzen9").status_code == 401   # mac's token can't speak for ryzen9
+    assert beat(c, {"Authorization": "Bearer nope"}).status_code == 401
+
+
+def test_reregister_revokes_old_token(env):
+    c, _ = env
+    old = register(c)
+    new = register(c)
+    assert beat(c, old).status_code == 401
+    assert beat(c, new).status_code == 200
+
+
+def test_status_needs_admin(env):
+    c, _ = env
+    assert c.get("/status").status_code == 401
+    assert c.get("/status", headers=A).status_code == 200
+
+
+def test_offline_after_missed_heartbeats_and_back(env):
+    c, clock = env
+    h = register(c)
+    clock.now += 45
+    assert c.get("/status", headers=A).json()["nodes"][0]["mode"] == "full"   # exactly 45 s: still on
+    clock.now += 1
+    assert c.get("/status", headers=A).json()["nodes"][0]["mode"] == "offline"
+    beat(c, h)
+    assert c.get("/status", headers=A).json()["nodes"][0]["mode"] == "full"
+    events = [r["event"] for r in c.get("/log", headers=A).json()]
+    assert "offline" in events and "back_online" in events
+
+
+def test_node_cannot_claim_offline(env):
+    c, _ = env
+    h = register(c)
+    assert beat(c, h, mode="offline").status_code == 422
+
+
+def test_task_flow_and_module_matching(env):
+    c, _ = env
+    h = register(c, modules=["inventory"])
+    c.post("/tasks", headers=A, json={"module": "local-model", "weight": "light"})
+    tid = c.post("/tasks", headers=A, json={"module": "inventory", "weight": "light"}).json()["task_id"]
+    t = c.get("/nodes/mac/tasks/next", headers=h).json()
+    assert t["id"] == tid                      # skipped the module it doesn't have
+    assert c.get("/nodes/mac/tasks/next", headers=h).json() is None   # only local-model work is left
+    r = c.post(f"/tasks/{tid}/result", headers=h, json={"ok": True, "result": {"files": 3}})
+    assert r.status_code == 200
+    assert c.get(f"/tasks/{tid}", headers=A).json()["status"] == "done"
+    assert c.post(f"/tasks/{tid}/result", headers=h, json={"ok": True}).status_code == 409
+
+
+def test_light_mode_never_gets_heavy_work(env):
+    c, _ = env
+    h = register(c)
+    beat(c, h, mode="light")
+    c.post("/tasks", headers=A, json={"module": "inventory", "weight": "heavy"})
+    assert c.get("/nodes/mac/tasks/next", headers=h).json() is None
+    beat(c, h, mode="off")
+    c.post("/tasks", headers=A, json={"module": "inventory", "weight": "light"})
+    assert c.get("/nodes/mac/tasks/next", headers=h).json() is None
+    beat(c, h, mode="full")
+    assert c.get("/nodes/mac/tasks/next", headers=h).json()["weight"] == "heavy"
+
+
+def test_only_the_holding_node_can_report(env):
+    c, _ = env
+    h_mac = register(c, "mac")
+    h_r9 = register(c, "ryzen9")
+    tid = c.post("/tasks", headers=A, json={"module": "inventory"}).json()["task_id"]
+    c.get("/nodes/mac/tasks/next", headers=h_mac)
+    assert c.post(f"/tasks/{tid}/result", headers=h_r9, json={"ok": True}).status_code == 401
+
+
+def test_vanished_node_task_is_rerouted(env):
+    c, clock = env
+    h_mac = register(c, "mac")
+    tid = c.post("/tasks", headers=A, json={"module": "inventory"}).json()["task_id"]
+    assert c.get("/nodes/mac/tasks/next", headers=h_mac).json()["id"] == tid
+    clock.now += 30
+    h_r9 = register(c, "ryzen9")
+    clock.now += 20                              # mac silent 50 s, ryzen9 20 s
+    beat(c, h_r9, "ryzen9")
+    assert c.get("/nodes/ryzen9/tasks/next", headers=h_r9).json()["id"] == tid
+    # the mac wakes up late and tries to report: rejected, the task moved on
+    assert c.post(f"/tasks/{tid}/result", headers=h_mac, json={"ok": True}).status_code == 401
+
+
+def test_revoke(env):
+    c, _ = env
+    h = register(c)
+    assert c.post("/nodes/mac/revoke", headers=A).status_code == 200
+    assert beat(c, h).status_code == 401

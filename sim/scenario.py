@@ -75,6 +75,8 @@ def run(scenario: dict, db_path: str) -> dict:
     for row in log:
         row["t"] = round(row.pop("ts") - clock.start, 1)
     requeued = sum(len(r["detail"].get("requeued_tasks", [])) for r in log)
+    client.close()
+    app.state.db.close()          # Windows cannot delete an open database file
     return {
         "scenario": scenario.get("name", "unnamed"),
         "tasks": status["tasks"],

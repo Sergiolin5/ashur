@@ -74,6 +74,10 @@ class DB:
             self._migrate()
             self.conn.commit()
 
+    def close(self) -> None:
+        with self.lock:
+            self.conn.close()
+
     def _migrate(self) -> None:
         """Add columns that older databases on the server don't have yet."""
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(tasks)")}

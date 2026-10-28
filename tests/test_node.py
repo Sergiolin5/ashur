@@ -224,3 +224,13 @@ def test_server_node_scans_its_configured_roots(core, tmp_path):
     agent.worker.join(timeout=10)
     task = c.get("/tasks/1", headers=A).json()
     assert task["status"] == "done" and task["result"]["result"]["roots"] == [str(data)]
+
+
+def test_config_written_by_powershell_with_bom_loads(tmp_path):
+    from node.agent import load_config
+    p = tmp_path / "node.yaml"
+    p.write_bytes(b"\xef\xbb\xbf" + b"device_id: legion-go\ncore_url: http://zimaos:8711\nmodules: [inventory]\n")
+    assert load_config(p)["device_id"] == "legion-go"
+    p.write_text("persona: x\n")
+    with pytest.raises(SystemExit):
+        load_config(p)

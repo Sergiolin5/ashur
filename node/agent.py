@@ -71,6 +71,15 @@ def config_from_env() -> dict:
     return cfg
 
 
+def load_config(path: Path) -> dict:
+    """utf-8-sig: Windows PowerShell 5.1 writes UTF-8 with a BOM."""
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    missing = [k for k in ("device_id", "core_url") if not cfg.get(k)]
+    if missing:
+        raise SystemExit(f"{path} is missing {', '.join(missing)}; delete it and run the installer again")
+    return cfg
+
+
 def enroll_key_from_env() -> Optional[str]:
     if os.environ.get("ASHUR_ENROLL_KEY"):
         return os.environ["ASHUR_ENROLL_KEY"]
@@ -94,7 +103,7 @@ class Agent:
         t = config.get("thresholds", {})
         self.policy = policy or Policy(config.get("yield_policy", "always_full"), Thresholds(**t))
         self.modules: dict[str, Module] = {}
-        self.token: Optional[str] = self.token_file.read_text().strip() if self.token_file.exists() else None
+        self.token: Optional[str] = self.token_file.read_text(encoding="utf-8-sig").strip() if self.token_file.exists() else None
         self.stopping = threading.Event()
         self.worker: Optional[threading.Thread] = None
         self.mode: Optional[Mode] = None
@@ -134,7 +143,7 @@ class Agent:
             raise NeedsEnrollment("the core rejected the enroll key")
         r.raise_for_status()
         self.token = r.json()["token"]
-        self.token_file.write_text(self.token)
+        self.token_file.write_text(self.token, encoding="utf-8")
         try:
             os.chmod(self.token_file, 0o600)
         except OSError:
@@ -213,7 +222,7 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     path = args.config or state_dir() / "node.yaml"
-    cfg = yaml.safe_load(path.read_text()) if path.exists() else config_from_env()
+    cfg = load_config(path) if path.exists() else config_from_env()
     setup_logging(state_dir())
     agent = Agent(cfg)
     agent.load_modules()

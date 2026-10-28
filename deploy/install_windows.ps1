@@ -71,13 +71,15 @@ if (-not (Test-Path $Config)) {
     Write-Host "  2 = portátil con batería (Legion Go)"
     $choice = Read-Host "Elige 1 o 2"
     $policy = if ($choice -eq "2") { "portable" } else { "shared_main_machine" }
-    @"
+    $yaml = @"
 device_id: $device
 persona: $device
 core_url: http://${server}:8711
 modules: [inventory]
 yield_policy: $policy
-"@ | Set-Content -Encoding UTF8 $Config
+"@
+    # UTF-8 without BOM (PowerShell 5.1 adds one with Set-Content -Encoding UTF8)
+    [System.IO.File]::WriteAllText($Config, $yaml, (New-Object System.Text.UTF8Encoding $false))
     Say "Configuración guardada en $Config"
 }
 
@@ -87,7 +89,7 @@ try {
     if (-not (Test-Path (Join-Path $Home_ "node_token"))) {
         Say "Registrando el nodo. Pega la enroll key de keys.json del servidor:"
         & $vpy -m node.agent --config $Config --enroll
-        if ($LASTEXITCODE -ne 0) { throw "El registro falló. Revisa la clave y que Tailscale esté activo." }
+        if ($LASTEXITCODE -ne 0) { throw "El registro falló. Revisa el mensaje de arriba: la clave, que Tailscale esté activo y que http://<servidor>:8711/health abra en este equipo." }
     }
 
     # 6. Self-test

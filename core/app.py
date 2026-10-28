@@ -17,6 +17,11 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from core.brain import Brain, BrainSettings, BrainUnavailable
 from core.db import DB, hash_token
 from shared.protocol import (
     OFFLINE_AFTER_S, Heartbeat, InventoryBatch, Mode, NewTask, NodeStatus,
@@ -45,6 +50,8 @@ def create_app(
     admin_key: str,
     clock: Callable[[], float] = time.time,
     sweep_every_s: Optional[float] = 5.0,
+    brain_settings: Optional[BrainSettings] = None,
+    brain_client: Any = None,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -76,7 +83,7 @@ def create_app(
         if task:
             task.cancel()
 
-    app = FastAPI(title="Ashur core", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Ashur core", version="0.4.0", lifespan=lifespan)
     app.state.db = db
     app.state.sweep = sweep
     progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch
@@ -185,7 +192,50 @@ def create_app(
                             "entries": p.get("entries"), "folder": p.get("folder")})
         return {"version": app.version, "now": now, "status": status(), "running": running,
                 "queued": db.queued_tasks(), "inventory": db.inventory_summary(),
-                "activity": db.log_rows(30)}
+                "activity": db.log_rows(30), "budget": brain.budget()}
+
+    # --- the brain -------------------------------------------------------
+    def network_for_brain() -> dict:
+        st = status()
+        return {"dispositivos": [{"id": n.device_id, "sistema": n.os, "modo": n.mode.value,
+                                  "visto_hace_s": n.last_seen_s_ago} for n in st["nodes"]],
+                "tareas": st["tasks"],
+                "en_curso": [{"tarea": t["id"], "modulo": t["module"], "dispositivo": t["node_id"],
+                              "elementos": progress.get(t["node_id"], {}).get("entries")}
+                             for t in db.running_tasks()]}
+
+    brain = Brain(db, os.path.dirname(os.path.abspath(db_path)), clock, network_for_brain,
+                  settings=brain_settings, client=brain_client)
+    app.state.brain = brain
+
+    class ChatIn(BaseModel):
+        message: str = Field(min_length=1, max_length=8000)
+        channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
+
+    @app.post("/api/chat", dependencies=[Depends(require_admin)])
+    def chat(body: ChatIn):
+        try:
+            return brain.chat(body.message, body.channel)
+        except BrainUnavailable as e:
+            raise HTTPException(503, str(e))
+        except Exception as e:  # API down, bad key, network: say so plainly
+            db.log(clock(), None, "chat_error", {"error": type(e).__name__})
+            raise HTTPException(502, f"No pude hablar con Claude ({type(e).__name__}).")
+
+    @app.get("/api/chat/history", dependencies=[Depends(require_admin)])
+    def chat_history(limit: int = 50):
+        return {"messages": db.recent_messages(min(limit, 200)), "budget": brain.budget()}
+
+    @app.get("/api/memory", dependencies=[Depends(require_admin)])
+    def memory_list():
+        return db.memories()
+
+    @app.delete("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
+    def memory_delete(memory_id: int):
+        if not db.delete_memory(memory_id):
+            raise HTTPException(404, "no such memory")
+        db.log(clock(), None, "memory_deleted", {"memory_id": memory_id, "by": "sergio"})
+        return {"ok": True}
 
     @app.get("/health")
     def health():

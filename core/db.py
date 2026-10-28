@@ -52,6 +52,20 @@ CREATE TABLE IF NOT EXISTS memory (
     text        TEXT NOT NULL,
     source      TEXT
 );
+CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,
+    channel     TEXT NOT NULL,          -- app, atajo, ...
+    role        TEXT NOT NULL,          -- user | assistant
+    content     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage (
+    ts            REAL NOT NULL,
+    model         TEXT NOT NULL,
+    input_tokens  INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cost_usd      REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS session_log (
     ts          REAL NOT NULL,
     node_id     TEXT,
@@ -281,3 +295,45 @@ class DB:
                 " ORDER BY id LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # --- conversation, memory, usage (the brain) -------------------------------
+    def add_message(self, ts: float, channel: str, role: str, content: str) -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO messages (ts, channel, role, content) VALUES (?, ?, ?, ?)",
+                              (ts, channel, role, content))
+            self.conn.commit()
+
+    def recent_messages(self, limit: int) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT ts, channel, role, content FROM messages ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def add_memory(self, ts: float, text: str, source: str = "ashur") -> int:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO memory (created, kind, text, source) VALUES (?, 'note', ?, ?)",
+                                    (ts, text, source))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def memories(self) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT id, created, text, source FROM memory ORDER BY id").fetchall()]
+
+    def delete_memory(self, memory_id: int) -> bool:
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def add_usage(self, ts: float, model: str, tin: int, tout: int, cost: float) -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO usage VALUES (?, ?, ?, ?, ?)", (ts, model, tin, tout, cost))
+            self.conn.commit()
+
+    def spent_since(self, ts: float) -> float:
+        with self.lock:
+            r = self.conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM usage WHERE ts >= ?", (ts,)).fetchone()
+        return float(r[0])

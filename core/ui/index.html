@@ -20,6 +20,7 @@
     --gray: #AEAEB2;
     --red: #FF3B30;
     --field: #E9E9EE;
+    --seg-on: #FFFFFF;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -34,6 +35,7 @@
       --gray: #636366;
       --red: #FF453A;
       --field: #2C2C2E;
+      --seg-on: #636366;
     }
   }
   * { box-sizing: border-box; }
@@ -128,6 +130,48 @@
   .link { background: none; color: var(--tint); font-weight: 400; padding: 12px 16px; text-align: left; margin: 0; }
   :focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
   [hidden] { display: none !important; }
+
+  /* segmented control */
+  .seg { display: flex; margin: 0 0 6px; padding: 2px; border-radius: 9px; background: var(--field); }
+  .seg button { flex: 1; margin: 0; padding: 7px 0; border-radius: 7px; background: none; color: var(--label);
+                font-size: 14px; font-weight: 500; }
+  .seg button[aria-selected="true"] { background: var(--seg-on); font-weight: 600;
+                box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 0 0 0.5px rgba(0,0,0,.04); }
+
+  /* chat */
+  #chat { padding-bottom: 120px; }
+  .thread { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; }
+  .bubble { max-width: 82%; padding: 9px 14px; border-radius: 19px; white-space: pre-wrap;
+            overflow-wrap: anywhere; line-height: 1.32; }
+  .bubble.me { align-self: flex-end; background: var(--tint); color: #fff; border-bottom-right-radius: 6px; }
+  .bubble.ashur { align-self: flex-start; background: var(--row); border-bottom-left-radius: 6px; }
+  .bubble.note { align-self: center; background: none; color: var(--secondary); font-size: 13px;
+                 text-align: center; padding: 4px 8px; }
+  .bubble.note.bad { color: var(--red); }
+  .day { align-self: center; color: var(--secondary); font-size: 12px; margin: 10px 0 2px; }
+  .typing { display: inline-flex; gap: 4px; }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--secondary); opacity: .35;
+              animation: blink 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 40% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .typing i { animation: none; opacity: .7; } }
+  .composer { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+              background: color-mix(in srgb, var(--bg) 82%, transparent);
+              -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
+              border-top: 0.5px solid var(--separator); }
+  .composer .inner { max-width: 640px; margin: 0 auto; }
+  .composer form { display: flex; align-items: flex-end; gap: 8px; }
+  .composer textarea { flex: 1; resize: none; max-height: 140px; font: inherit; color: var(--label);
+              background: var(--row); border: 0.5px solid var(--separator); border-radius: 19px; padding: 8px 14px;
+              line-height: 1.29; }
+  .composer .send { flex: none; width: 34px; height: 34px; margin: 0 0 2px; padding: 0; border-radius: 50%;
+              display: grid; place-items: center; }
+  .composer .send:disabled { background: var(--gray); }
+  .composer .send svg { width: 18px; height: 18px; }
+  .spend { margin: 6px 4px 0; color: var(--secondary); font-size: 12px; text-align: center;
+           font-variant-numeric: tabular-nums; }
+  .forget { flex: none; width: auto; margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 14px;
+            font-weight: 500; background: var(--field); color: var(--red); }
 </style>
 </head>
 <body>
@@ -147,6 +191,15 @@
       </form>
     </div>
   </section>
+
+  <div class="seg" role="tablist" id="tabs" hidden>
+    <button type="button" role="tab" id="tab-chat" aria-selected="true">Ashur</button>
+    <button type="button" role="tab" id="tab-status" aria-selected="false">Estado</button>
+  </div>
+
+  <div id="chat" hidden>
+    <div class="thread" id="thread" aria-live="polite"></div>
+  </div>
 
   <div id="dashboard" hidden>
     <section>
@@ -171,10 +224,28 @@
     </section>
 
     <section>
+      <h2>Recuerdos de Ashur</h2>
+      <div class="group" id="memories"></div>
+      <div class="note">Ashur los guarda cuando algo le parece útil más adelante. Puedes borrar cualquiera.</div>
+    </section>
+
+    <section>
       <div class="group"><button class="link" id="signout" type="button">Olvidar la clave en este navegador</button></div>
     </section>
   </div>
 </main>
+
+<div class="composer" id="composer" hidden>
+  <div class="inner">
+    <form id="chat-form">
+      <textarea id="msg" rows="1" placeholder="Escríbele a Ashur" aria-label="Mensaje para Ashur" maxlength="8000"></textarea>
+      <button class="send" id="send" type="submit" aria-label="Enviar" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>
+      </button>
+    </form>
+    <div class="spend" id="spend"></div>
+  </div>
+</div>
 
 <script>
 (() => {
@@ -252,6 +323,11 @@
       case "task_done": return "Terminó la tarea " + d.task_id;
       case "task_failed": return "Falló la tarea " + d.task_id;
       case "revoked": return "Acceso revocado";
+      case "chat": return d.channel === "atajo" ? "Conversación desde el Atajo" : "Conversación";
+      case "chat_blocked_budget": return "Mensaje bloqueado por el tope de gasto";
+      case "chat_error": return "No pudo hablar con Claude";
+      case "memory_saved": return "Guardó un recuerdo";
+      case "memory_deleted": return d.by === "sergio" ? "Borraste un recuerdo" : "Borró un recuerdo";
       default: return ev.event;
     }
   }
@@ -323,8 +399,10 @@
       const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store" });
       if (r.status === 401) return showSignin("La clave no es correcta.");
       if (!r.ok) throw new Error("HTTP " + r.status);
-      render(await r.json());
-      $("signin").hidden = true; $("dashboard").hidden = false;
+      const data = await r.json();
+      render(data);
+      showBudget(data.budget);
+      unlock();
     } catch (e) {
       $("subtitle").classList.add("stale");
       $("subtitle-text").textContent = "Sin conexión con el núcleo. Reintentando…";
@@ -333,16 +411,145 @@
   function showSignin(error) {
     key = null;
     try { localStorage.removeItem(KEY); } catch (e) {}
-    $("dashboard").hidden = true; $("signin").hidden = false;
+    for (const id of ["dashboard", "chat", "tabs", "composer"]) $(id).hidden = true;
+    $("signin").hidden = false;
+    historyLoaded = false;
     $("subtitle").classList.add("locked");
     $("subtitle-text").textContent = "Necesita tu clave";
     const er = $("signin-error");
     er.hidden = !error; er.textContent = error || "";
     $("key").focus();
   }
+  // --- tabs ---------------------------------------------------------------
+  let tab = "chat";
+  try { tab = localStorage.getItem("ashur.tab") || "chat"; } catch (e) {}
+  let unlocked = false, historyLoaded = false;
+  function unlock() {
+    if (unlocked) return;                       // only the first successful load switches views
+    unlocked = true;
+    $("signin").hidden = true; $("tabs").hidden = false;
+    showTab(tab);
+  }
+  function showTab(t) {
+    tab = t;
+    try { localStorage.setItem("ashur.tab", t); } catch (e) {}
+    $("tab-chat").setAttribute("aria-selected", t === "chat");
+    $("tab-status").setAttribute("aria-selected", t === "status");
+    $("chat").hidden = $("composer").hidden = t !== "chat";
+    $("dashboard").hidden = t !== "status";
+    if (t === "chat" && !historyLoaded) loadHistory();
+    if (t === "status") loadMemories();
+  }
+  $("tab-chat").addEventListener("click", () => showTab("chat"));
+  $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
+
+  // --- chat ---------------------------------------------------------------
+  const money = new Intl.NumberFormat("es-CO", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+  function showBudget(b) {
+    if (!b) return;
+    $("spend").textContent = money.format(b.spent_usd) + " de " + money.format(b.budget_usd) + " usados este mes";
+  }
+  function dayLabel(ts) {
+    const d = new Date(ts * 1000), today = new Date();
+    const y = new Date(); y.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return "Hoy";
+    if (d.toDateString() === y.toDateString()) return "Ayer";
+    return d.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
+  }
+  let lastDay = null;
+  function bubble(role, text, ts) {
+    const th = $("thread");
+    if (ts) {
+      const day = dayLabel(ts);
+      if (day !== lastDay) { th.append(el("div", "day", day)); lastDay = day; }
+    }
+    const b = el("div", "bubble " + role, text);
+    th.append(b);
+    window.scrollTo({ top: document.body.scrollHeight });
+    return b;
+  }
+  async function api(path, opts = {}) {
+    const r = await fetch(path, { ...opts, cache: "no-store",
+      headers: { "X-Admin-Key": key, "Content-Type": "application/json", ...(opts.headers || {}) } });
+    if (r.status === 401) { showSignin("La clave no es correcta."); throw new Error("401"); }
+    return r;
+  }
+  async function loadHistory() {
+    historyLoaded = true;
+    try {
+      const r = await api("api/chat/history?limit=60");
+      const data = await r.json();
+      $("thread").replaceChildren(); lastDay = null;
+      if (!data.messages.length) bubble("note intro", "Escríbele a Ashur. Recuerda lo importante entre conversaciones y puede consultar tus dispositivos.");
+      for (const m of data.messages) bubble(m.role === "user" ? "me" : "ashur", m.content, m.ts);
+      showBudget(data.budget);
+    } catch (e) { historyLoaded = false; }
+  }
+  const msg = $("msg");
+  msg.addEventListener("input", () => {
+    msg.style.height = "auto"; msg.style.height = Math.min(msg.scrollHeight, 140) + "px";
+    $("send").disabled = !msg.value.trim() || sending;
+  });
+  msg.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && window.matchMedia("(pointer: fine)").matches) {
+      e.preventDefault(); $("chat-form").requestSubmit();
+    }
+  });
+  let sending = false;
+  $("chat-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = msg.value.trim();
+    if (!text || sending) return;
+    sending = true; $("send").disabled = true;
+    document.querySelectorAll(".bubble.intro").forEach((n) => n.remove());
+    bubble("me", text, Date.now() / 1000);
+    msg.value = ""; msg.style.height = "auto";
+    const wait = bubble("ashur", "");
+    const dots = el("span", "typing"); dots.append(el("i"), el("i"), el("i")); wait.append(dots);
+    try {
+      const r = await api("api/chat", { method: "POST", body: JSON.stringify({ message: text }) });
+      const data = await r.json();
+      wait.remove();
+      if (!r.ok) {
+        bubble("note bad", (data && data.detail) || "No pude responder.");
+      } else {
+        bubble("ashur", data.reply);
+        if ((data.tools || []).includes("remember")) bubble("note", "Ashur guardó un recuerdo.");
+        showBudget(data);
+      }
+    } catch (err) {
+      wait.remove();
+      if (String(err.message) !== "401") bubble("note bad", "Sin conexión con el núcleo. Tu mensaje no se envió.");
+    } finally {
+      sending = false; $("send").disabled = !msg.value.trim();
+    }
+  });
+
+  // --- memories -----------------------------------------------------------
+  async function loadMemories() {
+    try {
+      const r = await api("api/memory");
+      const list = await r.json();
+      fill("memories", list.slice().reverse().map((m) => {
+        const r = row({ title: m.text, detail: new Date(m.created * 1000).toLocaleDateString("es-CO",
+                        { day: "numeric", month: "short", year: "numeric" }) });
+        r.querySelector(".title").style.whiteSpace = "normal";
+        const b = el("button", "forget", "Olvidar"); b.type = "button";
+        b.setAttribute("aria-label", "Olvidar: " + m.text);
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          await api("api/memory/" + m.id, { method: "DELETE" });
+          loadMemories();
+        });
+        r.append(b);
+        return r;
+      }), "Ashur todavía no ha guardado recuerdos.");
+    } catch (e) {}
+  }
+
   function loop() {
     clearTimeout(timer);
-    if (document.visibilityState === "visible") refresh();
+    if (document.visibilityState === "visible" && (tab === "status" || !unlocked)) refresh();
     timer = setTimeout(loop, 3000);
   }
 
@@ -353,7 +560,8 @@
     key = v;
     try { localStorage.setItem(KEY, v); } catch (err) {}
     $("key").value = "";
-    loop();
+    unlocked = false;
+    refresh();
   });
   $("signout").addEventListener("click", () => showSignin());
   document.addEventListener("visibilitychange", loop);

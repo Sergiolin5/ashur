@@ -1,6 +1,7 @@
 # Ashur core for ZimaOS: App Store -> "+" -> Install a customized app -> Import.
 # The image is built and published by GitHub Actions on every push to main.
 # Keys are generated on first start into /DATA/AppData/ashur/keys.json.
+# Ashur's persona lives in /DATA/AppData/ashur/persona.md (created on first chat; edit freely).
 name: ashur
 services:
   ashur-core:
@@ -13,6 +14,9 @@ services:
       - /DATA/AppData/ashur:/data
     environment:
       ASHUR_DB: /data/ashur.db
+      ASHUR_MODEL: claude-sonnet-5-5
+      ASHUR_MONTHLY_BUDGET_USD: "10"
+      # ANTHROPIC_API_KEY: add it in ZimaOS (app settings > environment), never in this file
     deploy:
       resources:
         limits:

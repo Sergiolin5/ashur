@@ -5,6 +5,7 @@ they are unit-tested on any OS; only the signal readers are Windows-specific.
 """
 import logging
 import platform
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -122,6 +123,7 @@ class SignalReader:
         self.me = psutil.Process()
         self.windows = platform.system() == "Windows"
         self.mac = platform.system() == "Darwin"
+        self._sampled = False
         psutil.cpu_percent(None)
         self._own_cpu()
 
@@ -135,6 +137,11 @@ class SignalReader:
         return total / (self.psutil.cpu_count() or 1)
 
     def read(self) -> Signals:
+        if not self._sampled:
+            # cpu_percent compares with the previous call: right after start that gap is ~0 s
+            # and the reading is noise (a self-test once saw "off" from it). Take a real sample.
+            time.sleep(1.0)
+            self._sampled = True
         idle, fullscreen = None, False
         if self.windows:
             try:

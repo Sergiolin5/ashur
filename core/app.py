@@ -15,7 +15,7 @@ from typing import Callable, Optional
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from shared.codebundle import build_bundle, code_version, has_node_code
 
@@ -31,6 +31,9 @@ from shared.protocol import (
 )
 
 UI_PAGE = Path(__file__).parent / "ui" / "index.html"
+PUBLIC_MAX_FAILURES = 10
+PUBLIC_FAIL_WINDOW_S = 600
+PUBLIC_LOCK_S = 900
 
 # Which task weights a node may take in each mode.
 WEIGHTS_FOR_MODE = {
@@ -55,6 +58,7 @@ def create_app(
     brain_settings: Optional[BrainSettings] = None,
     brain_client: Any = None,
     node_code_root: Optional[str] = None,
+    public_port: Optional[int] = None,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -86,9 +90,48 @@ def create_app(
         if task:
             task.cancel()
 
-    app = FastAPI(title="Ashur core", version="0.6.0", lifespan=lifespan)
+    app = FastAPI(title="Ashur core", version="0.7.0", lifespan=lifespan)
     app.state.db = db
     app.state.sweep = sweep
+
+    # --- the public door (Tailscale Funnel) -------------------------------
+    # Requests arriving on public_port come from the internet. They may only reach the
+    # panel and its /api; node, task and admin plumbing stays tailnet-only. Repeated wrong
+    # admin keys lock the public door for a while (the tailnet door is never locked).
+    failures: list[float] = []
+    locked_until = [0.0]
+
+    def on_public_port(scope) -> bool:
+        server = scope.get("server") or (None, None)
+        return public_port is not None and server[1] == public_port
+
+    @app.middleware("http")
+    async def public_door(request, call_next):
+        public = on_public_port(request.scope)
+        if public:
+            path = request.url.path
+            allowed = path in ("/", "/health") or path.startswith("/api/")
+            if not allowed:
+                return JSONResponse({"detail": "Not Found"}, status_code=404)
+            if path.startswith("/api/"):
+                now = clock()
+                if now < locked_until[0]:
+                    return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta. "
+                                         "Espera unos minutos o entra por la tailnet."}, status_code=429)
+                if not _same(request.headers.get("x-admin-key", ""), admin_key):
+                    failures[:] = [t for t in failures if now - t < PUBLIC_FAIL_WINDOW_S] + [now]
+                    if len(failures) >= PUBLIC_MAX_FAILURES:
+                        locked_until[0] = now + PUBLIC_LOCK_S
+                        failures.clear()
+                        db.log(now, None, "public_locked", {"minutes": PUBLIC_LOCK_S // 60})
+                    return JSONResponse({"detail": "admin key required"}, status_code=401)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if public:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
     progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch
     code_root = Path(node_code_root) if node_code_root else Path(__file__).resolve().parent.parent
     _code_cache: dict = {}
@@ -408,4 +451,6 @@ def from_env() -> FastAPI:
             print(f"[ashur] First start: generated keys in {keys_path}.\n"
                   f"[ashur]   enroll key: {enroll}\n[ashur]   admin key:  {admin}\n"
                   f"[ashur] They are shown only this once; keep them somewhere safe.", flush=True)
-    return create_app(db_path=db_path, enroll_key=enroll, admin_key=admin)
+    public = os.environ.get("ASHUR_PUBLIC_PORT", "8001").strip()
+    return create_app(db_path=db_path, enroll_key=enroll, admin_key=admin,
+                      public_port=int(public) if public else None)

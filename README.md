@@ -85,6 +85,13 @@ that crashes within two minutes is rolled back and never retried. The container 
 updates by image tag instead. Long tasks checkpoint their progress: a restart, a
 sleep or Sergio needing the machine pauses them, and they resume where they stopped.
 
+## Reaching the panel from the internet
+
+The core listens on two doors. 8711 is for the tailnet (nodes, admin). 8712 is bound
+to 127.0.0.1 and only opens the panel and its /api: no node enrollment, no tasks, no
+docs. Ten wrong admin keys in ten minutes lock it for fifteen. Publish it with
+Tailscale Funnel on the server: `tailscale funnel --bg 8712`.
+
 ## Rules
 
 - Nodes always call the core; the core never calls a node.

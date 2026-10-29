@@ -251,3 +251,43 @@ def test_old_database_is_migrated(tmp_path):
     con.commit(); con.close()
     db = DB(str(p))
     assert db.add_task("inventory", {}, "light", 1.0, target="x")
+
+
+# --- the public door (what Tailscale Funnel exposes) -------------------------------------
+
+@pytest.fixture
+def public(tmp_path):
+    clock = VirtualClock()
+    # TestClient requests arrive on port 80, so port 80 plays the public door here
+    app = create_app(str(tmp_path / "p.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None, public_port=80)
+    return TestClient(app), clock
+
+
+def test_public_door_only_opens_the_panel(public):
+    c, _ = public
+    assert c.get("/").status_code == 200
+    assert c.get("/health").status_code == 200
+    assert c.get("/api/overview", headers=A).status_code == 200
+    for path in ("/status", "/log", "/inventory", "/docs", "/openapi.json", "/tasks/1"):
+        assert c.get(path, headers=A).status_code == 404, path
+    r = c.post("/nodes/register", headers={"X-Enroll-Key": ENROLL}, json={"device_id": "x", "os": "linux"})
+    assert r.status_code == 404                                    # no enrolling from the internet
+    assert c.post("/tasks", headers=A, json={"module": "inventory"}).status_code == 404
+
+
+def test_public_door_locks_after_repeated_wrong_keys(public):
+    c, clock = public
+    for _ in range(10):
+        assert c.get("/api/overview", headers={"X-Admin-Key": "guess"}).status_code == 401
+    assert c.get("/api/overview", headers=A).status_code == 429       # even the right key waits
+    clock.now += 16 * 60
+    assert c.get("/api/overview", headers=A).status_code == 200
+
+
+def test_tailnet_door_is_unaffected_and_headers_are_set(env):
+    c, _ = env
+    for _ in range(12):
+        c.get("/api/overview", headers={"X-Admin-Key": "guess"})
+    r = c.get("/api/overview", headers=A)
+    assert r.status_code == 200                                     # no lockout off the public door
+    assert r.headers["X-Frame-Options"] == "DENY" and r.headers["X-Content-Type-Options"] == "nosniff"

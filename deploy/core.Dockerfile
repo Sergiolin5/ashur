@@ -13,5 +13,6 @@ COPY modules ./modules
 COPY requirements-node.txt .
 ENV ASHUR_DB=/data/ashur.db
 VOLUME /data
-EXPOSE 8000
-CMD ["uvicorn", "--factory", "core.app:from_env", "--host", "0.0.0.0", "--port", "8000"]
+# 8000: tailnet door (nodes, admin). 8001: public door for Tailscale Funnel (panel only).
+EXPOSE 8000 8001
+CMD ["python", "-m", "core.serve"]

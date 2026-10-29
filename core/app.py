@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from shared.codebundle import build_bundle, code_version, has_node_code
@@ -90,7 +90,9 @@ def create_app(
         if task:
             task.cancel()
 
-    app = FastAPI(title="Ashur core", version="0.7.0", lifespan=lifespan)
+    # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
+    app = FastAPI(title="Ashur core", version="0.7.1", lifespan=lifespan,
+                  docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
 
@@ -360,9 +362,10 @@ def create_app(
         return {"ok": True}
 
     @app.get("/health")
-    def health():
-        """Open to anyone on the tailnet: proves the core is up, reveals nothing."""
-        return {"ok": True, "service": "ashur-core", "version": app.version}
+    def health(request: Request):
+        """Proves the core is up and says which door the request came through."""
+        door = "public" if on_public_port(request.scope) else "tailnet"
+        return {"ok": True, "service": "ashur-core", "version": app.version, "door": door}
 
     @app.get("/status", dependencies=[Depends(require_admin)])
     def status():

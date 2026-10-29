@@ -291,3 +291,11 @@ def test_tailnet_door_is_unaffected_and_headers_are_set(env):
     r = c.get("/api/overview", headers=A)
     assert r.status_code == 200                                     # no lockout off the public door
     assert r.headers["X-Frame-Options"] == "DENY" and r.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_health_names_the_door_and_docs_are_off(env, public):
+    c, _ = env
+    assert c.get("/health").json()["door"] == "tailnet"
+    assert c.get("/docs").status_code == 404 and c.get("/openapi.json").status_code == 404
+    p, _ = public
+    assert p.get("/health").json()["door"] == "public"

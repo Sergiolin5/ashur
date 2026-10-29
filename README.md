@@ -75,6 +75,10 @@ Ollama stays on 127.0.0.1; the core sends chat work through the node agent.
 
 ## Updates
 
+ZimaOS runs the `:latest` images. Docker never re-pulls `:latest` by itself: use the
+app's update action in ZimaOS to pull the newest one. Releases are listed in
+CHANGELOG.md; each is also tagged by version, so rolling back is setting that tag.
+
 Nodes run `node.boot`, which starts the agent and applies the code the core ships.
 Updating the core image on ZimaOS updates every node within a heartbeat; a version
 that crashes within two minutes is rolled back and never retried. The container node

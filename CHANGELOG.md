@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.7.2 | 2026-10-29 | Sign-in says clearly when the key is wrong, when the public door is locked after failed attempts, or when the core can't be reached |
 | 0.7.1 | 2026-10-29 | `/health` says which door a request came through (`tailnet` or `public`); API docs turned off |
 | 0.7.0 | 2026-10-28 | Public door for the panel (port 8712, for Tailscale Funnel): panel and /api only, lockout after repeated wrong keys |
 | 0.6.0 | 2026-10-28 | Nodes update themselves from the core (`node.boot`); inventory resumes after restarts; heavy tasks pause when the machine is in use; restarted agents get their task requeued |

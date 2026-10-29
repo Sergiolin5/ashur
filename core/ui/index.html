@@ -187,7 +187,7 @@
       <form id="signin-form">
         <input id="key" type="password" autocomplete="current-password" placeholder="Clave de administrador" aria-label="Clave de administrador">
         <button type="submit">Conectar</button>
-        <div class="error" id="signin-error" hidden></div>
+        <div class="error" id="signin-error" role="alert" hidden></div>
       </form>
     </div>
   </section>
@@ -405,7 +405,12 @@
     if (!key) return showSignin();
     try {
       const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store" });
-      if (r.status === 401) return showSignin("La clave no es correcta.");
+      if (r.status === 401) return showSignin("La clave no es correcta. Copia de nuevo el valor de admin_key en keys.json, sin comillas.");
+      if (r.status === 429) {
+        let msg = "Demasiados intentos con una clave incorrecta.";
+        try { msg = (await r.json()).detail || msg; } catch (e) {}
+        return showSignin(msg);
+      }
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
       render(data);
@@ -414,6 +419,11 @@
     } catch (e) {
       $("subtitle").classList.add("stale");
       $("subtitle-text").textContent = "Sin conexión con el núcleo. Reintentando…";
+      if (!unlocked) {
+        const er = $("signin-error");
+        er.hidden = false;
+        er.textContent = "No pude contactar al núcleo. Revisa tu conexión; reintento cada pocos segundos.";
+      }
     }
   }
   function showSignin(error) {

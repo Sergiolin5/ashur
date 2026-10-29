@@ -91,7 +91,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.7.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.7.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -118,8 +118,8 @@ def create_app(
             if path.startswith("/api/"):
                 now = clock()
                 if now < locked_until[0]:
-                    return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta. "
-                                         "Espera unos minutos o entra por la tailnet."}, status_code=429)
+                    return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta. Se desbloquea en "
+                                         "15 minutos; por la tailnet sigue funcionando."}, status_code=429)
                 if not _same(request.headers.get("x-admin-key", ""), admin_key):
                     failures[:] = [t for t in failures if now - t < PUBLIC_FAIL_WINDOW_S] + [now]
                     if len(failures) >= PUBLIC_MAX_FAILURES:

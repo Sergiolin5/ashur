@@ -40,13 +40,31 @@ $pyExe = $py[0]; $pyArgs = @($py | Select-Object -Skip 1)
 Say "Python encontrado: $($py -join ' ')"
 
 # 2. Code (replaced on every run; identity and logs live outside it)
+# A running agent keeps its folder open and Windows refuses to delete it: stop it first.
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$running = Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match 'node\.(agent|boot)' -and $_.CommandLine -match [regex]::Escape($Home_) -or
+                   ($_.ExecutablePath -and $_.ExecutablePath -like "$Venv*") }
+if ($running) {
+    Say "Deteniendo el agente que está corriendo..."
+    $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 2
+}
 Say "Descargando Ashur..."
 $zip = Join-Path $env:TEMP "ashur-main.zip"
 Invoke-WebRequest -Uri $Repo -OutFile $zip -UseBasicParsing
 $tmp = Join-Path $env:TEMP "ashur-extract"
 if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
 Expand-Archive -Path $zip -DestinationPath $tmp
-if (Test-Path $App) { Remove-Item -Recurse -Force $App }
+if (Test-Path $App) {
+    for ($i = 1; $i -le 5; $i++) {
+        try { Remove-Item -Recurse -Force $App -ErrorAction Stop; break }
+        catch {
+            if ($i -eq 5) { throw "No pude reemplazar $App porque algo lo tiene abierto. Cierra cualquier ventana abierta en esa carpeta y vuelve a correr el comando." }
+            Start-Sleep -Seconds 2
+        }
+    }
+}
 Move-Item (Get-ChildItem $tmp | Select-Object -First 1).FullName $App
 Remove-Item -Force $zip
 

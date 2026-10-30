@@ -26,7 +26,8 @@ def describe(event: str, d: dict) -> str:
         "task_failed": f"FALLÓ tarea {t}: {d.get('error') or 'sin detalle'}",
         "task_yielded": f"pausó tarea {t} ({m}) para liberar el equipo",
         "revoked": "acceso revocado",
-        "chat": f"conversación por {d.get('provider', '?')} ({d.get('chars_in', 0)}→{d.get('chars_out', 0)} car., "
+        "chat": ("invitado " + str(d["guest"]) + ": " if d.get("guest") else "") +
+                f"conversación por {d.get('provider', '?')} ({d.get('chars_in', 0)}→{d.get('chars_out', 0)} car., "
                 f"US${d.get('cost_usd', 0)})",
         "chat_error": f"ERROR al hablar con Claude: {d.get('reason') or d.get('error')}",
         "chat_unanswered": f"mensaje sin responder: {d.get('reason', '')}",
@@ -36,6 +37,8 @@ def describe(event: str, d: dict) -> str:
         "conversation_summarized": f"resumió {d.get('messages')} mensajes de conversación ({d.get('provider')})",
         "summary_deleted": f"borró el resumen {d.get('summary_id')}",
         "summary_failed": f"no pude resumir la conversación: {d.get('error')}",
+        "guest_created": f"creaste el invitado {d.get('guest_id')}",
+        "guest_revoked": f"revocaste el invitado {d.get('guest_id')}",
         "memory_imported": f"importó {d.get('count')} recuerdos ({d.get('source')})",
         "inventory_summary_failed": f"no pude contar el inventario: {d.get('error')}",
         "public_locked": f"PUERTA PÚBLICA BLOQUEADA {d.get('minutes', 15)} min por claves incorrectas",

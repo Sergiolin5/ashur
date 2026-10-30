@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from core.brain import (Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
-                        looks_like_secret)
+                        looks_like_secret, month_start)
 from core.db import DB, hash_token
 from shared.protocol import (
     OFFLINE_AFTER_S, Heartbeat, InventoryBatch, Mode, NewTask, NodeStatus,
@@ -36,6 +36,8 @@ UI_PAGE = Path(__file__).parent / "ui" / "index.html"
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
+GUEST_MESSAGES_PER_HOUR = 30
+GUEST_DEFAULT_CAP_USD = 1.0
 
 # Which task weights a node may take in each mode.
 WEIGHTS_FOR_MODE = {
@@ -101,7 +103,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.9.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.10.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -130,7 +132,8 @@ def create_app(
                 if now < locked_until[0]:
                     return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta. Se desbloquea en "
                                          "15 minutos; por la tailnet sigue funcionando."}, status_code=429)
-                if not _same(request.headers.get("x-admin-key", ""), admin_key):
+                k = request.headers.get("x-admin-key", "")
+                if not _same(k, admin_key) and not db.guest_by_key(k):
                     failures[:] = [t for t in failures if now - t < PUBLIC_FAIL_WINDOW_S] + [now]
                     if len(failures) >= PUBLIC_MAX_FAILURES:
                         locked_until[0] = now + PUBLIC_LOCK_S
@@ -189,6 +192,15 @@ def create_app(
     def require_admin(x_admin_key: str = Header(default="")):
         if not _same(x_admin_key, admin_key):
             raise HTTPException(401, "admin key required")
+
+    def require_chat(x_admin_key: str = Header(default="")) -> Optional[dict]:
+        """Sergio (returns None) or a guest (returns the guest). Guests reach only the chat."""
+        if _same(x_admin_key, admin_key):
+            return None
+        guest = db.guest_by_key(x_admin_key)
+        if not guest:
+            raise HTTPException(401, "admin key required")
+        return guest
 
     def require_node(node_id: str, authorization: str = Header(default="")) -> dict:
         token = authorization.removeprefix("Bearer ").strip()
@@ -398,22 +410,57 @@ def create_app(
         message: str = Field(min_length=1, max_length=8000)
         channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
 
-    @app.post("/api/chat", dependencies=[Depends(require_admin)])
-    def chat(body: ChatIn):
+    @app.get("/api/whoami")
+    def whoami(guest: Optional[dict] = Depends(require_chat)):
+        return {"role": "guest", "name": guest["name"]} if guest else {"role": "admin", "name": "Sergio"}
+
+    @app.post("/api/chat")
+    def chat(body: ChatIn, guest: Optional[dict] = Depends(require_chat)):
+        if guest and db.count_messages_since(f"g{guest['id']}", clock() - 3600) >= GUEST_MESSAGES_PER_HOUR:
+            raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
         try:
-            out = brain.chat(body.message, body.channel)
+            out = brain.chat(body.message, body.channel, guest)
+            if guest:                     # which device answered and which tools ran stay Sergio's business
+                return {k: v for k, v in out.items() if k not in ("device", "tools", "model")}
             summarize_soon()
             return out
         except (BrainUnavailable, LocalUnavailable) as e:
-            raise HTTPException(503, str(e))
+            raise HTTPException(503, "Ashur no puede responder ahora. Inténtalo más tarde." if guest else str(e))
         except Exception as e:  # API down, bad key, no credit, network: say exactly why
             reason = api_error_reason(e)
             db.log(clock(), None, "chat_error", {"error": type(e).__name__, "reason": reason[:300]})
+            if guest:
+                raise HTTPException(502, "Ashur no puede responder ahora. Inténtalo más tarde.")
             raise HTTPException(502, f"No pude hablar con Claude ({type(e).__name__}): {reason}")
 
-    @app.get("/api/chat/history", dependencies=[Depends(require_admin)])
-    def chat_history(limit: int = 50):
-        return {"messages": db.recent_messages(min(limit, 200)), "budget": brain.budget()}
+    @app.get("/api/chat/history")
+    def chat_history(limit: int = 50, guest: Optional[dict] = Depends(require_chat)):
+        user = f"g{guest['id']}" if guest else "sergio"
+        return {"messages": db.recent_messages(min(limit, 200), user), "budget": brain.budget(guest)}
+
+    # --- guests: people Sergio lets chat with Ashur (chat only) -----------------
+    class GuestIn(BaseModel):
+        name: str = Field(min_length=1, max_length=40)
+        monthly_cap_usd: float = Field(default=GUEST_DEFAULT_CAP_USD, ge=0, le=100)
+
+    @app.get("/api/guests", dependencies=[Depends(require_admin)])
+    def guests_list():
+        start = month_start(clock())
+        return [{**g, "spent_usd": round(db.spent_since(start, f"g{g['id']}"), 4)} for g in db.guests()]
+
+    @app.post("/api/guests", dependencies=[Depends(require_admin)])
+    def guest_create(body: GuestIn):
+        key = secrets.token_urlsafe(24)
+        gid = db.add_guest(clock(), body.name.strip(), key, body.monthly_cap_usd)
+        db.log(clock(), None, "guest_created", {"guest_id": gid})          # no name: third parties stay anonymous
+        return {"id": gid, "name": body.name.strip(), "key": key}             # the key is shown only this once
+
+    @app.delete("/api/guests/{guest_id}", dependencies=[Depends(require_admin)])
+    def guest_revoke(guest_id: int):
+        if not db.revoke_guest(guest_id, clock()):
+            raise HTTPException(404, "No existe ese invitado.")
+        db.log(clock(), None, "guest_revoked", {"guest_id": guest_id})
+        return {"ok": True}
 
     @app.get("/api/memory", dependencies=[Depends(require_admin)])
     def memory_list():

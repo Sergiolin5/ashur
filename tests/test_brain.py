@@ -351,3 +351,56 @@ def test_search_conversations_tool_finds_old_messages(tmp_path):
     c.post("/api/chat", headers=A, json={"message": "¿con qué cuenta activé funnel?"})
     result = fake.calls[1]["messages"][-1]["content"][0]["content"]
     assert "Activé Funnel con la cuenta Apple" in result and "Sergio" in result
+
+
+# --- guests --------------------------------------------------------------------
+def _guest(c, name="Ana", cap=1.0):
+    return c.post("/api/guests", headers=A, json={"name": name, "monthly_cap_usd": cap}).json()
+
+
+def test_guest_only_reaches_the_chat(tmp_path):
+    c, fake, _ = make(tmp_path, [])
+    g = _guest(c)
+    G = {"X-Admin-Key": g["key"]}
+    assert c.get("/api/whoami", headers=G).json() == {"role": "guest", "name": "Ana"}
+    for path in ("/api/overview", "/api/memory", "/api/summaries", "/api/guests", "/status", "/log"):
+        assert c.get(path, headers=G).status_code == 401, path
+    assert c.post("/api/memory/import", headers=G, json={"lines": ["x"], "dry_run": False}).status_code == 401
+    assert c.get("/api/whoami", headers={"X-Admin-Key": "nope"}).status_code == 401
+
+
+def test_guest_gets_none_of_sergios_memory_and_its_own_thread(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([text("Hola, Sergio.")]), resp([text("Hola, Ana.")]),
+                                 resp([text("Sigo, Sergio.")])])
+    db = c.app.state.db
+    db.add_memory(1.0, "Sergio quiere dejar de fumar")
+    db.add_summary(1.0, {"id": 1, "ts": 1.0}, {"id": 2, "ts": 2.0}, "- plan secreto de Sergio", "claude")
+    c.post("/api/chat", headers=A, json={"message": "soy Sergio"})
+    g = _guest(c)
+    G = {"X-Admin-Key": g["key"]}
+    r = c.post("/api/chat", headers=G, json={"message": "hola"}).json()
+    call = fake.calls[1]
+    assert "Ana" in call["system"] and "fumar" not in call["system"] and "secreto" not in call["system"]
+    assert "tools" not in call and [m["content"] for m in call["messages"]] == ["hola"]   # not Sergio's thread
+    assert "device" not in r and "tools" not in r and r["budget_usd"] == 1.0
+    c.post("/api/chat", headers=A, json={"message": "¿sigues?"})
+    assert "hola" not in [m["content"] for m in fake.calls[2]["messages"]]                 # nor the reverse
+    assert [m["content"] for m in c.get("/api/chat/history", headers=G).json()["messages"]] == ["hola", "Hola, Ana."]
+    ev = [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"]
+    assert ev[1]["detail"]["guest"] == g["id"] and "Ana" not in json.dumps(ev)              # anonymous in the log
+
+
+def test_guest_cap_rate_limit_and_revoke(tmp_path):
+    c, fake, clock = make(tmp_path, [resp([text("ok")], tin=10**6, tout=0)])        # one call costs US$2
+    g = _guest(c, cap=1.0)
+    G = {"X-Admin-Key": g["key"]}
+    c.post("/api/chat", headers=G, json={"message": "uno"})
+    r = c.post("/api/chat", headers=G, json={"message": "dos"}).json()
+    assert len(fake.calls) == 1 and r["provider"] == "none"                         # over its own cap: no Claude
+    assert c.get("/api/guests", headers=A).json()[0]["spent_usd"] == 2.0
+    db = c.app.state.db
+    for i in range(30):
+        db.add_message(clock(), "app", "user", "x", f"g{g['id']}")
+    assert c.post("/api/chat", headers=G, json={"message": "tres"}).status_code == 429
+    assert c.delete(f"/api/guests/{g['id']}", headers=A).status_code == 200
+    assert c.get("/api/whoami", headers=G).status_code == 401

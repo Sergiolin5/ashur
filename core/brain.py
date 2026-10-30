@@ -27,6 +27,14 @@ o qué encontró un inventario, usas tus herramientas. Guardas un recuerdo solo 
 seguirá siendo útil más adelante, y nunca guardas claves, contraseñas ni datos de salud.
 """
 
+GUEST_PERSONA = """Eres Ashur, el asistente personal de Sergio. Ahora hablas con {name}, una persona
+a la que Sergio invitó a conversar contigo. Hablas en español, en un tono cercano y directo.
+Escribes en texto plano, sin markdown; respuestas breves salvo que te pidan detalle.
+
+No tienes acceso a la información de Sergio, a sus recuerdos, a sus conversaciones ni a sus
+dispositivos, y no inventas nada sobre él. Si te preguntan por Sergio, di con amabilidad que eso
+no lo compartes. No puedes guardar recuerdos en esta conversación."""
+
 TOOLS = [
     {"name": "remember",
      "description": "Guarda un recuerdo duradero sobre Sergio o sobre el proyecto, en una frase. "
@@ -111,6 +119,10 @@ def api_error_reason(e: Exception) -> str:
 BOGOTA = dt.timezone(dt.timedelta(hours=-5))
 
 
+def guest_user(guest: Optional[dict]) -> str:
+    return f"g{guest['id']}" if guest else "sergio"
+
+
 def month_start(ts: float) -> float:
     d = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
     return dt.datetime(d.year, d.month, 1, tzinfo=dt.timezone.utc).timestamp()
@@ -148,13 +160,15 @@ class Brain:
             self.persona_path.write_text(DEFAULT_PERSONA, encoding="utf-8")
         return self.persona_path.read_text(encoding="utf-8-sig")
 
-    def spent_this_month(self) -> float:
-        return round(self.db.spent_since(month_start(self.clock())), 4)
+    def spent_this_month(self, user: Optional[str] = None) -> float:
+        return round(self.db.spent_since(month_start(self.clock()), user), 4)
 
-    def budget(self) -> dict:
-        spent = self.spent_this_month()
-        return {"spent_usd": spent, "budget_usd": self.s.monthly_budget_usd,
-                "left_usd": round(max(0.0, self.s.monthly_budget_usd - spent), 4), "model": self.s.model}
+    def budget(self, guest: Optional[dict] = None) -> dict:
+        """Sergio sees the whole monthly budget; a guest sees only their own cap."""
+        cap = guest["monthly_cap_usd"] if guest else self.s.monthly_budget_usd
+        spent = self.spent_this_month(guest_user(guest) if guest else None)
+        return {"spent_usd": spent, "budget_usd": cap,
+                "left_usd": round(max(0.0, cap - spent), 4), "model": self.s.model}
 
     def _system(self) -> str:
         notes = self.db.memories()
@@ -222,9 +236,9 @@ class Brain:
         return f"Herramienta desconocida: {name}"
 
     # --- conversation -----------------------------------------------------
-    def _history(self, text: str) -> list[dict]:
+    def _history(self, text: str, user: str = "sergio") -> list[dict]:
         history = [{"role": m["role"], "content": m["content"]}
-                   for m in self.db.recent_messages(self.s.history_messages)]
+                   for m in self.db.recent_messages(self.s.history_messages, user)]
         while history and history[0]["role"] != "user":   # a conversation must start with Sergio
             history.pop(0)
         return history + [{"role": "user", "content": text}]
@@ -232,16 +246,18 @@ class Brain:
     def _has_claude(self) -> bool:
         return self._client is not None or bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
-    def _chat_claude(self, messages: list[dict]) -> tuple[str, float, list[str]]:
+    def _chat_claude(self, messages: list[dict], guest: Optional[dict] = None) -> tuple[str, float, list[str]]:
         client = self.client()
-        system = self._system()
+        # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
+        system = GUEST_PERSONA.format(name=guest["name"]) if guest else self._system()
+        extra = {} if guest else {"tools": TOOLS}
         cost_total, reply_parts, tools_used = 0.0, [], []
         for _ in range(MAX_TOOL_ROUNDS + 1):
             resp = client.messages.create(model=self.s.model, max_tokens=self.s.max_tokens,
-                                          system=system, tools=TOOLS, messages=messages)
+                                          system=system, messages=messages, **extra)
             tin, tout, cost = self._cost(_get(resp, "usage"))
             cost_total += cost
-            self.db.add_usage(self.clock(), self.s.model, tin, tout, cost)
+            self.db.add_usage(self.clock(), self.s.model, tin, tout, cost, guest_user(guest))
             blocks = _get(resp, "content", []) or []
             reply_parts = [_get(b, "text", "") for b in blocks if _get(b, "type") == "text"]
             uses = [b for b in blocks if _get(b, "type") == "tool_use"]
@@ -267,7 +283,9 @@ class Brain:
         reply = "\n\n".join(p for p in reply_parts if p).strip() or "(Sin respuesta.)"
         return reply, cost_total, tools_used
 
-    def _local_system(self) -> str:
+    def _local_system(self, guest: Optional[dict] = None) -> str:
+        if guest:
+            return GUEST_PERSONA.format(name=guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
         return (f"{self._system()}\n\n"
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
@@ -278,7 +296,9 @@ class Brain:
     # --- conversation memory --------------------------------------------------
     def pending_summary(self) -> list[dict]:
         """The oldest full chunk of messages that left the recent window and has no summary yet."""
-        window_start = self.db.last_message_id() - self.s.history_messages
+        window_start = self.db.window_start_id(self.s.history_messages)
+        if not window_start:
+            return []
         done = self.db.summarized_up_to()
         chunk = self.db.messages_between(done, window_start, SUMMARY_CHUNK)
         return chunk if len(chunk) >= SUMMARY_CHUNK else []
@@ -325,18 +345,20 @@ class Brain:
                     {"summary_id": sid, "messages": len(chunk), "provider": provider})
         return sid
 
-    def chat(self, text: str, channel: str = "app") -> dict:
+    def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None) -> dict:
         text = text.strip()
         now = self.clock()
-        messages = self._history(text)
-        over_budget = self.spent_this_month() >= self.s.monthly_budget_usd
+        user = guest_user(guest)
+        messages = self._history(text, user)
+        over_budget = self.spent_this_month() >= self.s.monthly_budget_usd or (
+            guest is not None and self.spent_this_month(user) >= guest["monthly_cap_usd"])
         want_claude = self.s.brain in ("auto", "claude") and self._has_claude()
         provider, device, note = None, None, None
         reply, cost, tools = "", 0.0, []
 
         if want_claude and not over_budget:
             try:
-                reply, cost, tools = self._chat_claude([dict(m) for m in messages])
+                reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest)
                 provider = "claude"
             except BrainUnavailable:
                 raise
@@ -345,31 +367,39 @@ class Brain:
                     raise
                 reason = api_error_reason(e)
                 self.db.log(self.clock(), None, "chat_error", {"error": type(e).__name__, "reason": reason[:300]})
-                note = f"Claude no respondió ({reason}). Respondí con un modelo local."
+                note = ("Respondí con un modelo local." if guest
+                        else f"Claude no respondió ({reason}). Respondí con un modelo local.")
 
         if provider is None:
             if self.local is None or self.s.brain == "claude":
                 if over_budget:
                     self.db.log(now, None, "chat_blocked_budget", {"channel": channel})
-                    return {"reply": f"Llegué al tope de US${self.s.monthly_budget_usd:.2f} de este mes, así que "
-                                     "no voy a llamar a Claude hasta el próximo mes. Puedes subir el tope en la "
-                                     "configuración del servidor.", "cost_usd": 0.0, "provider": "none", **self.budget()}
+                    return {"reply": "Llegué al tope de gasto de este mes, así que no voy a llamar a Claude hasta "
+                                     "el próximo mes." + ("" if guest else " Puedes subir el tope en la "
+                                     "configuración del servidor."), "cost_usd": 0.0, "provider": "none",
+                            **self.budget(guest)}
                 raise BrainUnavailable("Falta ANTHROPIC_API_KEY en el servidor y no hay modelo local configurado.")
             if over_budget and want_claude:
-                note = "Llegué al tope de gasto del mes con Claude. Respondí con un modelo local."
+                note = ("Respondí con un modelo local." if guest
+                        else "Llegué al tope de gasto del mes con Claude. Respondí con un modelo local.")
             try:
-                reply, device = self.local(self._local_system(), messages)
+                reply, device = self.local(self._local_system(guest), messages)
                 provider = "local"
             except LocalUnavailable as e:
                 self.db.log(self.clock(), None, "chat_unanswered", {"channel": channel, "reason": str(e)[:200]})
-                return {"reply": str(e), "note": note, "provider": "none", "cost_usd": 0.0, **self.budget()}
+                said = "Ashur no puede responder ahora. Inténtalo más tarde." if guest else str(e)
+                return {"reply": said, "note": note, "provider": "none", "cost_usd": 0.0, **self.budget(guest)}
 
         reply = (reply or "").strip() or "(Sin respuesta.)"
         end = self.clock()
-        self.db.add_message(now, channel, "user", text)
-        self.db.add_message(end, channel, "assistant", reply)
-        # the session log is paper data: lengths, cost and where it ran; never the words
-        self.db.log(end, device, "chat", {"channel": channel, "provider": provider, "chars_in": len(text),
-                                           "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools})
+        self.db.add_message(now, channel, "user", text, user)
+        self.db.add_message(end, channel, "assistant", reply, user)
+        # the session log is paper data: lengths, cost and where it ran; never the words,
+        # and a guest only as an anonymous number
+        detail = {"channel": channel, "provider": provider, "chars_in": len(text),
+                  "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools}
+        if guest:
+            detail["guest"] = guest["id"]
+        self.db.log(end, device, "chat", detail)
         return {"reply": reply, "note": note, "provider": provider, "device": device,
-                "cost_usd": round(cost, 5), "tools": tools, **self.budget()}
+                "cost_usd": round(cost, 5), "tools": tools, **self.budget(guest)}

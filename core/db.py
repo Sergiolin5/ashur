@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS summaries (     -- conversation memory: older message
     text        TEXT NOT NULL,
     provider    TEXT
 );
+CREATE TABLE IF NOT EXISTS guests (        -- people Sergio lets chat with Ashur; chat only
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    key_hash        TEXT NOT NULL UNIQUE,
+    created         REAL NOT NULL,
+    monthly_cap_usd REAL NOT NULL,
+    revoked         REAL
+);
 CREATE TABLE IF NOT EXISTS usage (
     ts            REAL NOT NULL,
     model         TEXT NOT NULL,
@@ -122,6 +130,13 @@ class DB:
         ncols = {r["name"] for r in self.conn.execute("PRAGMA table_info(nodes)")}
         if "code_version" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN code_version TEXT")
+        # who said it: 'sergio' or 'g<guest id>'; older rows are all Sergio's
+        mcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(messages)")}
+        if "user" not in mcols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
+        ucols = {r["name"] for r in self.conn.execute("PRAGMA table_info(usage)")}
+        if "user" not in ucols:
+            self.conn.execute("ALTER TABLE usage ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
 
     # --- session log -----------------------------------------------------
     def log(self, ts: float, node_id: Optional[str], event: str, detail: dict | None = None):
@@ -368,28 +383,37 @@ class DB:
         return [dict(r) for r in rows]
 
     # --- conversation, memory, usage (the brain) -------------------------------
-    def add_message(self, ts: float, channel: str, role: str, content: str) -> None:
+    def add_message(self, ts: float, channel: str, role: str, content: str, user: str = "sergio") -> None:
         with self.lock:
-            self.conn.execute("INSERT INTO messages (ts, channel, role, content) VALUES (?, ?, ?, ?)",
-                              (ts, channel, role, content))
+            self.conn.execute("INSERT INTO messages (ts, channel, role, content, user) VALUES (?, ?, ?, ?, ?)",
+                              (ts, channel, role, content, user))
             self.conn.commit()
 
-    def recent_messages(self, limit: int) -> list[dict]:
+    def recent_messages(self, limit: int, user: str = "sergio") -> list[dict]:
         with self.lock:
             rows = self.conn.execute(
-                "SELECT ts, channel, role, content FROM messages ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+                "SELECT ts, channel, role, content FROM messages WHERE user = ? ORDER BY id DESC LIMIT ?",
+                (user, limit)).fetchall()
         return [dict(r) for r in reversed(rows)]
 
-    def last_message_id(self) -> int:
+    def count_messages_since(self, user: str, ts: float) -> int:
         with self.lock:
-            return int(self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0])
+            return int(self.conn.execute("SELECT COUNT(*) FROM messages WHERE user = ? AND role = 'user' AND ts >= ?",
+                                         (user, ts)).fetchone()[0])
 
-    def messages_between(self, after_id: int, up_to_id: int, limit: int) -> list[dict]:
+    def window_start_id(self, keep: int) -> int:
+        """Id of the oldest of Sergio's `keep` newest messages (0 if he has fewer)."""
+        with self.lock:
+            r = self.conn.execute("SELECT id FROM messages WHERE user = 'sergio' ORDER BY id DESC LIMIT 1 OFFSET ?",
+                                  (keep - 1,)).fetchone()
+        return int(r[0]) if r else 0
+
+    def messages_between(self, after_id: int, before_id: int, limit: int) -> list[dict]:
+        """Sergio's messages with after_id < id < before_id: guests are never summarized into his memory."""
         with self.lock:
             rows = self.conn.execute(
-                "SELECT id, ts, channel, role, content FROM messages WHERE id > ? AND id <= ? ORDER BY id LIMIT ?",
-                (after_id, up_to_id, limit)).fetchall()
+                "SELECT id, ts, channel, role, content FROM messages WHERE user = 'sergio' AND id > ? AND id < ?"
+                " ORDER BY id LIMIT ?", (after_id, before_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
     def search_messages(self, words: list[str], limit: int) -> list[dict]:
@@ -397,7 +421,7 @@ class DB:
         words = [w for w in words if w][:6]
         if not words:
             return []
-        q = "SELECT id, ts, role, content FROM messages WHERE " + " AND ".join(["content LIKE ?"] * len(words))
+        q = "SELECT id, ts, role, content FROM messages WHERE user = 'sergio' AND " + " AND ".join(["content LIKE ?"] * len(words))
         with self.lock:
             rows = self.conn.execute(q + " ORDER BY id DESC LIMIT ?",
                                      (*[f"%{w}%" for w in words], limit)).fetchall()
@@ -445,12 +469,44 @@ class DB:
             self.conn.commit()
         return cur.rowcount > 0
 
-    def add_usage(self, ts: float, model: str, tin: int, tout: int, cost: float) -> None:
+    def add_usage(self, ts: float, model: str, tin: int, tout: int, cost: float, user: str = "sergio") -> None:
         with self.lock:
-            self.conn.execute("INSERT INTO usage VALUES (?, ?, ?, ?, ?)", (ts, model, tin, tout, cost))
+            self.conn.execute("INSERT INTO usage (ts, model, input_tokens, output_tokens, cost_usd, user)"
+                              " VALUES (?, ?, ?, ?, ?, ?)", (ts, model, tin, tout, cost, user))
             self.conn.commit()
 
-    def spent_since(self, ts: float) -> float:
+    def spent_since(self, ts: float, user: Optional[str] = None) -> float:
+        """Everyone's spending (the monthly budget), or one person's (a guest's cap)."""
+        q, args = "SELECT COALESCE(SUM(cost_usd), 0) FROM usage WHERE ts >= ?", [ts]
+        if user:
+            q, args = q + " AND user = ?", args + [user]
         with self.lock:
-            r = self.conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM usage WHERE ts >= ?", (ts,)).fetchone()
+            r = self.conn.execute(q, args).fetchone()
         return float(r[0])
+
+    # --- guests ------------------------------------------------------------------
+    def add_guest(self, ts: float, name: str, key: str, cap: float) -> int:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO guests (name, key_hash, created, monthly_cap_usd) VALUES (?, ?, ?, ?)",
+                                    (name, hash_token(key), ts, cap))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def guest_by_key(self, key: str) -> Optional[dict]:
+        if not key:
+            return None
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM guests WHERE key_hash = ? AND revoked IS NULL",
+                                  (hash_token(key),)).fetchone()
+        return dict(r) if r else None
+
+    def guests(self) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT id, name, created, monthly_cap_usd FROM guests WHERE revoked IS NULL ORDER BY id").fetchall()]
+
+    def revoke_guest(self, guest_id: int, ts: float) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE guests SET revoked = ? WHERE id = ? AND revoked IS NULL", (ts, guest_id))
+            self.conn.commit()
+        return cur.rowcount > 0

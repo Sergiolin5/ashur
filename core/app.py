@@ -8,6 +8,7 @@ import contextlib
 import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -48,6 +49,14 @@ WEIGHTS_FOR_MODE = {
 
 def _same(a: str, b: str) -> bool:
     return bool(a) and bool(b) and hmac.compare_digest(a, b)
+
+
+SECRET_TOKEN = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
+SECRET_WORDS = re.compile(r"(api[_ ]?key|password|contraseña|token|sk-ant-|enroll[_ ]key|admin[_ ]key)\s*[:=]", re.I)
+
+
+def looks_like_secret(text: str) -> bool:
+    return bool(SECRET_TOKEN.search(text) or SECRET_WORDS.search(text))
 
 
 def create_app(
@@ -94,7 +103,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.8.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.8.5", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -384,6 +393,40 @@ def create_app(
     @app.get("/api/memory", dependencies=[Depends(require_admin)])
     def memory_list():
         return db.memories()
+
+    class MemoryImport(BaseModel):
+        lines: list[str] = Field(max_length=300)
+        source: str = Field(default="claude", pattern=r"^[a-z0-9_-]{1,24}$")
+        dry_run: bool = True
+
+    @app.post("/api/memory/import", dependencies=[Depends(require_admin)])
+    def memory_import(body: MemoryImport):
+        """Sergio pastes facts, one per line; the panel shows what would be saved, then saves."""
+        existing = {m["text"].strip().lower() for m in db.memories()}
+        accepted, skipped, seen = [], [], set()
+        for raw in body.lines:
+            text = " ".join(raw.strip().lstrip("-•*").split())
+            low = text.lower()
+            if not text or text.startswith("#"):
+                continue
+            reason = None
+            if len(text) > 500:
+                reason = "más de 500 caracteres"
+            elif looks_like_secret(text):
+                reason = "parece una clave o contraseña"
+            elif low in existing or low in seen:
+                reason = "ya existe"
+            if reason:
+                skipped.append({"text": text[:120], "reason": reason})
+            else:
+                accepted.append(text)
+                seen.add(low)
+        if not body.dry_run:
+            now = clock()
+            for text in accepted:
+                db.add_memory(now, text, source=body.source)
+            db.log(now, None, "memory_imported", {"count": len(accepted), "source": body.source})
+        return {"accepted": accepted, "skipped": skipped, "saved": not body.dry_run}
 
     @app.delete("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
     def memory_delete(memory_id: int):

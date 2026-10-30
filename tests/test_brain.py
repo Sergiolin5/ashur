@@ -271,3 +271,20 @@ def test_long_poll_returns_as_soon_as_work_arrives(tmp_path):
     t = c.get("/nodes/mac-m1/tasks/next", headers=h, params={"wait": 5, "modules": "llm"}).json()
     took = _time.monotonic() - t0
     assert t["module"] == "llm" and 0.5 < took < 3
+
+
+def test_memory_import_reviews_then_saves_and_refuses_secrets(tmp_path):
+    c, fake, _ = make(tmp_path, [])
+    lines = ["- Sergio prefiere respuestas en español", "# comentario", "",
+             "Sergio prefiere respuestas en español", "admin_key: abc",
+             "Su token es AO-z6kYKTYp9htfJhGRv97xJbG7lKt0cJDz9tRbZxKQ", "Ashur vive en un servidor ZimaOS"]
+    dry = c.post("/api/memory/import", headers=A, json={"lines": lines}).json()
+    assert dry["accepted"] == ["Sergio prefiere respuestas en español", "Ashur vive en un servidor ZimaOS"]
+    assert {s["reason"] for s in dry["skipped"]} == {"ya existe", "parece una clave o contraseña"}
+    assert c.get("/api/memory", headers=A).json() == []                 # review saves nothing
+    c.post("/api/memory/import", headers=A, json={"lines": lines, "dry_run": False})
+    mem = c.get("/api/memory", headers=A).json()
+    assert [m["text"] for m in mem] == dry["accepted"] and mem[0]["source"] == "claude"
+    again = c.post("/api/memory/import", headers=A, json={"lines": lines}).json()
+    assert again["accepted"] == []                                          # second import: all duplicates
+    assert c.post("/api/memory/import", json={"lines": ["x"]}).status_code == 401

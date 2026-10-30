@@ -230,6 +230,18 @@
     </section>
 
     <section>
+      <h2>Importar recuerdos</h2>
+      <div class="group signin">
+        <p>Pega un recuerdo por línea. Las líneas que empiezan con # se ignoran. Primero revisas, luego guardas.</p>
+        <textarea id="import-text" rows="6" aria-label="Recuerdos para importar"
+          style="width:100%;font:inherit;font-size:15px;color:var(--label);background:var(--field);border:0;border-radius:10px;padding:11px 12px;resize:vertical"></textarea>
+        <button type="button" id="import-check">Revisar</button>
+        <div id="import-result" class="note" style="margin:10px 0 0" hidden></div>
+        <button type="button" id="import-save" hidden>Guardar</button>
+      </div>
+    </section>
+
+    <section>
       <div class="group"><button class="link" id="signout" type="button">Olvidar la clave en este navegador</button></div>
     </section>
   </div>
@@ -561,6 +573,38 @@
   });
 
   // --- memories -----------------------------------------------------------
+  // --- import ---------------------------------------------------------------
+  let pendingImport = [];
+  async function importCall(dry) {
+    const lines = $("import-text").value.split("\n");
+    const r = await api("api/memory/import", { method: "POST",
+      body: JSON.stringify({ lines, dry_run: dry, source: "claude" }) });
+    return r.json();
+  }
+  $("import-check").addEventListener("click", async () => {
+    const out = $("import-result"), save = $("import-save");
+    try {
+      const d = await importCall(true);
+      pendingImport = d.accepted;
+      let msg = d.accepted.length + (d.accepted.length === 1 ? " recuerdo listo para guardar." : " recuerdos listos para guardar.");
+      if (d.skipped.length) msg += " Omitidos: " + d.skipped.map((s) => "«" + s.text + "» (" + s.reason + ")").join("; ") + ".";
+      out.textContent = msg; out.hidden = false;
+      save.hidden = !d.accepted.length;
+      save.textContent = "Guardar " + d.accepted.length;
+    } catch (e) { out.textContent = "No pude revisar la lista."; out.hidden = false; }
+  });
+  $("import-save").addEventListener("click", async () => {
+    const out = $("import-result"), save = $("import-save");
+    save.disabled = true;
+    try {
+      const d = await importCall(false);
+      out.textContent = "Guardados " + d.accepted.length + ".";
+      $("import-text").value = ""; save.hidden = true;
+      loadMemories();
+    } catch (e) { out.textContent = "No pude guardar."; }
+    save.disabled = false;
+  });
+
   async function loadMemories() {
     try {
       const r = await api("api/memory");

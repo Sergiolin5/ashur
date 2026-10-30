@@ -33,6 +33,7 @@ def describe(event: str, d: dict) -> str:
         "chat_blocked_budget": "mensaje bloqueado por el tope de gasto",
         "memory_saved": f"guardó el recuerdo {d.get('memory_id')}",
         "memory_deleted": f"borró el recuerdo {d.get('memory_id')}",
+        "inventory_summary_failed": f"no pude contar el inventario: {d.get('error')}",
         "public_locked": f"PUERTA PÚBLICA BLOQUEADA {d.get('minutes', 15)} min por claves incorrectas",
     }.get(event, f"{event} {d}" if d else event)
 

@@ -305,3 +305,32 @@ def test_health_names_the_door_and_docs_are_off(env, public):
     assert c.get("/docs").status_code == 404 and c.get("/openapi.json").status_code == 404
     p, _ = public
     assert p.get("/health").json()["door"] == "public"
+
+
+def test_overview_never_waits_for_a_slow_inventory_count(tmp_path):
+    import threading, time as _t
+    from fastapi.testclient import TestClient as TC
+    app = create_app(str(tmp_path / "s.db"), ENROLL, ADMIN, sweep_every_s=None, inventory_in_background=True)
+    calls = []
+    real = app.state.db.inventory_summary_readonly
+
+    def slow():
+        calls.append(1)
+        _t.sleep(3)                                   # a NAS disk counting millions of rows
+        return real()
+    app.state.db.inventory_summary_readonly = slow
+    c = TC(app)
+    times, results = [], []
+
+    def ask():
+        t0 = _t.monotonic()
+        results.append(c.get("/api/overview", headers=A).json()["inventory"])
+        times.append(_t.monotonic() - t0)
+    th = [threading.Thread(target=ask) for _ in range(6)]   # several panels polling at once
+    for t in th: t.start()
+    for t in th: t.join()
+    assert max(times) < 1.5                            # nobody waited for the count
+    assert results[0] is None                          # first answer: not counted yet
+    assert len(calls) == 1                             # one count at a time, not one per request
+    _t.sleep(3.5)
+    assert c.get("/api/overview", headers=A).json()["inventory"] == []   # numbers arrive later

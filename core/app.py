@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 from typing import Callable, Optional
 
@@ -60,6 +61,7 @@ def create_app(
     node_code_root: Optional[str] = None,
     public_port: Optional[int] = None,
     echo_events: bool = False,
+    inventory_in_background: bool = False,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -92,7 +94,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.8.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.8.4", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -138,13 +140,31 @@ def create_app(
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
     progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch
-    _inv_cache = {"at": -1e18, "rows": []}
+    _inv_cache = {"at": -1e18, "rows": None, "busy": False}
+    _inv_lock = threading.Lock()
 
-    def inventory_summary_cached(max_age_s: float = 60.0) -> list:
-        """A full pass over a large inventory is slow on the server's disk; the panel asks every 3 s."""
-        now = clock()
-        if now - _inv_cache["at"] > max_age_s:
-            _inv_cache["rows"], _inv_cache["at"] = db.inventory_summary(), now
+    def _refresh_inventory() -> None:
+        try:
+            rows = db.inventory_summary_readonly() if inventory_in_background else db.inventory_summary()
+            _inv_cache["rows"] = rows
+        except Exception as e:  # keep the last good numbers; say why in the log
+            db.log(clock(), None, "inventory_summary_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+        finally:
+            _inv_cache["at"] = clock()
+            _inv_cache["busy"] = False
+
+    def inventory_summary_cached(max_age_s: float = 60.0):
+        """Counting a large inventory takes long on the server's disk and the panel asks every 3 s.
+        Never make a request wait for it: answer with the last numbers (None the first time) and
+        recount at most once a minute, one count at a time, in the background."""
+        with _inv_lock:
+            stale = clock() - _inv_cache["at"] > max_age_s
+            if stale and not _inv_cache["busy"]:
+                _inv_cache["busy"] = True
+                if inventory_in_background:
+                    threading.Thread(target=_refresh_inventory, daemon=True, name="inventory-summary").start()
+                else:
+                    _refresh_inventory()
         return _inv_cache["rows"]
     code_root = Path(node_code_root) if node_code_root else Path(__file__).resolve().parent.parent
     _code_cache: dict = {}
@@ -467,4 +487,5 @@ def from_env() -> FastAPI:
                   f"[ashur] They are shown only this once; keep them somewhere safe.", flush=True)
     public = os.environ.get("ASHUR_PUBLIC_PORT", "8001").strip()
     return create_app(db_path=db_path, enroll_key=enroll, admin_key=admin,
-                      public_port=int(public) if public else None, echo_events=True)
+                      public_port=int(public) if public else None, echo_events=True,
+                      inventory_in_background=True)

@@ -83,8 +83,15 @@ def hash_token(token: str) -> str:
 class DB:
     def __init__(self, path: str = "ashur.db", echo: bool = False):
         self.echo = echo
+        self.path = path
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # WAL: a long read (the inventory summary) no longer blocks heartbeats and writes
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.DatabaseError:
+            pass
         self.lock = threading.Lock()
         with self.lock:
             self.conn.executescript(SCHEMA)
@@ -305,6 +312,20 @@ class DB:
             )
             self.conn.commit()
         return len(rows)
+
+    def inventory_summary_readonly(self) -> list[dict]:
+        """Same summary on its own connection, without the shared lock (for a background thread)."""
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            rows = c.execute(
+                """SELECT node_id, COUNT(*) entries, COALESCE(SUM(size), 0) bytes,
+                          SUM(runnable) runnable, SUM(approved) approved
+                   FROM inventory GROUP BY node_id ORDER BY node_id"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            c.close()
 
     def inventory_summary(self) -> list[dict]:
         with self.lock:

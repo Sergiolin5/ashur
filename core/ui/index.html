@@ -381,7 +381,9 @@
     })), "Ningún dispositivo todavía.");
 
     // inventory
-    fill("inventory", data.inventory.map((i) => row({
+    if (data.inventory === null) {
+      fill("inventory", [], "Calculando el inventario…");
+    } else fill("inventory", data.inventory.map((i) => row({
       title: i.node_id,
       detail: nf.format(i.entries) + (i.entries === 1 ? " elemento, " : " elementos, ") +
               nf.format(i.runnable || 0) + ((i.runnable || 0) === 1 ? " ejecutable" : " ejecutables"),

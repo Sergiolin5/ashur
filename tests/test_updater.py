@@ -40,6 +40,8 @@ def test_update_moves_core_then_node(tmp_path):
     r = u.update("0.12.0", find_apps(d))
     assert r["ok"], r
     assert [x[0] for x in ran] == ["compose-88b7", "compose-88b7", "compose-2365", "compose-2365"]
+    assert ran[0][1] == ("pull-image", "ghcr.io/sergiolin5/ashur-core:0.12.0")
+    assert ran[2][1] == ("pull-image", "ghcr.io/sergiolin5/ashur-node:0.12.0")
     assert current_tag(d / "compose-2365" / "docker-compose.yml", "node") == "0.12.0"
     assert "jellyfin/jellyfin:10" in (d / "jellyfin" / "docker-compose.yml").read_text()   # nothing else touched
 

@@ -57,6 +57,9 @@ def with_tag(text: str, part: str, version: str) -> str:
 
 
 def docker(path: Path, *args: str) -> None:
+    if args and args[0] == "pull-image":
+        subprocess.run(["docker", "pull", args[1]], check=True, capture_output=True, text=True, timeout=600)
+        return
     # no -p: compose takes the project name from the file's `name:` (or its folder), as ZimaOS does,
     # so the same containers are replaced instead of new ones being created next to them
     subprocess.run(["docker", "compose", "-f", str(path), *args],
@@ -117,7 +120,9 @@ class Updater:
                     continue
                 path.write_text(with_tag(old_text, part, version), encoding="utf-8")
                 try:
-                    self.run(path, "pull")
+                    # pull the exact image by name: `docker compose pull` returned without fetching it on
+                    # ZimaOS, and `up` then failed with "No such image"; this also gives a clear error
+                    self.run(path, "pull-image", f"{REGISTRY}/{IMAGES[part]}:{version}")
                     self.run(path, "up", "-d")
                     if part == "core" and not self.wait_for_core(version):
                         raise RuntimeError(f"el núcleo no respondió como {version} en {self.wait_s:.0f} s")

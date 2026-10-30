@@ -744,7 +744,7 @@
         setTimeout(loadUpdate, 5000);
       } else if (u.available && u.updater) {
         const b = el("button", null, "Actualizar a v" + u.latest); b.type = "button";
-        b.style.margin = "12px 16px";
+        b.style.margin = "12px 16px"; b.style.width = "calc(100% - 32px)";   // 100% plus margins overflowed
         b.addEventListener("click", async () => {
           b.disabled = true;
           try {

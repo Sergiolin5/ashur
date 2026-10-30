@@ -6,7 +6,7 @@
 name: ashur-updater
 services:
   ashur-updater:
-    image: ghcr.io/sergiolin5/ashur-updater:0.12.0
+    image: ghcr.io/sergiolin5/ashur-updater:0.12.2
     container_name: ashur-updater
     restart: unless-stopped
     network_mode: host                 # 127.0.0.1:8713, and checks the core at 127.0.0.1:8711

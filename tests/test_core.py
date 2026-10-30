@@ -290,7 +290,13 @@ def test_tailnet_door_is_unaffected_and_headers_are_set(env):
         c.get("/api/overview", headers={"X-Admin-Key": "guess"})
     r = c.get("/api/overview", headers=A)
     assert r.status_code == 200                                     # no lockout off the public door
-    assert r.headers["X-Frame-Options"] == "DENY" and r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert "X-Frame-Options" not in r.headers          # the ZimaOS dashboard may frame the tailnet door
+
+
+def test_public_door_cannot_be_framed(public):
+    c, _ = public
+    assert c.get("/").headers["X-Frame-Options"] == "DENY"
 
 
 def test_health_names_the_door_and_docs_are_off(env, public):

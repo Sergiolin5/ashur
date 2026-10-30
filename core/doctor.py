@@ -34,8 +34,12 @@ def conn() -> sqlite3.Connection:
 
 def get(url: str) -> tuple:
     try:
-        with urllib.request.urlopen(url, timeout=3) as r:
-            return r.status, json.loads(r.read() or b"{}")
+        with urllib.request.urlopen(url, timeout=10) as r:
+            body = r.read()
+            try:
+                return r.status, json.loads(body or b"{}")
+            except ValueError:
+                return r.status, {"bytes": len(body)}
     except urllib.error.HTTPError as e:
         return e.code, {}
     except Exception as e:
@@ -92,9 +96,20 @@ def probe() -> bool:
         if not port:
             print(f"  puerta {name}: apagada")
             continue
+        t0 = time.monotonic()
         status, body = get(f"http://127.0.0.1:{port}/health")
-        if status == 200 and body.get("door") == want:
-            print(f"  puerta {name} (:{port}): bien, versión {body.get('version')}")
+        ms = int((time.monotonic() - t0) * 1000)
+        t0 = time.monotonic()
+        page, pbody = get(f"http://127.0.0.1:{port}/")
+        pms = int((time.monotonic() - t0) * 1000)
+        if status == 200 and body.get("door") == want and page == 200:
+            slow = " — LENTO" if max(ms, pms) > 2000 else ""
+            print(f"  puerta {name} (:{port}): bien, versión {body.get('version')}, "
+                  f"health {ms} ms, panel {pms} ms{slow}")
+            ok = ok and not slow
+        elif status == 200 and page != 200:
+            ok = False
+            print(f"  puerta {name} (:{port}): health bien pero EL PANEL FALLA ({page or pbody.get('error')})")
         elif status == 200:
             ok = False
             print(f"  puerta {name} (:{port}): RESPONDE COMO '{body.get('door')}' — puertos cruzados")

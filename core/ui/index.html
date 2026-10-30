@@ -404,7 +404,10 @@
   async function refresh() {
     if (!key) return showSignin();
     try {
-      const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store" });
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 10000);
+      const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store",
+                                              signal: ctl.signal }).finally(() => clearTimeout(timer));
       if (r.status === 401) return showSignin("La clave no es correcta. Copia de nuevo el valor de admin_key en keys.json, sin comillas.");
       if (r.status === 429) {
         let msg = "Demasiados intentos con una clave incorrecta.";
@@ -418,11 +421,14 @@
       unlock();
     } catch (e) {
       $("subtitle").classList.add("stale");
-      $("subtitle-text").textContent = "Sin conexión con el núcleo. Reintentando…";
+      const slow = e && e.name === "AbortError";
+      $("subtitle-text").textContent = slow ? "El núcleo no respondió en 10 s. Reintentando…"
+                                            : "Sin conexión con el núcleo. Reintentando…";
       if (!unlocked) {
         const er = $("signin-error");
         er.hidden = false;
-        er.textContent = "No pude contactar al núcleo. Revisa tu conexión; reintento cada pocos segundos.";
+        er.textContent = slow ? "El núcleo tarda más de 10 s en responder. En su terminal: ashur probar"
+                              : "No pude contactar al núcleo. Revisa tu conexión; reintento cada pocos segundos.";
       }
     }
   }

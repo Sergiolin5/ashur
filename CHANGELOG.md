@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.8.1 | 2026-10-30 | ZimaOS dashboard can open the panel (framing allowed on the tailnet door only); panel says when the core takes over 10 s; `ashur probar` times health and the panel page |
 | 0.8.0 | 2026-10-29 | Readable log: one line at start (or exactly why it can't start), one line per event, no HTTP noise. `ashur` command in the app's terminal |
 | 0.7.2 | 2026-10-29 | Sign-in says clearly when the key is wrong, when the public door is locked after failed attempts, or when the core can't be reached |
 | 0.7.1 | 2026-10-29 | `/health` says which door a request came through (`tailnet` or `public`); API docs turned off |

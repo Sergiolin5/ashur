@@ -92,7 +92,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.8.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.8.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -130,9 +130,11 @@ def create_app(
                     return JSONResponse({"detail": "admin key required"}, status_code=401)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         if public:
+            # nobody may frame the internet-facing panel; on the tailnet the ZimaOS
+            # dashboard opens apps inside a frame, so the tailnet door allows it
+            response.headers["X-Frame-Options"] = "DENY"
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
     progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch

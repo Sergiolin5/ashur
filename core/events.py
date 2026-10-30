@@ -38,6 +38,7 @@ def describe(event: str, d: dict) -> str:
         "conversation_summarized": f"resumió {d.get('messages')} mensajes de conversación ({d.get('provider')})",
         "summary_deleted": f"borró el resumen {d.get('summary_id')}",
         "summary_failed": f"no pude resumir la conversación: {d.get('error')}",
+        "update_started": f"actualización pedida: {d.get('from')} → {d.get('to')}",
         "guest_created": f"creaste el invitado {d.get('guest_id')}",
         "guest_revoked": f"revocaste el invitado {d.get('guest_id')}",
         "memory_imported": f"importó {d.get('count')} recuerdos ({d.get('source')})",

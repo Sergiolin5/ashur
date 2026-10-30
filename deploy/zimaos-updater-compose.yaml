@@ -1,0 +1,23 @@
+# ashur-updater on ZimaOS: lets the panel's "Actualizar" button move ashur-core and
+# ashur-node to a new version. App Store -> "+" -> Install a customized app -> Import.
+# It is the only Ashur piece with Docker access (that is root on the server), so it
+# listens only on 127.0.0.1, wants the key in /DATA/AppData/ashur/updater.key, and
+# accepts nothing but a version number for those two images.
+name: ashur-updater
+services:
+  ashur-updater:
+    image: ghcr.io/sergiolin5/ashur-updater:0.12.0
+    container_name: ashur-updater
+    restart: unless-stopped
+    network_mode: host                 # 127.0.0.1:8713, and checks the core at 127.0.0.1:8711
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/casaos/apps:/var/lib/casaos/apps
+      - /DATA/AppData/ashur:/data
+    environment:
+      ASHUR_UPDATER_PORT: "8713"
+      ASHUR_PORT: "8711"
+    deploy:
+      resources:
+        limits:
+          memory: 128M

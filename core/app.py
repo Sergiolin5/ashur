@@ -9,12 +9,14 @@ import hmac
 import json
 import os
 import secrets
+import re
 import threading
 import time
 from typing import Callable, Optional
 
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
@@ -67,6 +69,8 @@ def create_app(
     public_port: Optional[int] = None,
     echo_events: bool = False,
     inventory_in_background: bool = False,
+    updater_url: Optional[str] = None,
+    latest_fn: Optional[Callable[[], Optional[str]]] = None,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -103,7 +107,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.11.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.12.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -127,6 +131,10 @@ def create_app(
             allowed = path in ("/", "/health") or path.startswith("/api/")
             if not allowed:
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
+            if path.startswith("/api/update"):
+                # updating drives Docker on the server: never from the internet, key or not
+                return JSONResponse({"detail": "Las actualizaciones solo se hacen desde la tailnet."},
+                                    status_code=403)
             if path.startswith("/api/"):
                 now = clock()
                 if now < locked_until[0]:
@@ -521,6 +529,53 @@ def create_app(
         db.log(clock(), None, "memory_deleted", {"memory_id": memory_id, "by": "sergio"})
         return {"ok": True}
 
+    # --- updates (tailnet only; the public door refuses /api/update*) ----------
+    data_dir = Path(os.path.dirname(os.path.abspath(db_path)))
+    _latest = {"at": -1e18, "v": None}
+
+    def latest_version() -> Optional[str]:
+        if latest_fn:
+            return latest_fn()
+        if clock() - _latest["at"] > 600:                      # GitHub at most every 10 min
+            _latest["at"] = clock()
+            try:
+                _latest["v"] = newest_published("ashur-core")
+            except Exception:
+                pass                                           # keep the last answer
+        return _latest["v"]
+
+    def ask_updater(method: str, path: str, body: Optional[dict] = None) -> tuple[int, dict]:
+        key_file = data_dir / "updater.key"
+        if not key_file.exists():
+            return 0, {"detail": "El actualizador no está instalado (falta ashur-updater en ZimaOS)."}
+        url = (updater_url or os.environ.get("ASHUR_UPDATER_URL", "http://127.0.0.1:8713")) + path
+        try:
+            r = httpx.request(method, url, json=body, timeout=5,
+                              headers={"X-Updater-Key": key_file.read_text(encoding="utf-8").strip()})
+            return r.status_code, r.json()
+        except Exception as e:
+            return 0, {"detail": f"El actualizador no responde ({type(e).__name__}). ¿Está corriendo ashur-updater?"}
+
+    @app.get("/api/update", dependencies=[Depends(require_admin)])
+    def update_info():
+        latest = latest_version()
+        code, st = ask_updater("GET", "/status")
+        return {"current": app.version, "latest": latest,
+                "available": bool(latest and vtuple(latest) > vtuple(app.version)),
+                "updater": st if code == 200 else None,
+                "updater_problem": None if code == 200 else st.get("detail")}
+
+    class UpdateIn(BaseModel):
+        version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+
+    @app.post("/api/update", dependencies=[Depends(require_admin)])
+    def update_start(body: UpdateIn):
+        code, st = ask_updater("POST", "/update", {"version": body.version})
+        if code != 202:
+            raise HTTPException(409 if code else 503, st.get("detail") or "No se pudo iniciar.")
+        db.log(clock(), None, "update_started", {"from": app.version, "to": body.version})
+        return {"ok": True}
+
     @app.get("/health")
     def health(request: Request):
         """Proves the core is up and says which door the request came through."""
@@ -598,6 +653,23 @@ def load_or_create_keys(keys_path: str) -> tuple[str, str, bool]:
     with os.fdopen(fd, "w") as f:
         json.dump(k, f)
     return k["enroll_key"], k["admin_key"], True
+
+
+def vtuple(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (ValueError, AttributeError):
+        return ()
+
+
+def newest_published(image: str) -> Optional[str]:
+    """Highest x.y.z tag of ghcr.io/sergiolin5/<image> (public package: anonymous token)."""
+    repo = f"sergiolin5/{image}"
+    tok = httpx.get(f"https://ghcr.io/token?scope=repository:{repo}:pull", timeout=10).json()["token"]
+    tags = httpx.get(f"https://ghcr.io/v2/{repo}/tags/list?n=1000", timeout=10,
+                     headers={"Authorization": f"Bearer {tok}"}).json().get("tags", [])
+    versions = [t for t in tags if re.fullmatch(r"\d+\.\d+\.\d+", t)]
+    return max(versions, key=vtuple) if versions else None
 
 
 def from_env() -> FastAPI:

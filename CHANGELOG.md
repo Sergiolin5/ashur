@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.12.0 | 2026-10-30 | "Actualizar" button (Estado → Actualización), tailnet only: the core checks the newest published version on GitHub; a new `ashur-updater` container (the only piece with Docker access, listening on 127.0.0.1 only, key in `updater.key`) changes the version in the compose files ZimaOS keeps for ashur-core and ashur-node, applies them, and puts the old version back if the new core does not answer within 2 min. The public door refuses `/api/update` |
 | 0.11.3 | 2026-10-30 | Nodes retry, every 5 min, a module whose self-test failed at start (at logon the agent can start before Ollama) and announce it when it works. Node code changed: nodes update themselves |
 | 0.11.2 | 2026-10-30 | Panel header reads "Núcleo v0.11.2  ·  4 dispositivos conectados" so the version and the count do not run together |
 | 0.11.1 | 2026-10-30 | Panel: device details and activity lines wrap instead of being cut off |

@@ -237,6 +237,12 @@
     </section>
 
     <section>
+      <h2>Actualización</h2>
+      <div class="group" id="update"></div>
+      <div class="note" id="update-note" hidden></div>
+    </section>
+
+    <section>
       <h2>Invitados</h2>
       <div class="group" id="guests"></div>
       <div class="group signin" style="margin-top:12px">
@@ -544,7 +550,7 @@
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("dashboard").hidden = t !== "status";
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "status") { loadMemories(); loadSummaries(); loadGuests(); }
+    if (t === "status") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); }
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
@@ -716,6 +722,49 @@
         return r;
       }), "Todavía no hay conversaciones para resumir.", 5);
     } catch (e) {}
+  }
+
+  let updatingTo = null;
+  async function loadUpdate() {
+    const note = $("update-note");
+    try {
+      const r = await api("api/update");
+      if (r.status === 403) {
+        fill("update", [row({ title: "Solo desde la tailnet", detail: "Por seguridad, las actualizaciones no se hacen desde la dirección pública." })], "");
+        note.hidden = true; return;
+      }
+      const u = await r.json();
+      const last = u.updater && u.updater.last;
+      const rows = [row({ title: "Núcleo v" + u.current,
+        detail: u.latest ? (u.available ? "Hay una versión nueva: v" + u.latest : "Es la última publicada") : "No pude consultar la última versión" })];
+      if (updatingTo && (u.current === updatingTo ||
+          (u.updater && !u.updater.busy && last && last.version === updatingTo))) updatingTo = null;   // done or rolled back
+      if (updatingTo || (u.updater && u.updater.busy)) {
+        rows.push(row({ title: "Actualizando a v" + (updatingTo || "…"), detail: "El panel se desconecta un momento y vuelve solo." }));
+        setTimeout(loadUpdate, 5000);
+      } else if (u.available && u.updater) {
+        const b = el("button", null, "Actualizar a v" + u.latest); b.type = "button";
+        b.style.margin = "12px 16px";
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          try {
+            const p = await api("api/update", { method: "POST", body: JSON.stringify({ version: u.latest }) });
+            if (!p.ok) { const d = await p.json(); note.textContent = d.detail || "No se pudo iniciar."; note.hidden = false; b.disabled = false; return; }
+            updatingTo = u.latest; loadUpdate();
+          } catch (e) { b.disabled = false; }
+        });
+        rows.push(b);
+      }
+      fill("update", rows, "");
+      if (u.updater_problem) { note.textContent = u.updater_problem; note.hidden = false; }
+      else if (last && last.version) {
+        note.textContent = (last.ok ? "Última actualización: v" + last.version + " en " + last.seconds + " s. "
+                                    : "La última actualización FALLÓ: ") + (last.steps || []).join(" · ");
+        note.hidden = false;
+      } else note.hidden = true;
+    } catch (e) {
+      if (updatingTo) setTimeout(loadUpdate, 5000);           // the core is restarting: keep asking
+    }
   }
 
   async function loadGuests() {

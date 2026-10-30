@@ -50,3 +50,14 @@ jobs:
             ghcr.io/sergiolin5/ashur-node:latest
             ghcr.io/sergiolin5/ashur-node:${{ steps.ver.outputs.core }}
             ghcr.io/sergiolin5/ashur-node:${{ github.sha }}
+      - name: Updater image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/updater.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/sergiolin5/ashur-updater:latest
+            ghcr.io/sergiolin5/ashur-updater:${{ steps.ver.outputs.core }}
+            ghcr.io/sergiolin5/ashur-updater:${{ github.sha }}

@@ -73,6 +73,14 @@ Ashur answers with Claude when the API key works and with a local model otherwis
 `llm` module: install Ollama on it, pull a model, and add `llm` to its modules.
 Ollama stays on 127.0.0.1; the core sends chat work through the node agent.
 
+## Updates from the panel (ashur-updater)
+
+Install once in ZimaOS (App Store → "+" → Install a customized app → Import) with
+`deploy/zimaos-updater-compose.yaml`. After that, **Estado → Actualización** shows
+when a newer version is published and updates ashur-core and ashur-node with one
+button, only from the tailnet. The updater edits the version in the compose files
+ZimaOS keeps in `/var/lib/casaos/apps/` and rolls back if the new core does not answer.
+
 ## Updates
 
 ZimaOS runs the `:latest` images. Docker never re-pulls `:latest` by itself: use the

@@ -346,3 +346,22 @@ def test_policy_says_why_it_paused():
             return Signals(idle_s=0, on_battery=True, battery_pct=10)
     p = Policy("portable", reader=R())
     assert p.mode() == Mode.OFF and "batería" in p.reason
+
+
+def test_module_that_failed_at_start_is_retried_and_announced(core, tmp_path, monkeypatch):
+    import node.agent as agent_mod
+    from modules.llm import selftest as llm_selftest
+    c, _ = core
+    agent = make_agent(c, tmp_path)
+    agent.cfg["modules"] = ["inventory", "llm"]
+    monkeypatch.setattr(llm_selftest, "check", lambda: ("red", "Ollama no responde"))   # logon: not up yet
+    agent.load_modules()
+    assert "llm" not in agent.modules
+    agent.register(ENROLL)
+    agent.tick()
+    monkeypatch.setattr(llm_selftest, "check", lambda: ("green", "ok"))                 # Ollama started
+    agent._next_module_retry = 0
+    agent.tick()
+    assert "llm" in agent.modules
+    node = [n for n in c.get("/status", headers=A).json()["nodes"] if n["device_id"] == "ryzen9"][0]
+    assert node["modules"] == ["inventory", "llm"]

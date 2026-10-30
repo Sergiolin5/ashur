@@ -115,6 +115,7 @@ def enroll_key_from_env() -> Optional[str]:
 CODE_ROOT = Path(__file__).resolve().parent.parent
 EXIT_UPDATE = 75
 UPDATE_RETRY_S = 3600
+MODULE_RETRY_S = 300                  # retry modules whose self-test failed at start (Ollama not up yet)
 
 
 def install_requirements(req: Path) -> None:
@@ -195,6 +196,22 @@ class Agent:
     # --- lifecycle -------------------------------------------------------
     def load_modules(self) -> None:
         self.modules = load(self.cfg.get("modules", []))
+        self._next_module_retry = time.monotonic() + MODULE_RETRY_S
+
+    def retry_missing_modules(self) -> bool:
+        """A module whose self-test failed at start is tried again now and then: at logon the
+        agent can start before Ollama does, and the llm module was lost until the next restart."""
+        if time.monotonic() < getattr(self, "_next_module_retry", 0):
+            return False
+        self._next_module_retry = time.monotonic() + MODULE_RETRY_S
+        missing = [m for m in self.cfg.get("modules", []) if m not in self.modules]
+        if not missing:
+            return False
+        found = load(missing)
+        self.modules.update(found)
+        if found:
+            log.info("modules now available: %s", ", ".join(sorted(found)))
+        return bool(found)
 
     def register(self, enroll_key: str) -> None:
         import psutil
@@ -225,6 +242,8 @@ class Agent:
         beat = {"mode": mode.value, "reason": self.policy.reason}
         if not self.announced:
             beat.update(modules=sorted(self.modules), code_version=self.code_version, fresh_start=True)
+        elif self.retry_missing_modules():
+            beat["modules"] = sorted(self.modules)
         reply = self.post(f"/nodes/{self.device_id}/heartbeat", beat)
         self.announced = True
         try:

@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.11.3 | 2026-10-30 | Nodes retry, every 5 min, a module whose self-test failed at start (at logon the agent can start before Ollama) and announce it when it works. Node code changed: nodes update themselves |
 | 0.11.2 | 2026-10-30 | Panel header reads "Núcleo v0.11.2  ·  4 dispositivos conectados" so the version and the count do not run together |
 | 0.11.1 | 2026-10-30 | Panel: device details and activity lines wrap instead of being cut off |
 | 0.11.0 | 2026-10-30 | Nodes say why they are paused or light ("con batería al 22%", "otros programas usan el 85%…") in the panel, `ashur dispositivos` and the activity log; Ollama's own CPU no longer counts as Sergio's load (it paused the Mac while answering); devices show a readable version ("v0.11.0", or "v0.10.0 → v0.11.0 pendiente") instead of "al día". Node code changed: nodes update themselves |

@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS guests (        -- people Sergio lets chat with Ashur
     key_hash        TEXT NOT NULL UNIQUE,
     created         REAL NOT NULL,
     monthly_cap_usd REAL NOT NULL,
-    revoked         REAL
+    revoked         REAL,
+    is_self         INTEGER NOT NULL DEFAULT 0   -- a chat-only key for Sergio himself (iPhone Shortcut)
 );
 CREATE TABLE IF NOT EXISTS code_labels (   -- node code fingerprint -> the core version that shipped it
     hash        TEXT PRIMARY KEY,
@@ -141,6 +142,9 @@ class DB:
         mcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(messages)")}
         if "user" not in mcols:
             self.conn.execute("ALTER TABLE messages ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
+        gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
+        if "is_self" not in gcols:
+            self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
         ucols = {r["name"] for r in self.conn.execute("PRAGMA table_info(usage)")}
         if "user" not in ucols:
             self.conn.execute("ALTER TABLE usage ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
@@ -504,10 +508,10 @@ class DB:
         return float(r[0])
 
     # --- guests ------------------------------------------------------------------
-    def add_guest(self, ts: float, name: str, key: str, cap: float) -> int:
+    def add_guest(self, ts: float, name: str, key: str, cap: float, is_self: bool = False) -> int:
         with self.lock:
-            cur = self.conn.execute("INSERT INTO guests (name, key_hash, created, monthly_cap_usd) VALUES (?, ?, ?, ?)",
-                                    (name, hash_token(key), ts, cap))
+            cur = self.conn.execute("INSERT INTO guests (name, key_hash, created, monthly_cap_usd, is_self)"
+                                    " VALUES (?, ?, ?, ?, ?)", (name, hash_token(key), ts, cap, int(is_self)))
             self.conn.commit()
             return cur.lastrowid
 
@@ -522,7 +526,7 @@ class DB:
     def guests(self) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.conn.execute(
-                "SELECT id, name, created, monthly_cap_usd FROM guests WHERE revoked IS NULL ORDER BY id").fetchall()]
+                "SELECT id, name, created, monthly_cap_usd, is_self FROM guests WHERE revoked IS NULL ORDER BY id").fetchall()]
 
     def revoke_guest(self, guest_id: int, ts: float) -> bool:
         with self.lock:

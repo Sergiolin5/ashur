@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.13.0 | 2026-10-30 | Chat-only keys for Sergio himself (Estado → Invitados → "Es para mí"), for the iPhone Shortcut: they chat as Sergio, with his memories and thread, but reach nothing else and can be revoked on their own; in the browser they open the chat view |
 | 0.12.3 | 2026-10-30 | Estado → Actualización also says which version of node code the core ships and which nodes are behind; nodes need no button (they update themselves; zima-server goes with the core) |
 | 0.12.2 | 2026-10-30 | Updater pulls the exact image with `docker pull` before `compose up` (on ZimaOS `compose pull` returned without fetching it, so the first button update failed with "No such image" and was rolled back correctly); the panel's update button no longer overflows. ashur-updater must be moved to 0.12.2 by hand once |
 | 0.12.1 | 2026-10-30 | `ashur` shows the updater: installed or not, which versions it sees, the last update. First release meant to be installed with the panel button |

@@ -404,3 +404,16 @@ def test_guest_cap_rate_limit_and_revoke(tmp_path):
     assert c.post("/api/chat", headers=G, json={"message": "tres"}).status_code == 429
     assert c.delete(f"/api/guests/{g['id']}", headers=A).status_code == 200
     assert c.get("/api/whoami", headers=G).status_code == 401
+
+
+def test_sergios_chat_key_talks_as_him_but_only_chats(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([text("Hola, Sergio.")])])
+    c.app.state.db.add_memory(1.0, "Sergio quiere dejar de fumar")
+    k = c.post("/api/guests", headers=A, json={"name": "Atajo iPhone", "is_self": True}).json()["key"]
+    K = {"X-Admin-Key": k}
+    assert c.get("/api/whoami", headers=K).json()["role"] == "self"
+    r = c.post("/api/chat", headers=K, json={"message": "hola", "channel": "atajo"}).json()
+    assert r["reply"] == "Hola, Sergio." and "fumar" in fake.calls[0]["system"]
+    assert c.get("/api/chat/history", headers=A).json()["messages"][0]["content"] == "hola"     # his own thread
+    for path in ("/api/overview", "/api/memory", "/api/guests", "/api/update"):
+        assert c.get(path, headers=K).status_code == 401, path

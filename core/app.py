@@ -107,7 +107,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.12.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.13.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -209,7 +209,9 @@ def create_app(
         guest = db.guest_by_key(x_admin_key)
         if not guest:
             raise HTTPException(401, "admin key required")
-        return guest
+        # Sergio's own chat key (the iPhone Shortcut): his memories and thread, but chat only;
+        # every admin endpoint still wants the admin key
+        return None if guest.get("is_self") else guest
 
     def require_node(node_id: str, authorization: str = Header(default="")) -> dict:
         token = authorization.removeprefix("Bearer ").strip()
@@ -422,8 +424,12 @@ def create_app(
         channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
 
     @app.get("/api/whoami")
-    def whoami(guest: Optional[dict] = Depends(require_chat)):
-        return {"role": "guest", "name": guest["name"]} if guest else {"role": "admin", "name": "Sergio"}
+    def whoami(x_admin_key: str = Header(default=""), guest: Optional[dict] = Depends(require_chat)):
+        if guest:
+            return {"role": "guest", "name": guest["name"]}
+        if _same(x_admin_key, admin_key):
+            return {"role": "admin", "name": "Sergio"}
+        return {"role": "self", "name": "Sergio"}          # his chat-only key: the chat view, as himself
 
     @app.post("/api/chat")
     def chat(body: ChatIn, guest: Optional[dict] = Depends(require_chat)):
@@ -453,17 +459,21 @@ def create_app(
     class GuestIn(BaseModel):
         name: str = Field(min_length=1, max_length=40)
         monthly_cap_usd: float = Field(default=GUEST_DEFAULT_CAP_USD, ge=0, le=100)
+        is_self: bool = False                  # a chat-only key for Sergio, e.g. the iPhone Shortcut
 
     @app.get("/api/guests", dependencies=[Depends(require_admin)])
     def guests_list():
         start = month_start(clock())
-        return [{**g, "spent_usd": round(db.spent_since(start, f"g{g['id']}"), 4)} for g in db.guests()]
+        return [{**g, "is_self": bool(g["is_self"]),
+                 "spent_usd": None if g["is_self"] else round(db.spent_since(start, f"g{g['id']}"), 4)}
+                for g in db.guests()]
 
     @app.post("/api/guests", dependencies=[Depends(require_admin)])
     def guest_create(body: GuestIn):
         key = secrets.token_urlsafe(24)
-        gid = db.add_guest(clock(), body.name.strip(), key, body.monthly_cap_usd)
-        db.log(clock(), None, "guest_created", {"guest_id": gid})          # no name: third parties stay anonymous
+        gid = db.add_guest(clock(), body.name.strip(), key, body.monthly_cap_usd, body.is_self)
+        db.log(clock(), None, "chat_key_created" if body.is_self else "guest_created",
+               {"guest_id": gid})                                         # no name: third parties stay anonymous
         return {"id": gid, "name": body.name.strip(), "key": key}             # the key is shown only this once
 
     @app.delete("/api/guests/{guest_id}", dependencies=[Depends(require_admin)])

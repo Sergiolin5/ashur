@@ -250,6 +250,9 @@
         <form id="guest-form">
           <input id="guest-name" maxlength="40" placeholder="Nombre" aria-label="Nombre del invitado" autocomplete="off">
           <input id="guest-cap" type="number" min="0" max="100" step="0.5" value="1" aria-label="Tope de gasto al mes en dólares" placeholder="Tope US$ al mes">
+          <label style="display:flex;gap:8px;align-items:center;margin:4px 0 10px;font-size:15px;color:var(--label)">
+            <input id="guest-self" type="checkbox" style="width:auto;margin:0"> Es para mí (Atajo del iPhone): usa mis recuerdos y mi chat, pero solo puede chatear
+          </label>
           <button type="submit">Crear invitado</button>
         </form>
         <div id="guest-result" class="note" style="margin:10px 0 0;white-space:pre-line;user-select:all" hidden></div>
@@ -490,7 +493,7 @@
     if (!key) return showSignin();
     try {
       if (!role) { await whoami(); if (!key) return; }
-      if (role === "guest") return unlockGuest();
+      if (role === "guest" || role === "self") return unlockGuest();
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), 10000);
       const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store",
@@ -781,7 +784,8 @@
       const r = await api("api/guests");
       const list = await r.json();
       fill("guests", list.map((g) => {
-        const r = row({ title: g.name, detail: money.format(g.spent_usd) + " de " + money.format(g.monthly_cap_usd) + " este mes" });
+        const r = row({ title: g.name, detail: g.is_self ? "Clave de chat tuya: solo chat, con tus recuerdos"
+                                                         : money.format(g.spent_usd) + " de " + money.format(g.monthly_cap_usd) + " este mes" });
         const b = el("button", "forget", "Revocar"); b.type = "button";
         b.setAttribute("aria-label", "Revocar el acceso de " + g.name);
         b.addEventListener("click", async () => {
@@ -800,13 +804,13 @@
     if (!name) return;
     try {
       const r = await api("api/guests", { method: "POST",
-        body: JSON.stringify({ name, monthly_cap_usd: parseFloat($("guest-cap").value) || 0 }) });
+        body: JSON.stringify({ name, monthly_cap_usd: parseFloat($("guest-cap").value) || 0, is_self: $("guest-self").checked }) });
       if (!r.ok) throw new Error();
       const g = await r.json();
       out.textContent = "Clave de " + g.name + " (cópiala ahora, no se vuelve a mostrar):\n" + g.key +
         "\n\nEntra en la misma dirección del panel y pega esta clave.";
       out.hidden = false;
-      $("guest-name").value = "";
+      $("guest-name").value = ""; $("guest-self").checked = false;
       loadGuests();
     } catch (err) { out.textContent = "No pude crear el invitado."; out.hidden = false; }
   });

@@ -182,6 +182,23 @@ def overview_timing() -> bool:
     return status == 200 and not slow
 
 
+def updater_line() -> str:
+    key = DB.parent / "updater.key"
+    if not key.exists():
+        return "no instalado"
+    req = urllib.request.Request(os.environ.get("ASHUR_UPDATER_URL", "http://127.0.0.1:8713") + "/status",
+                                 headers={"X-Updater-Key": key.read_text(encoding="utf-8").strip()})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            st = json.loads(r.read())
+    except Exception as e:
+        return f"NO RESPONDE ({type(e).__name__})"
+    last = st.get("last") or {}
+    found = ", ".join(f"{k} {v}" for k, v in (st.get("found") or {}).items())
+    tail = (f"; última: v{last['version']} {'bien' if last.get('ok') else 'FALLÓ'}" if last.get("version") else "")
+    return ("actualizando ahora" if st.get("busy") else "listo") + f" (ve {found})" + tail
+
+
 def summary(c) -> None:
     status, h = get(f"http://127.0.0.1:{os.environ.get('ASHUR_PORT', '8000')}/health")
     print(f"Ashur núcleo {h.get('version', '?')} — " + ("respondiendo" if status == 200 else "NO RESPONDE"))
@@ -196,6 +213,7 @@ def summary(c) -> None:
         print(f"  memoria    {msgs} mensajes guardados, {sums} resúmenes de conversación")
     except sqlite3.OperationalError:
         pass
+    print(f"  actualizador {updater_line()}")
     print("Dispositivos")
     devices(c)
     print("Tareas")

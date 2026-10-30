@@ -117,7 +117,40 @@ def probe() -> bool:
             ok = False
             print(f"  puerta {name} (:{port}): NO RESPONDE ({status or body.get('error')})")
     print("  (con red host: 8711 y 8712 directos; con red bridge: 8711→8000 y 8712→8001)")
+    ok = overview_timing() and ok
     return ok
+
+
+def overview_timing() -> bool:
+    """Time what the panel asks for every 3 s, over HTTP and query by query."""
+    keys = DB.parent / "keys.json"
+    admin = os.environ.get("ASHUR_ADMIN_KEY") or (json.loads(keys.read_text()).get("admin_key") if keys.exists() else "")
+    port = os.environ.get("ASHUR_PORT", "8000")
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/overview", headers={"X-Admin-Key": admin})
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            status = r.status
+            r.read()
+    except urllib.error.HTTPError as e:
+        status = e.code
+    except Exception as e:
+        status = f"sin respuesta ({e})"
+    ms = int((time.monotonic() - t0) * 1000)
+    slow = ms > 3000
+    print(f"  datos del panel: {status} en {ms} ms" + (" — DEMASIADO LENTO (el panel corta a los 10 s)" if slow else ""))
+    if DB.exists():
+        c = conn()
+        for name, q in (("inventario (resumen)", "SELECT node_id, COUNT(*), SUM(size) FROM inventory GROUP BY node_id"),
+                        ("eventos recientes", "SELECT * FROM session_log ORDER BY ts DESC, rowid DESC LIMIT 30"),
+                        ("tareas en cola", "SELECT * FROM tasks WHERE status = 'queued' LIMIT 20"),
+                        ("dispositivos", "SELECT * FROM nodes")):
+            t0 = time.monotonic()
+            c.execute(q).fetchall()
+            print(f"    {name:<22} {int((time.monotonic() - t0) * 1000)} ms")
+        n = c.execute("SELECT COUNT(*) FROM inventory").fetchone()[0]
+        print(f"    filas de inventario: {n:,}".replace(",", "."))
+    return status == 200 and not slow
 
 
 def summary(c) -> None:

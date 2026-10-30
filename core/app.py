@@ -92,7 +92,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.8.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.8.3", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -138,6 +138,14 @@ def create_app(
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
     progress: dict[str, dict] = {}   # live task progress per node; in memory, rebuilt by the next batch
+    _inv_cache = {"at": -1e18, "rows": []}
+
+    def inventory_summary_cached(max_age_s: float = 60.0) -> list:
+        """A full pass over a large inventory is slow on the server's disk; the panel asks every 3 s."""
+        now = clock()
+        if now - _inv_cache["at"] > max_age_s:
+            _inv_cache["rows"], _inv_cache["at"] = db.inventory_summary(), now
+        return _inv_cache["rows"]
     code_root = Path(node_code_root) if node_code_root else Path(__file__).resolve().parent.parent
     _code_cache: dict = {}
 
@@ -292,7 +300,7 @@ def create_app(
             running.append({**t, "elapsed_s": round(now - t["started"], 1) if t["started"] else None,
                             "entries": p.get("entries"), "folder": p.get("folder")})
         return {"version": app.version, "now": now, "status": status(), "running": running,
-                "queued": db.queued_tasks(), "inventory": db.inventory_summary(),
+                "queued": db.queued_tasks(), "inventory": inventory_summary_cached(),
                 "activity": db.log_rows(30), "budget": brain.budget(), "node_code_version": node_code()[0]}
 
     # --- the brain -------------------------------------------------------

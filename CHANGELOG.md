@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.8.3 | 2026-10-30 | Panel data no longer recounts the whole inventory every 3 s (cached 60 s); `ashur probar` times the panel's data request and each query behind it |
 | 0.8.2 | 2026-10-30 | `ASHUR_PUBLIC_BIND`: the public door can listen on 127.0.0.1 only. ZimaOS compose switched to host networking (8711 tailnet, 8712 local for Funnel) after Docker's port forwarding stopped passing outside traffic |
 | 0.8.1 | 2026-10-30 | ZimaOS dashboard can open the panel (framing allowed on the tailnet door only); panel says when the core takes over 10 s; `ashur probar` times health and the panel page |
 | 0.8.0 | 2026-10-29 | Readable log: one line at start (or exactly why it can't start), one line per event, no HTTP noise. `ashur` command in the app's terminal |

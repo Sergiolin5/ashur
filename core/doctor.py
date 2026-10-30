@@ -116,7 +116,7 @@ def probe() -> bool:
         else:
             ok = False
             print(f"  puerta {name} (:{port}): NO RESPONDE ({status or body.get('error')})")
-    print("  (desde ZimaOS, el host 8711 debe ir al 8000 y el 8712 al 8001)")
+    print("  (con red host: 8711 y 8712 directos; con red bridge: 8711→8000 y 8712→8001)")
     return ok
 
 

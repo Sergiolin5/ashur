@@ -47,13 +47,13 @@ def preflight() -> None:
             sys.exit(f"[ashur] NO ARRANCA: {var}={v!r} no es un número de puerto.")
 
 
-def ports_free(ports: list) -> None:
+def ports_free(binds: list) -> None:
     import socket
-    for p in ports:
+    for host, p in binds:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
             sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                sk.bind(("0.0.0.0", p))
+                sk.bind((host, p))
             except OSError:
                 sys.exit(f"[ashur] NO ARRANCA: el puerto {p} ya está en uso dentro del contenedor. "
                          "¿Quedó otra copia corriendo? Detén la app y vuelve a iniciarla.")
@@ -82,12 +82,14 @@ def main() -> None:
     port = int(os.environ.get("ASHUR_PORT", "8000"))
     public = os.environ.get("ASHUR_PUBLIC_PORT", "8001").strip()
     quiet = dict(log_level="warning", access_log=False)
+    # with host networking, keep the public door on 127.0.0.1 so only Funnel reaches it
+    public_bind = os.environ.get("ASHUR_PUBLIC_BIND", "0.0.0.0").strip() or "0.0.0.0"
     servers = [uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, **quiet))]
     if public:
         # lifespan off: the background sweep already runs once, in the first server
-        servers.append(uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=int(public),
+        servers.append(uvicorn.Server(uvicorn.Config(app, host=public_bind, port=int(public),
                                                      lifespan="off", proxy_headers=False, **quiet)))
-    ports_free([port] + ([int(public)] if public else []))
+    ports_free([("0.0.0.0", port)] + ([(public_bind, int(public))] if public else []))
     n = len(app.state.db.nodes())
     brain = os.environ.get("ASHUR_BRAIN", "auto")
     ready = (f"núcleo {app.version} listo · puerta tailnet :{port} · "

@@ -8,13 +8,16 @@ services:
     image: ghcr.io/sergiolin5/ashur-core:latest
     container_name: ashur-core
     restart: unless-stopped
-    ports:
-      - "8711:8000"              # tailnet door: nodes and admin
-      - "127.0.0.1:8712:8001"    # public door, only for Tailscale Funnel on this machine
+    # host network: no Docker port forwarding to break. The tailnet door listens on
+    # 8711 on every interface; the public door on 127.0.0.1:8712, only for Funnel.
+    network_mode: host
     volumes:
       - /DATA/AppData/ashur:/data
     environment:
       ASHUR_DB: /data/ashur.db
+      ASHUR_PORT: "8711"
+      ASHUR_PUBLIC_PORT: "8712"
+      ASHUR_PUBLIC_BIND: 127.0.0.1
       ASHUR_BRAIN: auto                # auto: Claude if it works, else a local model | claude | local
       ASHUR_MODEL: claude-sonnet-5-5
       ASHUR_MONTHLY_BUDGET_USD: "10"

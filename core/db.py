@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     token_hash  TEXT NOT NULL,
     simulated   INTEGER NOT NULL DEFAULT 0,
     last_seen   REAL,
-    code_version TEXT
+    code_version TEXT,
+    mode_reason TEXT                    -- why the node is in that mode, in Spanish
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +79,10 @@ CREATE TABLE IF NOT EXISTS guests (        -- people Sergio lets chat with Ashur
     monthly_cap_usd REAL NOT NULL,
     revoked         REAL
 );
+CREATE TABLE IF NOT EXISTS code_labels (   -- node code fingerprint -> the core version that shipped it
+    hash        TEXT PRIMARY KEY,
+    version     TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS usage (
     ts            REAL NOT NULL,
     model         TEXT NOT NULL,
@@ -130,6 +135,8 @@ class DB:
         ncols = {r["name"] for r in self.conn.execute("PRAGMA table_info(nodes)")}
         if "code_version" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN code_version TEXT")
+        if "mode_reason" not in ncols:
+            self.conn.execute("ALTER TABLE nodes ADD COLUMN mode_reason TEXT")
         # who said it: 'sergio' or 'g<guest id>'; older rows are all Sergio's
         mcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(messages)")}
         if "user" not in mcols:
@@ -189,15 +196,27 @@ class DB:
             rows = self.conn.execute("SELECT * FROM nodes ORDER BY id").fetchall()
         return [self._node(r) for r in rows]
 
-    def set_node_mode(self, node_id: str, mode: str, last_seen: Optional[float] = None):
+    def set_node_mode(self, node_id: str, mode: str, last_seen: Optional[float] = None,
+                      reason: Optional[str] = None):
         with self.lock:
             if last_seen is None:
                 self.conn.execute("UPDATE nodes SET mode = ? WHERE id = ?", (mode, node_id))
             else:
-                self.conn.execute(
-                    "UPDATE nodes SET mode = ?, last_seen = ? WHERE id = ?", (mode, last_seen, node_id)
-                )
+                self.conn.execute("UPDATE nodes SET mode = ?, last_seen = ?, mode_reason = ? WHERE id = ?",
+                                  (mode, last_seen, reason, node_id))
             self.conn.commit()
+
+    def label_code(self, code_hash: str, version: str) -> None:
+        with self.lock:
+            self.conn.execute("INSERT OR IGNORE INTO code_labels (hash, version) VALUES (?, ?)", (code_hash, version))
+            self.conn.commit()
+
+    def code_label(self, code_hash: Optional[str]) -> Optional[str]:
+        if not code_hash:
+            return None
+        with self.lock:
+            r = self.conn.execute("SELECT version FROM code_labels WHERE hash = ?", (code_hash,)).fetchone()
+        return r[0] if r else None
 
     def set_node_code_version(self, node_id: str, version: str) -> None:
         with self.lock:

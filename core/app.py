@@ -103,7 +103,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.10.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.11.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -184,6 +184,7 @@ def create_app(
         if "v" not in _code_cache:
             if has_node_code(code_root):
                 _code_cache["v"], _code_cache["b"] = code_version(code_root), build_bundle(code_root)
+                db.label_code(_code_cache["v"], app.version)    # so nodes show "0.11.0", not a hash
             else:
                 _code_cache["v"], _code_cache["b"] = None, b""
         return _code_cache["v"], _code_cache["b"]
@@ -237,7 +238,8 @@ def create_app(
         sweep()
         now = clock()
         prev = node["mode"]
-        db.set_node_mode(node["id"], hb.mode.value, last_seen=now)
+        reason = (hb.reason or "")[:120] or None
+        db.set_node_mode(node["id"], hb.mode.value, last_seen=now, reason=reason)
         if hb.modules is not None and sorted(hb.modules) != sorted(node["modules"]):
             db.set_node_modules(node["id"], hb.modules)
             db.log(now, node["id"], "modules_changed", {"from": node["modules"], "to": sorted(hb.modules)})
@@ -252,7 +254,7 @@ def create_app(
         if prev == Mode.OFFLINE.value:
             db.log(now, node["id"], "back_online", {"mode": hb.mode.value})
         elif prev != hb.mode.value:
-            db.log(now, node["id"], "mode_change", {"from": prev, "to": hb.mode.value})
+            db.log(now, node["id"], "mode_change", {"from": prev, "to": hb.mode.value, "reason": reason})
         return {"ok": True, "code_version": node_code()[0]}
 
     @app.get("/nodes/{node_id}/code")
@@ -340,7 +342,8 @@ def create_app(
                             "entries": p.get("entries"), "folder": p.get("folder")})
         return {"version": app.version, "now": now, "status": status(), "running": running,
                 "queued": db.queued_tasks(), "inventory": inventory_summary_cached(),
-                "activity": db.log_rows(30), "budget": brain.budget(), "node_code_version": node_code()[0]}
+                "activity": db.log_rows(30), "budget": brain.budget(), "node_code_version": node_code()[0],
+                "node_code_label": db.code_label(node_code()[0])}
 
     # --- the brain -------------------------------------------------------
     def network_for_brain() -> dict:
@@ -532,6 +535,8 @@ def create_app(
             NodeStatus(
                 device_id=n["id"], persona=n["persona"], os=n["os"], mode=Mode(n["mode"]),
                 modules=n["modules"], simulated=n["simulated"], code_version=n.get("code_version"),
+                reason=n.get("mode_reason") if n["mode"] != Mode.OFFLINE.value else None,
+                code_label=db.code_label(n.get("code_version")),
                 last_seen_s_ago=None if n["last_seen"] is None else round(now - n["last_seen"], 1),
             )
             for n in db.nodes()

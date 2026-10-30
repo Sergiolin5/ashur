@@ -424,8 +424,11 @@
       dot: n.mode,
       title: n.device_id,
       detail: (OS[n.os] || n.os) + ", " + MODE[n.mode].toLowerCase() +
-              (!data.node_code_version ? "" : !n.code_version ? ", código sin dato"
-                : n.code_version === data.node_code_version ? ", código al día" : ", código por actualizar"),
+              (!data.node_code_version || !n.code_version ? ""
+                : n.code_version === data.node_code_version ? ", v" + (n.code_label || data.node_code_label || "?")
+                : ", " + (n.code_label ? "v" + n.code_label : "versión anterior") +
+                  " → v" + (data.node_code_label || "?") + " pendiente") +
+              (n.reason && n.mode !== "full" && n.mode !== "offline" ? " · " + n.reason : ""),
       value: ago(n.last_seen_s_ago)
     })), "Ningún dispositivo todavía.");
 

@@ -57,6 +57,7 @@ class RegisterResponse(BaseModel):
 
 class Heartbeat(BaseModel):
     mode: Mode
+    reason: Optional[str] = None          # why this mode, in Spanish ("batería al 22%")
     modules: Optional[list[str]] = None   # sent on the first beat after start, so new modules are known
     code_version: Optional[str] = None    # first beat: which code this agent runs
     fresh_start: Optional[bool] = None    # first beat: whatever the core thinks it was running is gone
@@ -113,3 +114,5 @@ class NodeStatus(BaseModel):
     last_seen_s_ago: Optional[float]
     simulated: bool
     code_version: Optional[str] = None
+    code_label: Optional[str] = None      # the core version that shipped that code, e.g. "0.11.0"
+    reason: Optional[str] = None

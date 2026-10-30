@@ -16,7 +16,8 @@ def describe(event: str, d: dict) -> str:
         "offline": f"se desconectó (sin señal {d.get('silent_s', '?')} s)"
                    + (f", tareas devueltas a la cola: {d['requeued_tasks']}" if d.get("requeued_tasks") else ""),
         "back_online": f"volvió ({MODES.get(d.get('mode'), d.get('mode'))})",
-        "mode_change": f"{MODES.get(d.get('from'), d.get('from'))} → {MODES.get(d.get('to'), d.get('to'))}",
+        "mode_change": f"{MODES.get(d.get('from'), d.get('from'))} → {MODES.get(d.get('to'), d.get('to'))}"
+                       + (f" ({d['reason']})" if d.get("reason") else ""),
         "modules_changed": f"capacidades: {', '.join(d.get('to', []))}",
         "code_updated": f"actualizó su código a {d.get('to', '?')}",
         "restart_requeued": f"reinició; tareas devueltas a la cola: {d.get('requeued_tasks')}",

@@ -331,3 +331,18 @@ def test_restarted_agent_announces_new_modules(core, tmp_path):
     again.tick()
     assert c.get("/status", headers=A).json()["nodes"][0]["modules"] == ["inventory", "llm"]
     assert any(r["event"] == "modules_changed" for r in c.get("/log", headers=A).json())
+
+
+def test_policy_says_why_it_paused():
+    from node.policy import Signals, Thresholds, Policy, explain
+    from shared.protocol import Mode
+    t = Thresholds()
+    assert "batería al 20%" in explain(Signals(idle_s=0, on_battery=True, battery_pct=20), t, Mode.OFF, True)
+    assert "85%" in explain(Signals(idle_s=0, other_load_pct=85), t, Mode.OFF, False)
+    assert "en uso" in explain(Signals(idle_s=120), t, Mode.LIGHT, False)
+
+    class R:
+        def read(self):
+            return Signals(idle_s=0, on_battery=True, battery_pct=10)
+    p = Policy("portable", reader=R())
+    assert p.mode() == Mode.OFF and "batería" in p.reason

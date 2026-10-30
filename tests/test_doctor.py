@@ -58,8 +58,10 @@ def test_ashur_unknown_command(capsys, db_with_events):
     assert doctor.main(["borrar-todo"]) == 2
 
 
-def test_devices_say_al_dia_not_a_hash():
+def test_devices_show_a_readable_version_not_a_hash():
     from core.doctor import code_state
-    assert code_state("abc", "abc") == "código al día"
-    assert code_state("abc", "def") == "código POR ACTUALIZAR"
-    assert code_state(None, "def") == "código sin dato"
+    labels = {"abc": "0.11.0", "def": "0.12.0"}
+    assert code_state("abc", "abc", labels) == "v0.11.0"
+    assert code_state("abc", "def", labels) == "v0.11.0 → v0.12.0 PENDIENTE"
+    assert code_state("zzz", "def", labels) == "versión anterior → v0.12.0 PENDIENTE"
+    assert code_state(None, "def", labels) == "versión ?"

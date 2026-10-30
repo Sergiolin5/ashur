@@ -222,7 +222,7 @@ class Agent:
         if mode != self.mode:
             log.info("mode %s -> %s", self.mode.value if self.mode else "-", mode.value)
             self.mode = mode
-        beat = {"mode": mode.value}
+        beat = {"mode": mode.value, "reason": self.policy.reason}
         if not self.announced:
             beat.update(modules=sorted(self.modules), code_version=self.code_version, fresh_start=True)
         reply = self.post(f"/nodes/{self.device_id}/heartbeat", beat)
@@ -377,7 +377,9 @@ def main(argv=None) -> int:
         missing = set(cfg.get("modules", [])) - set(agent.modules)
         for name in sorted(missing):
             print(f"{name}: red - not loaded (see agent.log)")
-        print(f"yield policy {agent.policy.name}: mode now {agent.policy.mode().value}")
+        m = agent.policy.mode()
+        print(f"yield policy {agent.policy.name}: mode now {m.value}"
+              + (f" ({agent.policy.reason})" if agent.policy.reason else ""))
         return 0 if not missing else 1
 
     if args.enroll or not agent.token:

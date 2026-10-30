@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.11.0 | 2026-10-30 | Nodes say why they are paused or light ("con batería al 22%", "otros programas usan el 85%…") in the panel, `ashur dispositivos` and the activity log; Ollama's own CPU no longer counts as Sergio's load (it paused the Mac while answering); devices show a readable version ("v0.11.0", or "v0.10.0 → v0.11.0 pendiente") instead of "al día". Node code changed: nodes update themselves |
 | 0.10.0 | 2026-10-30 | Guests: Sergio creates chat-only keys in the panel (Estado → Invitados), each with a monthly cap (US$1 by default) and 30 messages an hour; a guest signs in on the same panel and sees only their own chat; Ashur gets none of Sergio's memories, summaries, tools or devices for them; device names and API errors are never shown to guests; the session log records guests only by number; "Revocar" ends access |
 | 0.9.1 | 2026-10-30 | Panel: recent activity, memories and conversation summaries show the newest 5 with "Ver todos (N)" / "Ver menos"; the choice survives the 3 s refresh |
 | 0.9.0 | 2026-10-30 | Conversation memory: once 20 older messages leave the recent window they are summarized (Claude if it has credit, otherwise the local model; retried later if neither can) and every summary rides in the prompt; Claude can search all past messages; summaries listed in the panel with "Olvidar". Devices say "código al día" or "por actualizar" in the panel and in `ashur dispositivos` instead of a hash |

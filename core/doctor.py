@@ -63,12 +63,15 @@ def core_code() -> str:
         return ""
 
 
-def code_state(node_code, shipped: str) -> str:
+def code_state(node_code, shipped: str, labels: dict | None = None) -> str:
+    """'v0.11.0' when the node runs what the core ships; otherwise what it runs and what is pending."""
+    labels = labels or {}
     if not node_code:
-        return "código sin dato"
-    if not shipped:
-        return "código ?"
-    return "código al día" if node_code == shipped else "código POR ACTUALIZAR"
+        return "versión ?"
+    have = "v" + labels[node_code] if node_code in labels else "versión anterior"
+    if not shipped or node_code == shipped:
+        return have
+    return f"{have} → v{labels.get(shipped, '?')} PENDIENTE"
 
 
 def devices(c) -> None:
@@ -76,11 +79,18 @@ def devices(c) -> None:
     if not rows:
         print("  (ninguno)")
     shipped = core_code()
+    try:
+        labels = {r[0]: r[1] for r in c.execute("SELECT hash, version FROM code_labels")}
+    except sqlite3.OperationalError:
+        labels = {}
     for n in rows:
         mods = ", ".join(json.loads(n["modules"]))
         code = n["code_version"] if "code_version" in n.keys() else None
         print(f"  {n['id']:<14} {MODES.get(n['mode'], n['mode']):<13} visto {ago(n['last_seen']):<12} "
-              f"{code_state(code, shipped):<22} [{mods}]")
+              f"{code_state(code, shipped, labels):<22} [{mods}]")
+        reason = n["mode_reason"] if "mode_reason" in n.keys() else None
+        if reason and n["mode"] != "offline":
+            print(f"  {'':<14} └ {reason}")
 
 
 def tasks(c) -> None:

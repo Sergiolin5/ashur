@@ -50,6 +50,23 @@ def decide_portable(s: Signals, t: Thresholds) -> Mode:
     return mode
 
 
+def explain(s: Signals, t: Thresholds, mode: Mode, portable: bool) -> str:
+    """Why the policy chose this mode, in Spanish, for the panel and `ashur dispositivos`."""
+    if mode == Mode.OFF:
+        if portable and s.on_battery and s.battery_pct is not None and s.battery_pct < t.battery_off_pct:
+            return f"con batería al {s.battery_pct:.0f}%: pausado hasta conectarlo"
+        if s.fullscreen:
+            return "hay una app en pantalla completa"
+        return f"otros programas usan el {s.other_load_pct:.0f}% del procesador"
+    if mode == Mode.LIGHT:
+        if portable and s.on_battery and s.idle_s is not None and s.idle_s >= t.idle_for_full_s:
+            return "libre pero con batería: solo trabajo ligero"
+        if s.idle_s is None:
+            return "no puedo leer cuánto lleva sin uso"
+        return f"en uso (sin tocar hace {s.idle_s / 60:.0f} de {t.idle_for_full_s / 60:.0f} min)"
+    return "libre"
+
+
 # --- signal readers --------------------------------------------------------
 
 def _windows_idle_s() -> Optional[float]:
@@ -127,9 +144,26 @@ class SignalReader:
         psutil.cpu_percent(None)
         self._own_cpu()
 
+    def _helpers(self) -> list:
+        """Processes that work for Ashur without being its children: Ollama runs as its own
+        service, and its answers must not count as Sergio's load (that paused the Mac)."""
+        found = []
+        try:
+            for p in self.psutil.process_iter(["name"]):       # psutil reuses these objects between calls
+                if (p.info.get("name") or "").lower().startswith("ollama"):
+                    found.append(p)
+        except self.psutil.Error:
+            pass
+        return found
+
     def _own_cpu(self) -> float:
         total = 0.0
-        for p in [self.me, *self.me.children(recursive=True)]:
+        try:
+            mine = [self.me, *self.me.children(recursive=True)]
+        except self.psutil.Error:
+            mine = [self.me]
+        seen = {p.pid for p in mine}
+        for p in [*mine, *[h for h in self._helpers() if h.pid not in seen]]:
             try:
                 total += p.cpu_percent(None)
             except self.psutil.Error:
@@ -172,9 +206,14 @@ class Policy:
         self.name = name
         self.t = thresholds or Thresholds()
         self.reader = reader if reader is not None or name == "always_full" else SignalReader()
+        self.reason = ""
 
     def mode(self) -> Mode:
         if self.name == "always_full":
+            self.reason = ""
             return Mode.FULL
         s = self.reader.read()
-        return decide_shared(s, self.t) if self.name == "shared_main_machine" else decide_portable(s, self.t)
+        portable = self.name == "portable"
+        mode = decide_portable(s, self.t) if portable else decide_shared(s, self.t)
+        self.reason = explain(s, self.t, mode, portable)
+        return mode

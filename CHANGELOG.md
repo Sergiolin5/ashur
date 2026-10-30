@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.12.3 | 2026-10-30 | Estado → Actualización also says which version of node code the core ships and which nodes are behind; nodes need no button (they update themselves; zima-server goes with the core) |
 | 0.12.2 | 2026-10-30 | Updater pulls the exact image with `docker pull` before `compose up` (on ZimaOS `compose pull` returned without fetching it, so the first button update failed with "No such image" and was rolled back correctly); the panel's update button no longer overflows. ashur-updater must be moved to 0.12.2 by hand once |
 | 0.12.1 | 2026-10-30 | `ashur` shows the updater: installed or not, which versions it sees, the last update. First release meant to be installed with the panel button |
 | 0.12.0 | 2026-10-30 | "Actualizar" button (Estado → Actualización), tailnet only: the core checks the newest published version on GitHub; a new `ashur-updater` container (the only piece with Docker access, listening on 127.0.0.1 only, key in `updater.key`) changes the version in the compose files ZimaOS keeps for ashur-core and ashur-node, applies them, and puts the old version back if the new core does not answer within 2 min. The public door refuses `/api/update` |

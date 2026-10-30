@@ -107,7 +107,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.12.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.12.3", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -560,7 +560,12 @@ def create_app(
     def update_info():
         latest = latest_version()
         code, st = ask_updater("GET", "/status")
-        return {"current": app.version, "latest": latest,
+        shipped = node_code()[0]
+        nodes = [{"id": n["id"], "version": db.code_label(n.get("code_version")),
+                  "current": bool(shipped) and n.get("code_version") == shipped}
+                 for n in db.nodes() if not n["simulated"]]
+        return {"current": app.version, "latest": latest, "nodes": nodes,
+                "nodes_version": db.code_label(shipped),
                 "available": bool(latest and vtuple(latest) > vtuple(app.version)),
                 "updater": st if code == 200 else None,
                 "updater_problem": None if code == 200 else st.get("detail")}

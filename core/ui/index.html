@@ -737,6 +737,15 @@
       const last = u.updater && u.updater.last;
       const rows = [row({ title: "Núcleo v" + u.current,
         detail: u.latest ? (u.available ? "Hay una versión nueva: v" + u.latest : "Es la última publicada") : "No pude consultar la última versión" })];
+      const ns = u.nodes || [];
+      if (ns.length) {
+        const behind = ns.filter((n) => !n.current).map((n) => n.id + (n.version ? " (v" + n.version + ")" : " (versión ?)"));
+        rows.push(row({ title: "Nodos: código v" + (u.nodes_version || "?"),
+          detail: behind.length ? "Al día: " + (ns.length - behind.length) + " de " + ns.length + ". Pendientes: " + behind.join(", ") +
+                                  ". Se actualizan solos; zima-server con este botón."
+                                : "Todos al día. Se actualizan solos cuando cambia su código." }));
+        rows[rows.length - 1].querySelector(".detail").style.whiteSpace = "normal";
+      }
       if (updatingTo && (u.current === updatingTo ||
           (u.updater && !u.updater.busy && last && last.version === updatingTo))) updatingTo = null;   // done or rolled back
       if (updatingTo || (u.updater && u.updater.busy)) {

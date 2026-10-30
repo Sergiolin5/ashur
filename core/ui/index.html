@@ -296,10 +296,22 @@
     if (opts.value) r.append(el("div", "value", opts.value));
     return r;
   }
-  function fill(id, nodes, emptyText) {
+  // long lists show the newest few; "Ver todos" opens the rest and the choice survives refreshes
+  const expanded = {};
+  function fill(id, nodes, emptyText, show) {
     const g = $(id);
-    g.replaceChildren(...(nodes.length ? nodes : [row({ title: emptyText })]));
-    if (!nodes.length) g.firstChild.querySelector(".title").classList.add("empty");
+    if (!nodes.length) {
+      g.replaceChildren(row({ title: emptyText }));
+      g.firstChild.querySelector(".title").classList.add("empty");
+      return;
+    }
+    if (!show || nodes.length <= show) { g.replaceChildren(...nodes); return; }
+    const open = !!expanded[id];
+    const b = el("button", "link", open ? "Ver menos" : "Ver todos (" + nodes.length + ")");
+    b.type = "button";
+    b.setAttribute("aria-expanded", String(open));
+    b.addEventListener("click", () => { expanded[id] = !open; fill(id, nodes, emptyText, show); });
+    g.replaceChildren(...(open ? nodes : nodes.slice(0, show)), b);
   }
   const nf = new Intl.NumberFormat("es-CO");
   function ago(seconds) {
@@ -413,11 +425,11 @@
     })), "Aún no hay inventarios.");
 
     // activity
-    fill("activity", data.activity.slice(0, 15).map((ev) => row({
+    fill("activity", data.activity.map((ev) => row({
       title: describe(ev),
       detail: ev.node_id || "Núcleo",
       value: clock(ev.ts)
-    })), "Sin actividad.");
+    })), "Sin actividad.", 5);
 
     const online = data.status.online;
     $("subtitle").classList.remove("stale", "locked");
@@ -632,7 +644,7 @@
         });
         r.append(b);
         return r;
-      }), "Ashur todavía no ha guardado recuerdos.");
+      }), "Ashur todavía no ha guardado recuerdos.", 5);
     } catch (e) {}
   }
 
@@ -654,7 +666,7 @@
         });
         r.append(b);
         return r;
-      }), "Todavía no hay conversaciones para resumir.");
+      }), "Todavía no hay conversaciones para resumir.", 5);
     } catch (e) {}
   }
 

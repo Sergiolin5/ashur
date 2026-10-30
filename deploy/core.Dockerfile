@@ -15,4 +15,8 @@ ENV ASHUR_DB=/data/ashur.db
 VOLUME /data
 # 8000: tailnet door (nodes, admin). 8001: public door for Tailscale Funnel (panel only).
 EXPOSE 8000 8001
+# `ashur` in the app's terminal: status, devices, tasks, events, errors, door check
+RUN printf '#!/bin/sh\ncd /app && exec python -m core.doctor "$@"\n' > /usr/local/bin/ashur \
+    && chmod +x /usr/local/bin/ashur
+ENV PYTHONUNBUFFERED=1
 CMD ["python", "-m", "core.serve"]

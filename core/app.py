@@ -59,11 +59,12 @@ def create_app(
     brain_client: Any = None,
     node_code_root: Optional[str] = None,
     public_port: Optional[int] = None,
+    echo_events: bool = False,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
 
-    db = DB(db_path)
+    db = DB(db_path, echo=echo_events)
 
     def sweep() -> None:
         """Mark nodes offline after missed heartbeats and reroute their tasks."""
@@ -91,7 +92,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.7.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.8.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -456,4 +457,4 @@ def from_env() -> FastAPI:
                   f"[ashur] They are shown only this once; keep them somewhere safe.", flush=True)
     public = os.environ.get("ASHUR_PUBLIC_PORT", "8001").strip()
     return create_app(db_path=db_path, enroll_key=enroll, admin_key=admin,
-                      public_port=int(public) if public else None)
+                      public_port=int(public) if public else None, echo_events=True)

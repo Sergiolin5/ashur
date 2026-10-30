@@ -92,6 +92,22 @@ to 127.0.0.1 and only opens the panel and its /api: no node enrollment, no tasks
 docs. Ten wrong admin keys in ten minutes lock it for fifteen. Publish it with
 Tailscale Funnel on the server: `tailscale funnel --bg 8712`.
 
+## Debugging on ZimaOS
+
+The app log shows one line when the core is ready, or `NO ARRANCA:` with the reason
+and what to do; then one line per event. HTTP requests are not logged.
+
+In the app's terminal (only while it runs):
+
+| Command | Shows |
+| --- | --- |
+| `ashur` | version, doors, brain, devices, tasks, last errors |
+| `ashur dispositivos` | each device: mode, last seen, code version, modules |
+| `ashur tareas` | running and queued tasks |
+| `ashur eventos 30` | the last 30 events, one line each |
+| `ashur errores` | only what failed |
+| `ashur probar` | both doors answer, and on the right port |
+
 ## Rules
 
 - Nodes always call the core; the core never calls a node.

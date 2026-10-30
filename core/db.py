@@ -81,7 +81,8 @@ def hash_token(token: str) -> str:
 
 
 class DB:
-    def __init__(self, path: str = "ashur.db"):
+    def __init__(self, path: str = "ashur.db", echo: bool = False):
+        self.echo = echo
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.Lock()
@@ -113,6 +114,12 @@ class DB:
                 (ts, node_id, event, json.dumps(detail or {})),
             )
             self.conn.commit()
+        if self.echo:                                  # the container log: one readable line per event
+            try:
+                from core.events import line
+                print("[ashur] " + line(ts, node_id, event, detail or {}), flush=True)
+            except Exception:
+                pass
 
     def log_rows(self, limit: int = 200) -> list[dict]:
         with self.lock:

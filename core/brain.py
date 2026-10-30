@@ -9,6 +9,7 @@ What lives where:
 import datetime as dt
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -35,6 +36,12 @@ TOOLS = [
      "description": "Borra un recuerdo por su número, cuando Sergio lo pide o cuando quedó equivocado.",
      "input_schema": {"type": "object", "properties": {"memory_id": {"type": "integer"}},
                       "required": ["memory_id"]}},
+    {"name": "search_conversations",
+     "description": "Busca en todas las conversaciones anteriores con Sergio, incluso las que ya no recuerdas "
+                    "completas. Úsalo cuando mencione algo que hablaron antes y no lo tengas en tus resúmenes.",
+     "input_schema": {"type": "object", "properties": {
+         "words": {"type": "string", "description": "Una a tres palabras clave que deben aparecer."}},
+         "required": ["words"]}},
     {"name": "network_status",
      "description": "Estado actual de tus dispositivos (nodos): cuáles están conectados, su modo y las tareas en curso.",
      "input_schema": {"type": "object", "properties": {}}},
@@ -46,6 +53,20 @@ TOOLS = [
 
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
+MAX_SUMMARY_CHARS = 4000        # conversation summaries in every prompt, newest first
+SUMMARY_CHUNK = 20              # messages per summary, taken once they leave the recent window
+
+SUMMARIZER = """Resume esta parte de una conversación entre Sergio y Ashur, su asistente.
+Escribe entre 3 y 8 líneas cortas en español, una idea por línea, empezando con "- ".
+Conserva decisiones, hechos sobre Sergio o sus proyectos, y lo que quedó pendiente.
+Omite saludos y relleno. Nunca copies claves, contraseñas ni tokens."""
+
+SECRET_TOKEN = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
+SECRET_WORDS = re.compile(r"(api[_ ]?key|password|contraseña|token|sk-ant-|enroll[_ ]key|admin[_ ]key)\s*[:=]", re.I)
+
+
+def looks_like_secret(text: str) -> bool:
+    return bool(SECRET_TOKEN.search(text) or SECRET_WORDS.search(text))
 
 
 @dataclass
@@ -85,6 +106,9 @@ def api_error_reason(e: Exception) -> str:
         if msg:
             return str(msg)
     return str(getattr(e, "message", "") or e) or "sin detalle"
+
+
+BOGOTA = dt.timezone(dt.timedelta(hours=-5))
 
 
 def month_start(ts: float) -> float:
@@ -142,10 +166,20 @@ class Brain:
             lines.append(line)
             size += len(line)
         memory = "\n".join(reversed(lines)) or "(todavía no hay recuerdos)"
-        now = dt.datetime.fromtimestamp(self.clock(), dt.timezone(dt.timedelta(hours=-5)))
+        past, size = [], 0
+        for sm in reversed(self.db.summaries()):
+            day = dt.datetime.fromtimestamp(sm["ts_to"], BOGOTA).strftime("%Y-%m-%d")
+            block = f"({day})\n{sm['text']}"
+            if size + len(block) > MAX_SUMMARY_CHARS:
+                break
+            past.append(block)
+            size += len(block)
+        talks = "\n".join(reversed(past)) or "(todavía no hay conversaciones resumidas)"
+        now = dt.datetime.fromtimestamp(self.clock(), BOGOTA)
         return (f"{self.persona().strip()}\n\n"
                 f"Fecha y hora en Bogotá: {now:%Y-%m-%d %H:%M}.\n\n"
-                f"Tus recuerdos (número entre corchetes):\n{memory}")
+                f"Tus recuerdos (número entre corchetes):\n{memory}\n\n"
+                f"Resumen de conversaciones anteriores con Sergio:\n{talks}")
 
     def _cost(self, usage) -> tuple[int, int, float]:
         tin = int(_get(usage, "input_tokens", 0) or 0) + int(_get(usage, "cache_creation_input_tokens", 0) or 0) \
@@ -168,6 +202,14 @@ class Brain:
             if ok:
                 self.db.log(now, None, "memory_deleted", {"memory_id": args.get("memory_id")})
             return "Borrado." if ok else "No existe ese recuerdo."
+        if name == "search_conversations":
+            words = str(args.get("words", "")).split()
+            rows = self.db.search_messages(words, 10)
+            if not rows:
+                return "No encontré mensajes con esas palabras."
+            return json.dumps([{"fecha": dt.datetime.fromtimestamp(r["ts"], BOGOTA).strftime("%Y-%m-%d %H:%M"),
+                                "quien": "Sergio" if r["role"] == "user" else "Ashur",
+                                "texto": r["content"][:400]} for r in rows], ensure_ascii=False)
         if name == "network_status":
             return json.dumps(self.network(), ensure_ascii=False, default=str)
         if name == "inventory_overview":
@@ -232,6 +274,56 @@ class Brain:
                 "No tienes herramientas: no puedes guardar ni borrar recuerdos; si te lo piden, dilo con "
                 "claridad. Responde breve y en español.\n\n"
                 f"Estado actual de tus dispositivos: {net}")
+
+    # --- conversation memory --------------------------------------------------
+    def pending_summary(self) -> list[dict]:
+        """The oldest full chunk of messages that left the recent window and has no summary yet."""
+        window_start = self.db.last_message_id() - self.s.history_messages
+        done = self.db.summarized_up_to()
+        chunk = self.db.messages_between(done, window_start, SUMMARY_CHUNK)
+        return chunk if len(chunk) >= SUMMARY_CHUNK else []
+
+    def summarize(self) -> Optional[int]:
+        """Compress one chunk of old conversation. Claude if available, else a local model.
+
+        Returns the summary id, or None when there is nothing to do or nobody can think now
+        (it is retried later; the messages are never lost meanwhile)."""
+        chunk = self.pending_summary()
+        if not chunk:
+            return None
+        transcript = "\n".join(("Sergio: " if m["role"] == "user" else "Ashur: ") + m["content"][:1500]
+                               for m in chunk)
+        ask = [{"role": "user", "content": transcript}]
+        text, provider = "", None
+        can_claude = (self.s.brain in ("auto", "claude") and self._has_claude()
+                      and self.spent_this_month() < self.s.monthly_budget_usd)
+        if can_claude:
+            try:
+                resp = self.client().messages.create(model=self.s.model, max_tokens=400,
+                                                     system=SUMMARIZER, messages=ask)
+                tin, tout, cost = self._cost(_get(resp, "usage"))
+                self.db.add_usage(self.clock(), self.s.model, tin, tout, cost)
+                text = "\n".join(_get(b, "text", "") for b in (_get(resp, "content", []) or [])
+                                 if _get(b, "type") == "text")
+                provider = "claude"
+            except Exception:
+                provider = None
+        if provider is None:
+            if self.local is None or self.s.brain == "claude":
+                return None
+            try:
+                text, _device = self.local(SUMMARIZER, ask)
+                provider = "local"
+            except LocalUnavailable:
+                return None
+        lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip() and not looks_like_secret(ln)]
+        if not lines:
+            return None
+        sid = self.db.add_summary(self.clock(), chunk[0], chunk[-1], "\n".join(lines)[:2000], provider)
+        # paper data: how much was compressed and by whom; never the words
+        self.db.log(self.clock(), None, "conversation_summarized",
+                    {"summary_id": sid, "messages": len(chunk), "provider": provider})
+        return sid
 
     def chat(self, text: str, channel: str = "app") -> dict:
         text = text.strip()

@@ -8,7 +8,6 @@ import contextlib
 import hmac
 import json
 import os
-import re
 import secrets
 import threading
 import time
@@ -25,7 +24,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.brain import Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason
+from core.brain import (Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
+                        looks_like_secret)
 from core.db import DB, hash_token
 from shared.protocol import (
     OFFLINE_AFTER_S, Heartbeat, InventoryBatch, Mode, NewTask, NodeStatus,
@@ -51,12 +51,6 @@ def _same(a: str, b: str) -> bool:
     return bool(a) and bool(b) and hmac.compare_digest(a, b)
 
 
-SECRET_TOKEN = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
-SECRET_WORDS = re.compile(r"(api[_ ]?key|password|contraseña|token|sk-ant-|enroll[_ ]key|admin[_ ]key)\s*[:=]", re.I)
-
-
-def looks_like_secret(text: str) -> bool:
-    return bool(SECRET_TOKEN.search(text) or SECRET_WORDS.search(text))
 
 
 def create_app(
@@ -94,16 +88,20 @@ def create_app(
         task = None
         if sweep_every_s:
             async def loop():
+                last_summary_check = 0.0
                 while True:
                     await asyncio.sleep(sweep_every_s)
                     sweep()
+                    if clock() - last_summary_check >= 60:       # retry pending summaries now and then
+                        last_summary_check = clock()
+                        app.state.summarize_soon()
             task = asyncio.create_task(loop())
         yield
         if task:
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.8.5", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.9.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -371,6 +369,31 @@ def create_app(
                   settings=brain_settings, client=brain_client, local=local_complete)
     app.state.brain = brain
 
+    # conversation memory: old messages are summarized in the background, one at a time;
+    # if nobody can think right now (no credit, Mac asleep) it simply tries again later
+    summarizing = threading.Lock()
+    next_try = [0.0]
+
+    def summarize_soon() -> None:
+        if clock() < next_try[0] or not brain.pending_summary() or not summarizing.acquire(blocking=False):
+            return
+
+        def run():
+            try:
+                while brain.pending_summary():
+                    if brain.summarize() is None:
+                        next_try[0] = clock() + 600
+                        break
+            except Exception as e:
+                db.log(clock(), None, "summary_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+                next_try[0] = clock() + 600
+            finally:
+                summarizing.release()
+
+        threading.Thread(target=run, daemon=True, name="ashur-summary").start()
+
+    app.state.summarize_soon = summarize_soon
+
     class ChatIn(BaseModel):
         message: str = Field(min_length=1, max_length=8000)
         channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
@@ -378,7 +401,9 @@ def create_app(
     @app.post("/api/chat", dependencies=[Depends(require_admin)])
     def chat(body: ChatIn):
         try:
-            return brain.chat(body.message, body.channel)
+            out = brain.chat(body.message, body.channel)
+            summarize_soon()
+            return out
         except (BrainUnavailable, LocalUnavailable) as e:
             raise HTTPException(503, str(e))
         except Exception as e:  # API down, bad key, no credit, network: say exactly why
@@ -427,6 +452,17 @@ def create_app(
                 db.add_memory(now, text, source=body.source)
             db.log(now, None, "memory_imported", {"count": len(accepted), "source": body.source})
         return {"accepted": accepted, "skipped": skipped, "saved": not body.dry_run}
+
+    @app.get("/api/summaries", dependencies=[Depends(require_admin)])
+    def summaries_list():
+        return db.summaries()
+
+    @app.delete("/api/summaries/{summary_id}", dependencies=[Depends(require_admin)])
+    def summary_delete(summary_id: int):
+        if not db.delete_summary(summary_id):
+            raise HTTPException(404, "No existe ese resumen.")
+        db.log(clock(), None, "summary_deleted", {"summary_id": summary_id, "by": "sergio"})
+        return {"ok": True}
 
     @app.delete("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
     def memory_delete(memory_id: int):

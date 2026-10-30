@@ -21,7 +21,7 @@ from pathlib import Path
 from core.events import MODES, line
 
 DB = Path(os.environ.get("ASHUR_DB", "/data/ashur.db"))
-ERRORS = ("task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline")
+ERRORS = ("task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed")
 
 
 def conn() -> sqlite3.Connection:
@@ -53,15 +53,34 @@ def ago(ts) -> str:
     return f"hace {s} s" if s < 60 else f"hace {s // 60} min" if s < 3600 else f"hace {s // 3600} h"
 
 
+def core_code() -> str:
+    """The node code this core ships; nodes running something else are behind."""
+    try:
+        from shared.codebundle import code_version, has_node_code
+        root = Path(__file__).resolve().parents[1]
+        return code_version(root) if has_node_code(root) else ""
+    except Exception:
+        return ""
+
+
+def code_state(node_code, shipped: str) -> str:
+    if not node_code:
+        return "código sin dato"
+    if not shipped:
+        return "código ?"
+    return "código al día" if node_code == shipped else "código POR ACTUALIZAR"
+
+
 def devices(c) -> None:
     rows = c.execute("SELECT * FROM nodes ORDER BY id").fetchall()
     if not rows:
         print("  (ninguno)")
+    shipped = core_code()
     for n in rows:
         mods = ", ".join(json.loads(n["modules"]))
-        code = n["code_version"] if "code_version" in n.keys() and n["code_version"] else "?"
+        code = n["code_version"] if "code_version" in n.keys() else None
         print(f"  {n['id']:<14} {MODES.get(n['mode'], n['mode']):<13} visto {ago(n['last_seen']):<12} "
-              f"código {code:<16} [{mods}]")
+              f"{code_state(code, shipped):<22} [{mods}]")
 
 
 def tasks(c) -> None:
@@ -161,6 +180,12 @@ def summary(c) -> None:
     brain = os.environ.get("ASHUR_BRAIN", "auto")
     has_key = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
     print(f"  cerebro    {brain}; clave de Claude {'configurada' if has_key else 'no configurada'}")
+    try:
+        msgs = c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        sums = c.execute("SELECT COUNT(*) FROM summaries WHERE text != ''").fetchone()[0]
+        print(f"  memoria    {msgs} mensajes guardados, {sums} resúmenes de conversación")
+    except sqlite3.OperationalError:
+        pass
     print("Dispositivos")
     devices(c)
     print("Tareas")

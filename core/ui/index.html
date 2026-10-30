@@ -230,6 +230,12 @@
     </section>
 
     <section>
+      <h2>Conversaciones resumidas</h2>
+      <div class="group" id="summaries"></div>
+      <div class="note">Ashur recuerda completas las últimas 20 líneas del chat. Las anteriores las resume aquí y las lleva siempre consigo; si necesita un detalle, lo busca en los mensajes originales. Olvidar quita el resumen, no los mensajes.</div>
+    </section>
+
+    <section>
       <h2>Importar recuerdos</h2>
       <div class="group signin">
         <p>Pega un recuerdo por línea. Las líneas que empiezan con # se ignoran. Primero revisas, luego guardas.</p>
@@ -346,6 +352,10 @@
       case "chat_error": return "No pudo hablar con Claude";
       case "memory_saved": return "Guardó un recuerdo";
       case "memory_deleted": return d.by === "sergio" ? "Borraste un recuerdo" : "Borró un recuerdo";
+      case "memory_imported": return "Importaste " + d.count + " recuerdos";
+      case "conversation_summarized": return "Resumió " + d.messages + " mensajes de conversación";
+      case "summary_deleted": return "Borraste un resumen de conversación";
+      case "summary_failed": return "No pudo resumir la conversación";
       default: return ev.event;
     }
   }
@@ -387,8 +397,8 @@
       dot: n.mode,
       title: n.device_id,
       detail: (OS[n.os] || n.os) + ", " + MODE[n.mode].toLowerCase() +
-              (data.node_code_version && n.code_version && n.code_version !== data.node_code_version
-                ? ", código por actualizar" : ""),
+              (!data.node_code_version ? "" : !n.code_version ? ", código sin dato"
+                : n.code_version === data.node_code_version ? ", código al día" : ", código por actualizar"),
       value: ago(n.last_seen_s_ago)
     })), "Ningún dispositivo todavía.");
 
@@ -476,7 +486,7 @@
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("dashboard").hidden = t !== "status";
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "status") loadMemories();
+    if (t === "status") { loadMemories(); loadSummaries(); }
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
@@ -623,6 +633,28 @@
         r.append(b);
         return r;
       }), "Ashur todavía no ha guardado recuerdos.");
+    } catch (e) {}
+  }
+
+  async function loadSummaries() {
+    try {
+      const r = await api("api/summaries");
+      const list = await r.json();
+      const day = (ts) => new Date(ts * 1000).toLocaleDateString("es-CO", { day: "numeric", month: "short" });
+      fill("summaries", list.slice().reverse().map((sm) => {
+        const r = row({ title: sm.text, detail: day(sm.ts_from) + (day(sm.ts_from) === day(sm.ts_to) ? "" : " a " + day(sm.ts_to)) +
+                        (sm.provider === "local" ? ", modelo local" : ", Claude") });
+        r.querySelector(".title").style.whiteSpace = "pre-line";
+        const b = el("button", "forget", "Olvidar"); b.type = "button";
+        b.setAttribute("aria-label", "Olvidar este resumen");
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          await api("api/summaries/" + sm.id, { method: "DELETE" });
+          loadSummaries();
+        });
+        r.append(b);
+        return r;
+      }), "Todavía no hay conversaciones para resumir.");
     } catch (e) {}
   }
 

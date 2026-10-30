@@ -1,4 +1,5 @@
 """The brain against a scripted fake of the Claude API: no network, no cost."""
+import json
 from types import SimpleNamespace as NS
 
 import pytest
@@ -288,3 +289,65 @@ def test_memory_import_reviews_then_saves_and_refuses_secrets(tmp_path):
     again = c.post("/api/memory/import", headers=A, json={"lines": lines}).json()
     assert again["accepted"] == []                                          # second import: all duplicates
     assert c.post("/api/memory/import", json={"lines": ["x"]}).status_code == 401
+
+
+# --- conversation memory -----------------------------------------------------
+def _wait_summaries():
+    import threading
+    for t in threading.enumerate():
+        if t.name == "ashur-summary":
+            t.join(5)
+
+
+def test_old_conversation_is_summarized_and_carried(tmp_path):
+    script = [resp([text(f"r{i}")]) for i in range(20)]
+    script.insert(20, resp([text("- Sergio decidió usar ZimaOS\n- token: abcdef\n- Falta el botón Actualizar")]))
+    script.append(resp([text("Lo recuerdo.")]))
+    c, fake, _ = make(tmp_path, script)
+    for i in range(20):                                   # 40 messages: the oldest 20 leave the window
+        c.post("/api/chat", headers=A, json={"message": f"m{i}"})
+    _wait_summaries()
+    sums = c.get("/api/summaries", headers=A).json()
+    assert len(sums) == 1 and sums[0]["provider"] == "claude"
+    assert "ZimaOS" in sums[0]["text"] and "token" not in sums[0]["text"]      # secret-looking line dropped
+    summary_call = fake.calls[20]
+    assert "Sergio: m0" in summary_call["messages"][0]["content"] and "tools" not in summary_call
+    c.post("/api/chat", headers=A, json={"message": "¿te acuerdas?"})
+    assert "Sergio decidió usar ZimaOS" in fake.calls[-1]["system"]
+    log = c.get("/log", headers=A).json()
+    ev = [e for e in log if e["event"] == "conversation_summarized"][0]
+    assert "ZimaOS" not in json.dumps(ev)                                       # paper data: no words
+
+
+def test_forgotten_summary_leaves_the_prompt_and_is_not_redone(tmp_path):
+    c, fake, _ = make(tmp_path, [])
+    brain = c.app.state.brain
+    db = c.app.state.db
+    for i in range(40):
+        db.add_message(float(i), "app", "user" if i % 2 == 0 else "assistant", f"m{i}")
+    fake.script.append(resp([text("- algo privado")]))
+    sid = brain.summarize()
+    assert sid and brain.pending_summary() == []
+    assert c.delete(f"/api/summaries/{sid}", headers=A).status_code == 200
+    assert c.get("/api/summaries", headers=A).json() == []
+    assert "algo privado" not in brain._system() and brain.pending_summary() == []
+
+
+def test_nobody_to_summarize_keeps_messages_for_later(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    db, brain = app.state.db, app.state.brain
+    for i in range(40):
+        db.add_message(float(i), "app", "user" if i % 2 == 0 else "assistant", f"m{i}")
+    assert brain.summarize() is None and len(brain.pending_summary()) == 20
+
+
+def test_search_conversations_tool_finds_old_messages(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([tool("search_conversations", {"words": "funnel apple"})], stop="tool_use"),
+                                 resp([text("Fue con la cuenta Apple.")])])
+    db = c.app.state.db
+    db.add_message(1.0, "app", "user", "Activé Funnel con la cuenta Apple")
+    db.add_message(2.0, "app", "assistant", "Bien")
+    c.post("/api/chat", headers=A, json={"message": "¿con qué cuenta activé funnel?"})
+    result = fake.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "Activé Funnel con la cuenta Apple" in result and "Sergio" in result

@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.9.0 | 2026-10-30 | Conversation memory: once 20 older messages leave the recent window they are summarized (Claude if it has credit, otherwise the local model; retried later if neither can) and every summary rides in the prompt; Claude can search all past messages; summaries listed in the panel with "Olvidar". Devices say "código al día" or "por actualizar" in the panel and in `ashur dispositivos` instead of a hash |
 | 0.8.5 | 2026-10-30 | Import memories from the panel: paste one per line, review, then save; lines that look like keys or passwords are refused; duplicates skipped |
 | 0.8.4 | 2026-10-30 | Panel data never waits for the inventory count: it is recounted in the background, one count at a time, on its own connection; database in WAL mode so long reads don't block heartbeats |
 | 0.8.3 | 2026-10-30 | Panel data no longer recounts the whole inventory every 3 s (cached 60 s); `ashur probar` times the panel's data request and each query behind it |

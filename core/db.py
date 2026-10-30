@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS messages (
     role        TEXT NOT NULL,          -- user | assistant
     content     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS summaries (     -- conversation memory: older messages, compressed
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created     REAL NOT NULL,
+    first_msg   INTEGER NOT NULL,       -- messages.id range it covers
+    last_msg    INTEGER NOT NULL,
+    ts_from     REAL NOT NULL,
+    ts_to       REAL NOT NULL,
+    text        TEXT NOT NULL,
+    provider    TEXT
+);
 CREATE TABLE IF NOT EXISTS usage (
     ts            REAL NOT NULL,
     model         TEXT NOT NULL,
@@ -370,6 +380,52 @@ class DB:
                 "SELECT ts, channel, role, content FROM messages ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in reversed(rows)]
+
+    def last_message_id(self) -> int:
+        with self.lock:
+            return int(self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0])
+
+    def messages_between(self, after_id: int, up_to_id: int, limit: int) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id, ts, channel, role, content FROM messages WHERE id > ? AND id <= ? ORDER BY id LIMIT ?",
+                (after_id, up_to_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_messages(self, words: list[str], limit: int) -> list[dict]:
+        """Old messages containing all the words (case-insensitive), newest first."""
+        words = [w for w in words if w][:6]
+        if not words:
+            return []
+        q = "SELECT id, ts, role, content FROM messages WHERE " + " AND ".join(["content LIKE ?"] * len(words))
+        with self.lock:
+            rows = self.conn.execute(q + " ORDER BY id DESC LIMIT ?",
+                                     (*[f"%{w}%" for w in words], limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def summarized_up_to(self) -> int:
+        with self.lock:
+            return int(self.conn.execute("SELECT COALESCE(MAX(last_msg), 0) FROM summaries").fetchone()[0])
+
+    def add_summary(self, ts: float, first: dict, last: dict, text: str, provider: str) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO summaries (created, first_msg, last_msg, ts_from, ts_to, text, provider)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)", (ts, first["id"], last["id"], first["ts"], last["ts"], text, provider))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def summaries(self) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT id, created, ts_from, ts_to, text, provider FROM summaries WHERE text != '' ORDER BY id").fetchall()]
+
+    def delete_summary(self, summary_id: int) -> bool:
+        """Forgets the summary; its range stays covered so it is not summarized again."""
+        with self.lock:
+            cur = self.conn.execute("UPDATE summaries SET text = '' WHERE id = ? AND text != ''", (summary_id,))
+            self.conn.commit()
+        return cur.rowcount > 0
 
     def add_memory(self, ts: float, text: str, source: str = "ashur") -> int:
         with self.lock:

@@ -56,3 +56,10 @@ def test_ashur_probe_reports_crossed_ports(monkeypatch, capsys):
 
 def test_ashur_unknown_command(capsys, db_with_events):
     assert doctor.main(["borrar-todo"]) == 2
+
+
+def test_devices_say_al_dia_not_a_hash():
+    from core.doctor import code_state
+    assert code_state("abc", "abc") == "código al día"
+    assert code_state("abc", "def") == "código POR ACTUALIZAR"
+    assert code_state(None, "def") == "código sin dato"

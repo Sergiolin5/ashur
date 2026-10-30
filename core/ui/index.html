@@ -452,8 +452,9 @@
 
     const online = data.status.online;
     $("subtitle").classList.remove("stale", "locked");
-    $("subtitle-text").textContent = "Núcleo " + data.version + ", " + online +
-      (online === 1 ? " dispositivo conectado" : " dispositivos conectados");
+    // "v" and a separator keep the version from running into the count (0.11.1, 4 read as 0.11.4)
+    $("subtitle-text").textContent = "Núcleo v" + data.version + "\u00a0\u00a0·\u00a0\u00a0" +
+      (online === 1 ? "1 dispositivo conectado" : online + " dispositivos conectados");
   }
 
   async function whoami() {

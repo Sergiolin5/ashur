@@ -297,7 +297,7 @@
                text-align: left; color: var(--label); font-weight: 400; animation: rise .6s var(--ease) both;
                background: var(--glass); box-shadow: var(--glass-shadow); }
   .menu-item:nth-child(2) { animation-delay: .05s; } .menu-item:nth-child(3) { animation-delay: .1s; }
-  .menu-item:nth-child(4) { animation-delay: .15s; } .menu-item:nth-child(5) { animation-delay: .2s; } .menu-item:nth-child(6) { animation-delay: .25s; }
+  .menu-item:nth-child(7) { animation-delay: .3s; } .menu-item:nth-child(4) { animation-delay: .15s; } .menu-item:nth-child(5) { animation-delay: .2s; } .menu-item:nth-child(6) { animation-delay: .25s; }
   .menu-item:hover { transform: translateY(-2px); filter: none; }
   .menu-item:active { transform: scale(.98); }
   .mi-ico { flex: none; width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; color: #fff;
@@ -332,6 +332,15 @@
   .bubble.note { background: none; border: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .composer { background: linear-gradient(to top, color-mix(in srgb, var(--bg) 70%, transparent), transparent);
               -webkit-backdrop-filter: none; backdrop-filter: none; border-top: 0; }
+  /* commands */
+  .cmd { padding: 12px 16px; }
+  .cmd .why { font-size: 15px; font-weight: 500; }
+  .cmd .where { color: var(--secondary); font-size: 12.5px; margin: 1px 0 7px; }
+  .cmd .line { display: flex; align-items: center; gap: 10px; }
+  .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 9px 12px; border-radius: 12px; background: var(--field);
+              font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; user-select: all; }
+  .cmd button { flex: none; width: auto; margin: 0; padding: 8px 16px; font-size: 14px; }
+  .cmd + .cmd::before { content: ""; display: block; border-top: .5px solid var(--separator); margin: -12px 0 12px; }
   /* diary */
   #diary textarea#d-text { width: 100%; min-height: 150px; resize: vertical; border-radius: 22px; padding: 14px 16px; font: inherit;
                            background: var(--field); border: 1px solid transparent; color: inherit; box-sizing: border-box; }
@@ -540,6 +549,7 @@
       <button type="button" class="menu-item" data-page="update"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="mi-text"><b>Actualización y seguridad</b><small>Versiones y autenticador</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="voices"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mi-text"><b>Personas</b><small>Cómo te habla Ashur en cada dispositivo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
     </nav>
 
     <div class="page" data-page="space" hidden>
@@ -637,6 +647,12 @@
       </div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="cmds" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Comandos</div></div>
+      <div id="cmds"></div>
+      <div class="note" style="margin-top:14px">Los instaladores solo funcionan dentro de tu tailnet. Ninguno de estos comandos lleva claves. Pégalos de uno en uno.</div>
     </div>
 
     <div class="page" data-page="access" hidden>
@@ -993,7 +1009,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
+    if (t === "settings") { renderCmds(); loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -1482,6 +1498,46 @@
   });
   $("signout").addEventListener("click", () => showSignin());
 
+
+  // --- commands: what has to be typed on each machine, one tap to copy ---
+  const CMDS = [
+    ["Windows (Legion Go, Ryzen 9)", "PowerShell normal, no como administrador", [
+      ["Instalar o reinstalar el nodo (también instala lo que falte)", "irm http://zimaos:8711/install/windows.ps1 | iex"],
+      ["Ver las últimas líneas del registro del nodo", "Get-Content $env:LOCALAPPDATA\\Ashur\\agent.log -Tail 50"],
+      ["Reiniciar el nodo", "Stop-ScheduledTask -TaskName 'Ashur node'; Start-ScheduledTask -TaskName 'Ashur node'"]]],
+    ["Mac", "Terminal", [
+      ["Instalar o reinstalar el nodo", "curl -fsSL http://zimaos:8711/install/mac.sh | bash"],
+      ["Reiniciar el nodo", "launchctl kickstart -k gui/$(id -u)/com.ashur.node"],
+      ["Ver las últimas líneas del registro del nodo", "tail -50 ~/.ashur/agent.log"],
+      ["Comprobar que el modelo local está descargado", "ollama list"],
+      ["Descargar el modelo local si falta", "ollama pull qwen2.5:3b"]]],
+    ["Núcleo (ZimaOS)", "Terminal de ZimaOS → contenedor ashur-core", [
+      ["Resumen del estado", "ashur"],
+      ["Autoprueba de todo", "ashur probar"],
+      ["Últimos eventos", "ashur eventos"],
+      ["Últimos errores", "ashur errores"],
+      ["Estado de los dispositivos", "ashur dispositivos"]]],
+  ];
+  function renderCmds() {
+    const root = $("cmds");
+    if (root.childElementCount) return;
+    for (const [title, where, items] of CMDS) {
+      const sec = el("section"); sec.append(el("h2", null, title));
+      const g = el("div", "group");
+      for (const [why, cmd] of items) {
+        const c = el("div", "cmd");
+        c.append(el("div", "why", why), el("div", "where", where));
+        const line = el("div", "line"), code = el("code", null, cmd), b = el("button", null, "Copiar"); b.type = "button";
+        b.addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(cmd); }
+          catch (e) { const r = document.createRange(); r.selectNodeContents(code); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+          b.textContent = "Copiado ✓"; setTimeout(() => { b.textContent = "Copiar"; }, 1600);
+        });
+        line.append(code, b); c.append(line); g.append(c);
+      }
+      sec.append(g); root.append(sec);
+    }
+  }
   // --- diary --------------------------------------------------------------
   // The draft lives in this device until the core confirms it saved, so a dropped connection never loses the entry.
   const DRAFT = "ashur.diary.draft";

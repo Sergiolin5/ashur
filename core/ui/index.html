@@ -96,7 +96,10 @@
   .meter.hot { color: #d70015; font-weight: 600; }
   .row .detail { color: var(--secondary); font-size: 15px; margin-top: 1px;
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #devices .detail, #activity .title { white-space: normal; }
+  #devices .detail { white-space: normal; }
+  #activity .row { min-height: 0; padding: 8px 16px; }
+  #activity .title { font-size: 15px; }
+  #activity .detail { font-size: 12.5px; margin-top: 0; }
   .row .value { color: var(--secondary); font-size: 15px; white-space: nowrap;
                 font-variant-numeric: tabular-nums; }
   .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--gray); }
@@ -818,7 +821,7 @@
     full: "Disponible", light: "Uso ligero", busy: "Ocupado",
     off: "En pausa", offline: "Desconectado"
   };
-  const MODULE = { inventory: "Inventario" };
+  const MODULE = { inventory: "Inventario", docs: "Lectura de documentos", llm: "Modelo local", voice: "Transcripción de voz" };
   const OS = { windows: "Windows", macos: "macOS", linux: "Linux" };
   const $ = (id) => document.getElementById(id);
 
@@ -906,8 +909,8 @@
                                     busy: "Se ocupó", off: "Se pausó" })[d.to] || ("Cambió a " + d.to);
       case "task_queued": return "Nueva tarea: " + mod.toLowerCase() + (d.reason === "first join" ? " inicial" : "");
       case "task_start": return "Empezó " + mod.toLowerCase();
-      case "task_done": return "Terminó la tarea " + d.task_id;
-      case "task_failed": return "Falló la tarea " + d.task_id;
+      case "task_done": return "Terminó: " + mod.toLowerCase();
+      case "task_failed": return "Falló: " + mod.toLowerCase();
       case "revoked": return "Acceso revocado";
       case "chat": return (d.channel === "atajo" ? "Conversación desde el Atajo" : "Conversación") +
                           (d.provider === "local" ? ", modelo local" : d.provider === "claude" ? ", Claude" : "");
@@ -924,7 +927,16 @@
       case "conversation_summarized": return "Resumió " + d.messages + " mensajes de conversación";
       case "summary_deleted": return "Borraste un resumen de conversación";
       case "summary_failed": return "No pudo resumir la conversación";
-      default: return ev.event;
+      case "diary_saved": return "Nueva entrada en el diario";
+      case "push_sent": case "notified": return "Te mandó un aviso";
+      case "push_failed": return "No pudo mandar un aviso";
+      case "memories_proposed": return d.count ? "Propuso " + d.count + " recuerdos para revisar" : "Buscó recuerdos nuevos";
+      case "memory_accepted": return "Guardaste un recuerdo propuesto";
+      case "memory_tier": return "Cambiaste el nivel de un recuerdo";
+      case "audio_uploaded": return "Subiste un audio";
+      case "audio_done": return "Terminó de transcribir un audio";
+      case "audio_failed": return "Falló una transcripción";
+      default: return ev.event.replace(/_/g, " ");
     }
   }
 
@@ -998,8 +1010,7 @@
     // activity
     fill("activity", data.activity.map((ev) => row({
       title: describe(ev),
-      detail: ev.node_id || "Núcleo",
-      value: clock(ev.ts)
+      detail: (ev.node_id || "Núcleo") + " · " + clock(ev.ts)
     })), "Todo en calma por ahora.", 5);
 
     const online = data.status.online;

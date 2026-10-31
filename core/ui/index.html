@@ -496,6 +496,52 @@
     .group, .seg, .menu-item, #devices .row, .qcard, .composer textarea, .bubble.ashur { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--row); }
   }
 
+  /* ---- bolder motion (0.30.0): same glass, more life ---- */
+  body::before { animation-duration: 38s;
+    background: radial-gradient(46% 38% at 16% 14%, color-mix(in srgb, var(--tint) 42%, transparent), transparent 70%),
+                radial-gradient(40% 34% at 86% 8%, color-mix(in srgb, var(--tint-3) 40%, transparent), transparent 70%),
+                radial-gradient(46% 38% at 64% 92%, color-mix(in srgb, #AF52DE 26%, transparent), transparent 72%),
+                radial-gradient(34% 30% at 6% 78%, color-mix(in srgb, var(--tint-2) 26%, transparent), transparent 72%); }
+  #chat, #diary, #dashboard, #settings { animation: viewpop .85s var(--expo) both; }
+  @keyframes viewpop { from { opacity: 0; transform: translateY(46px) scale(.93); filter: blur(16px); }
+                       60% { opacity: 1; } to { opacity: 1; transform: none; filter: none; } }
+  .page { animation: slidepop .7s var(--expo) both; }
+  @keyframes slidepop { from { opacity: 0; transform: translateX(60px) scale(.96); filter: blur(10px); } to { opacity: 1; transform: none; filter: none; } }
+  .group .row { animation: rowin .7s var(--expo) both; }
+  .group .row:nth-child(2) { animation-delay: .05s; } .group .row:nth-child(3) { animation-delay: .1s; }
+  .group .row:nth-child(4) { animation-delay: .15s; } .group .row:nth-child(5) { animation-delay: .2s; }
+  .group .row:nth-child(n+6) { animation-delay: .25s; }
+  @keyframes rowin { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+  .bubble { animation: pop .6s var(--spring) both; transform-origin: bottom left; }
+  .bubble.me { transform-origin: bottom right; }
+  @keyframes pop { from { opacity: 0; transform: translateY(14px) scale(.82); } to { opacity: 1; transform: none; } }
+  @media (hover: hover) {
+    .group { transition: transform .6s var(--spring), box-shadow .5s var(--expo); }
+    .group:hover { transform: translateY(-3px); box-shadow: var(--glass-shadow), 0 26px 50px -22px color-mix(in srgb, var(--tint) 55%, transparent); }
+    button:not(.seg button):hover { transform: translateY(-1px) scale(1.04); box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 12px 26px -8px var(--tint); }
+    .menu-item:hover { transform: translateY(-5px) scale(1.025); box-shadow: var(--glass-shadow), 0 26px 46px -20px color-mix(in srgb, var(--tint) 60%, transparent); }
+    .menu-item:hover .mi-ico { transform: rotate(-8deg) scale(1.12); }
+  }
+  .mi-ico { transition: transform .6s var(--spring); }
+  .seg::before { overflow: hidden; }
+  .seg.moving::before { animation: squash .8s var(--expo), glint .9s var(--expo); }
+  @keyframes glint { 0% { filter: brightness(1.35) saturate(1.4); } 100% { filter: none; } }
+  h1 { background: linear-gradient(100deg, var(--label) 30%, var(--tint) 50%, var(--label) 70%) 100% 0 / 300% 100%;
+       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+       animation: hero 1.1s var(--expo) both, shine 2.2s .5s var(--expo) 1 forwards; }
+  @keyframes shine { from { background-position: 100% 0; } to { background-position: 0 0; } }
+  @supports (animation-timeline: scroll()) {
+    header { animation: away linear both; animation-timeline: scroll(root); animation-range: 0 220px; transform-origin: left top; }
+    @keyframes away { to { opacity: .15; transform: scale(.9) translateY(-14px); filter: blur(6px); } }
+  }
+  /* proposals: text gets the full width, actions sit below it */
+  #proposals .row { flex-wrap: wrap; row-gap: 10px; }
+  #proposals .main { flex-basis: 100%; }
+  #proposals .title, #proposals .detail { white-space: normal; overflow: visible; text-overflow: clip; }
+  #proposals button { flex: 1 1 0; padding: 10px 14px; border-radius: 12px; }
+  #proposals button.keep { background: linear-gradient(180deg, var(--tint-2), var(--tint)); color: #fff; }
+  #proposals button.drop { background: var(--field); color: var(--secondary); }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
@@ -1063,7 +1109,9 @@
     showTab(tab);
   }
   function showTab(t) {
+    const changed = t !== tab;
     tab = t;
+    if (changed) window.scrollTo({ top: 0 });          // each tab opens at its top, not where the last one was left
     document.body.dataset.tab = t;
     try { localStorage.setItem("ashur.tab", t); } catch (e) {}
     const order = role === "self" ? ["chat", "diary"] : ["chat", "diary", "status", "settings"];
@@ -1278,9 +1326,9 @@
         const rw = row({ title: p.text, detail: (p.source === "diary" ? "Del diario" : "Del chat") });
         rw.querySelector(".title").style.whiteSpace = "normal";
         const act = (path, body) => async () => { await api("api/proposals/" + p.id + path, { method: "POST", body: JSON.stringify(body || {}) }); loadProposals(); loadMemories(); };
-        const a = el("button", "forget", p.source === "diary" ? "Guardar (solo local)" : "Guardar"); a.type = "button";
+        const a = el("button", "keep", p.source === "diary" ? "Guardar (solo local)" : "Guardar"); a.type = "button";
         a.addEventListener("click", act("/approve", {}));
-        const d = el("button", "forget", "Descartar"); d.type = "button";
+        const d = el("button", "drop", "Descartar"); d.type = "button";
         d.addEventListener("click", act("/reject"));
         rw.append(a, d);
         return rw;

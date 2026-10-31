@@ -91,7 +91,9 @@ DIARY_SECRET = re.compile(r"\b(clave|pin|c[oó]digo|cvv)\s*[:=]", re.I)      # a
 
 PROPOSER = """Lee lo que Sergio escribió (diario y chat) y extrae hasta 5 hechos duraderos sobre él o su vida.
 - Un hecho por línea, empezando con "- ", en frases cortas y literales.
-- Solo lo que él afirma. No interpretes emociones, no diagnostiques, no deduzcas su personalidad.
+- Escribe siempre en español, nunca en portugués ni en otro idioma.
+- Solo lo que él afirma con esas palabras. No inventes ni completes: no añadas edad, profesión, nacionalidad ni relaciones que no estén escritas.
+- No interpretes emociones, no diagnostiques, no deduzcas su personalidad.
 - Omite lo pasajero (lo que comió hoy), claves, contraseñas y números de documentos.
 - Si no hay nada duradero, responde solo: NADA"""
 

@@ -111,7 +111,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.18.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.18.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -364,6 +364,21 @@ def create_app(
         out = db.docs_apply(node["id"], ups, batch.deletes)
         db.log(clock(), node["id"], "docs_indexed", out)
         return {"ok": True, **out}
+
+    @app.post("/api/docs/refresh", dependencies=[Depends(require_admin)])
+    def docs_refresh():
+        """Sergio asks for a re-read now. Still heavy: each device starts when it is free."""
+        now, queued = clock(), []
+        for n in db.nodes():
+            if n["simulated"] or "docs" not in n["modules"]:
+                continue
+            last = db.last_module_task("docs", n["id"])
+            if last and last["status"] in ("queued", "running"):
+                continue
+            tid = db.add_task("docs", {}, Weight.HEAVY.value, now, target=n["id"])
+            db.log(now, n["id"], "task_queued", {"task_id": tid, "module": "docs", "reason": "asked"})
+            queued.append(n["id"])
+        return {"queued": queued}
 
     @app.get("/api/docs", dependencies=[Depends(require_admin)])
     def docs_info(q: str = ""):

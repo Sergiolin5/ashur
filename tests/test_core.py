@@ -429,3 +429,14 @@ def test_documents_task_waits_for_inventory_and_repeats(env):
     assert app.state.docs_due() == []
     clock.now += 8 * 86400
     assert len(app.state.docs_due()) == 1
+
+
+def test_sergio_can_ask_for_a_documents_pass_now(env):
+    c, _ = env
+    h = register(c, modules=("inventory", "docs"), simulated=False)
+    register(c, device_id="other", modules=("inventory",), simulated=False)       # no docs: untouched
+    assert c.post("/api/docs/refresh").status_code == 401
+    assert c.post("/api/docs/refresh", headers=A).json() == {"queued": ["mac"]}
+    assert c.post("/api/docs/refresh", headers=A).json() == {"queued": []}        # already waiting: no pile-up
+    t = c.get("/nodes/mac/tasks/next?modules=docs", headers=h).json()
+    assert t["module"] == "docs"

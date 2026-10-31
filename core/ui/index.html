@@ -256,6 +256,8 @@
         <button type="button" id="docs-go">Buscar</button>
       </div>
       <div class="group" id="docs-hits" style="margin-top:12px" hidden></div>
+      <div class="group" style="margin-top:12px"><button class="link" id="docs-refresh" type="button">Releer documentos ahora</button></div>
+      <div class="note" id="docs-refresh-note" hidden></div>
       <div class="note">Ashur lee el texto de Word, Excel, PowerPoint, PDF y archivos de texto de los equipos que tengan el módulo docs, solo cuando están libres. Lo sensible (claves, bóvedas, perfiles del navegador) no se lee. La búsqueda es local: nada de esto sale a Claude salvo que marques «Compartir fragmentos» en un mensaje.</div>
     </section>
 
@@ -926,6 +928,15 @@
       } else box.hidden = true;
     } catch (e) {}
   }
+  $("docs-refresh").addEventListener("click", async () => {
+    const n = $("docs-refresh-note"); n.hidden = false; n.textContent = "Pidiéndolo…";
+    try {
+      const d = await (await api("api/docs/refresh", { method: "POST" })).json();
+      n.textContent = d.queued.length
+        ? "Pedido para " + d.queued.join(", ") + ". Cada equipo empieza cuando esté libre (10 minutos sin uso y, si es portátil, enchufado)."
+        : "Nada que pedir: ningún equipo con docs activo, o ya tienen un pase en curso.";
+    } catch (e) { n.textContent = "No pude pedirlo."; }
+  });
   $("docs-go").addEventListener("click", () => loadDocs($("docs-q").value.trim()));
   $("docs-q").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); loadDocs($("docs-q").value.trim()); } });
   async function loadSpace() {

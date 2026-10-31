@@ -41,7 +41,12 @@ def describe(event: str, d: dict) -> str:
         "conversation_summarized": f"resumió {d.get('messages')} mensajes de conversación ({d.get('provider')})",
         "summary_deleted": f"borró el resumen {d.get('summary_id')}",
         "summary_failed": f"no pude resumir la conversación: {d.get('error')}",
-        "update_started": f"actualización pedida: {d.get('from')} → {d.get('to')}",
+        "update_started": f"actualización pedida: {d.get('from')} → {d.get('to')}"
+                          + (" (desde fuera de la tailnet)" if d.get("door") == "public" else ""),
+        "update_locked": "5 códigos incorrectos al actualizar desde fuera: bloqueado 15 minutos",
+        "totp_setup_started": "empezaste a configurar el autenticador",
+        "totp_active": "el autenticador quedó activo",
+        "totp_removed": "quitaste el autenticador",
         "chat_key_created": f"creaste una clave de chat para ti ({d.get('guest_id')})",
         "persona_saved": f"guardó la persona {d.get('persona')}",
         "persona_deleted": f"borró la persona {d.get('persona')}",

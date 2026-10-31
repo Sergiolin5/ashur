@@ -181,7 +181,107 @@
            font-variant-numeric: tabular-nums; }
   .forget { flex: none; width: auto; margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 14px;
             font-weight: 500; background: var(--field); color: var(--red); }
+
+  /* ---- skin 2: glass, soft depth, gentle motion (colors and shapes only; structure is unchanged) ---- */
+  :root {
+    --bg: #F4F3FB; --row: rgba(255,255,255,.78); --tint: #6A5CF0; --tint-2: #A25BF5;
+    --separator: rgba(60,50,110,.12); --field: rgba(110,100,170,.10); --seg-on: #FFFFFF;
+    --card-border: rgba(255,255,255,.7); --shadow: 0 1px 2px rgba(40,30,90,.05), 0 10px 30px -12px rgba(60,40,140,.22);
+    --ease: cubic-bezier(.22,.8,.24,1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0B0A14; --row: rgba(30,28,48,.72); --tint: #8D82FF; --tint-2: #C58BFF;
+            --separator: rgba(160,150,220,.16); --field: rgba(150,140,220,.14); --seg-on: rgba(255,255,255,.14);
+            --card-border: rgba(255,255,255,.07); --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px -14px rgba(0,0,0,.7); }
+  }
+  html { background: var(--bg); }
+  body { background:
+      radial-gradient(60rem 36rem at 12% -8%, color-mix(in srgb, var(--tint) 20%, transparent), transparent 60%),
+      radial-gradient(48rem 30rem at 100% 4%, color-mix(in srgb, var(--tint-2) 16%, transparent), transparent 62%),
+      var(--bg);
+    background-attachment: fixed; }
+  h1 { font-size: 40px; letter-spacing: -0.02em;
+       background: linear-gradient(100deg, var(--label) 20%, var(--tint) 70%, var(--tint-2));
+       -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; }
+  .subtitle .live { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); animation: pulse 2.4s var(--ease) infinite; }
+  .subtitle.stale .live, .subtitle.locked .live { animation: none; box-shadow: none; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); }
+                     70%,100% { box-shadow: 0 0 0 8px transparent; } }
+
+  .group { border-radius: 20px; border: 1px solid var(--card-border); box-shadow: var(--shadow);
+           -webkit-backdrop-filter: saturate(160%) blur(18px); backdrop-filter: saturate(160%) blur(18px); }
+  h2 { margin-left: 18px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  .row { transition: background-color .25s var(--ease); }
+  .row:hover { background: color-mix(in srgb, var(--tint) 5%, transparent); }
+  .row .title { font-weight: 500; }
+  .dot { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent); transition: background-color .4s var(--ease); }
+  .dot.full { box-shadow: 0 0 10px color-mix(in srgb, var(--green) 70%, transparent); }
+  .dot.light { box-shadow: 0 0 10px color-mix(in srgb, var(--amber) 60%, transparent); }
+
+  .meters { gap: 10px; flex-wrap: nowrap; }
+  .meter { position: relative; padding-bottom: 5px; flex: 1 1 0; min-width: 0; white-space: nowrap; }
+  .meter::before, .meter::after { content: ""; position: absolute; left: 0; bottom: 0; height: 3px; border-radius: 3px; }
+  .meter::before { right: 0; background: var(--field); }
+  .meter::after { width: calc(var(--v, 0) * 1%); background: linear-gradient(90deg, var(--tint), var(--tint-2));
+                  transition: width .9s var(--ease); }
+  .meter.hot::after { background: linear-gradient(90deg, var(--amber), var(--red)); }
+  .meter.hot { color: var(--red); }
+
+  .work .count { background: linear-gradient(100deg, var(--label), var(--tint)); -webkit-background-clip: text;
+                 background-clip: text; -webkit-text-fill-color: transparent; }
+  .work .count small { -webkit-text-fill-color: var(--secondary); }
+  .bar { height: 4px; }
+  .bar i { background: linear-gradient(90deg, transparent, var(--tint), var(--tint-2), transparent); width: 45%; }
+
+  button { background: linear-gradient(135deg, var(--tint), var(--tint-2)); border-radius: 14px;
+           box-shadow: 0 6px 16px -8px color-mix(in srgb, var(--tint) 80%, transparent);
+           transition: transform .18s var(--ease), box-shadow .25s var(--ease), filter .25s var(--ease), opacity .25s; }
+  button:hover { filter: brightness(1.06); }
+  button:active { transform: scale(.975); box-shadow: none; }
+  button:disabled { opacity: .55; filter: saturate(.6); }
+  .link, .forget, .seg button { background: none; box-shadow: none; }
+  .link:hover { filter: none; background: color-mix(in srgb, var(--tint) 7%, transparent); }
+  .forget { background: var(--field); }
+  input, textarea, select { transition: box-shadow .25s var(--ease), background-color .25s var(--ease); }
+  input:focus, textarea:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tint) 55%, transparent); }
+  .codebox { display: block; margin: 12px 16px 0; width: calc(100% - 32px); text-align: center; letter-spacing: .4em;
+             font-size: 22px; font-variant-numeric: tabular-nums; }
+
+  /* tabs: a pill that slides under the selected one */
+  .seg { position: sticky; top: max(8px, env(safe-area-inset-top)); z-index: 5; padding: 3px; border-radius: 16px;
+         background: var(--row); border: 1px solid var(--card-border); box-shadow: var(--shadow);
+         -webkit-backdrop-filter: saturate(160%) blur(18px); backdrop-filter: saturate(160%) blur(18px); }
+  .seg::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 3);
+                 border-radius: 13px; background: var(--seg-on); box-shadow: 0 2px 8px rgba(40,30,90,.14);
+                 transform: translateX(calc(var(--i, 0) * 100%)); transition: transform .45s var(--ease); }
+  .seg button { position: relative; padding: 9px 0; border-radius: 13px; color: var(--secondary);
+                transition: color .3s var(--ease); }
+  .seg button[aria-selected="true"] { background: none; box-shadow: none; color: var(--label); }
+
+  /* views and sections glide in when shown */
+  #chat, #dashboard, #settings { animation: view .45s var(--ease) both; }
+  @keyframes view { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  #dashboard section, #settings section { animation: rise .6s var(--ease) both; }
+  #dashboard section:nth-child(2), #settings section:nth-child(2) { animation-delay: .04s; }
+  #dashboard section:nth-child(3), #settings section:nth-child(3) { animation-delay: .08s; }
+  #dashboard section:nth-child(4), #settings section:nth-child(4) { animation-delay: .12s; }
+  #dashboard section:nth-child(n+5), #settings section:nth-child(n+5) { animation-delay: .16s; }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+
+  .bubble { animation: pop .35s var(--ease) both; box-shadow: 0 1px 2px rgba(40,30,90,.06); }
+  @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; transform: none; } }
+  .bubble.me { background: linear-gradient(135deg, var(--tint), var(--tint-2)); border-radius: 20px 20px 6px 20px; }
+  .bubble.ashur { background: var(--row); border: 1px solid var(--card-border); border-radius: 20px 20px 20px 6px;
+                  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  .bubble.note { box-shadow: none; }
+  .composer { border-top: 1px solid var(--card-border); }
+  .composer textarea { border-radius: 22px; background: var(--row); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
 </style>
+
 </head>
 <body>
 <main>
@@ -279,6 +379,12 @@
       <h2>Actualización</h2>
       <div class="group" id="update"></div>
       <div class="note" id="update-note" hidden></div>
+    </section>
+
+    <section id="totp-section">
+      <h2>Autenticador</h2>
+      <div class="group" id="totp"></div>
+      <div class="note">Para actualizar desde fuera de la tailnet hacen falta tu clave de administrador y un código de esta app (Google Authenticator, Microsoft Authenticator, Contraseñas del iPhone…). Se configura solo estando en la tailnet.</div>
     </section>
 
     <section>
@@ -383,6 +489,7 @@
       const w = el("div", "meters");
       for (const [name, v] of opts.meters) {
         const c = el("span", "meter" + (v !== null && v >= 90 ? " hot" : ""), name + " " + (v === null ? "sin dato" : Math.round(v) + "%"));
+        c.style.setProperty("--v", v === null ? 0 : Math.min(100, Math.max(0, v)));
         w.append(c);
       }
       m.append(w);
@@ -630,6 +737,7 @@
   function showTab(t) {
     tab = t;
     try { localStorage.setItem("ashur.tab", t); } catch (e) {}
+    $("tabs").style.setProperty("--i", { chat: 0, status: 1, settings: 2 }[t] || 0);
     $("tab-chat").setAttribute("aria-selected", t === "chat");
     $("tab-status").setAttribute("aria-selected", t === "status");
     $("tab-settings").setAttribute("aria-selected", t === "settings");
@@ -637,7 +745,7 @@
     $("dashboard").hidden = t !== "status";
     $("settings").hidden = t !== "settings";
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); loadSpace(); }
+    if (t === "settings") { loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
     if (t === "chat") loadVoices();
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
@@ -672,7 +780,7 @@
   async function api(path, opts = {}) {
     const r = await fetch(path, { ...opts, cache: "no-store",
       headers: { "X-Admin-Key": key, "Content-Type": "application/json", ...(opts.headers || {}) } });
-    if (r.status === 401) { showSignin("La clave no es correcta."); throw new Error("401"); }
+    if (r.status === 401 && !opts.keepSession) { showSignin("La clave no es correcta."); throw new Error("401"); }
     return r;
   }
   async function loadHistory() {
@@ -838,6 +946,7 @@
         note.hidden = true; return;
       }
       const u = await r.json();
+      const outside = u.door === "public";
       const last = u.updater && u.updater.last;
       const rows = [row({ title: "Núcleo v" + u.current,
         detail: u.latest ? (u.available ? "Hay una versión nueva: v" + u.latest : "Es la última publicada") : "No pude consultar la última versión" })];
@@ -855,13 +964,25 @@
       if (updatingTo || (u.updater && u.updater.busy)) {
         rows.push(row({ title: "Actualizando a v" + (updatingTo || "…"), detail: "El panel se desconecta un momento y vuelve solo." }));
         setTimeout(loadUpdate, 5000);
+      } else if (u.available && u.updater && outside && !u.totp) {
+        rows.push(row({ title: "Desde fuera de la tailnet", detail: "Hay una versión nueva (v" + u.latest + "). Para instalarla desde aquí, primero configura el autenticador estando en la tailnet." }));
+        rows[rows.length - 1].querySelector(".detail").style.whiteSpace = "normal";
       } else if (u.available && u.updater) {
+        let codeBox = null;
+        if (outside) {
+          codeBox = el("input"); codeBox.type = "text"; codeBox.inputMode = "numeric"; codeBox.autocomplete = "one-time-code";
+          codeBox.maxLength = 6; codeBox.placeholder = "Código del autenticador"; codeBox.setAttribute("aria-label", "Código del autenticador");
+          codeBox.className = "codebox";
+          rows.push(codeBox);
+        }
         const b = el("button", null, "Actualizar a v" + u.latest); b.type = "button";
         b.style.margin = "12px 16px"; b.style.width = "calc(100% - 32px)";   // 100% plus margins overflowed
         b.addEventListener("click", async () => {
           b.disabled = true;
           try {
-            const p = await api("api/update", { method: "POST", body: JSON.stringify({ version: u.latest }) });
+            const p = await api("api/update", { method: "POST", keepSession: true,
+              headers: codeBox ? { "X-Totp": codeBox.value.trim() } : {},
+              body: JSON.stringify({ version: u.latest }) });
             if (!p.ok) { const d = await p.json(); note.textContent = d.detail || "No se pudo iniciar."; note.hidden = false; b.disabled = false; return; }
             updatingTo = u.latest; loadUpdate();
           } catch (e) { b.disabled = false; }
@@ -878,6 +999,49 @@
     } catch (e) {
       if (updatingTo) setTimeout(loadUpdate, 5000);           // the core is restarting: keep asking
     }
+  }
+
+  async function loadTotp() {
+    const g = $("totp"), box = [];
+    try {
+      const s = await (await api("api/totp")).json();
+      const outside = (await (await fetch("health", { cache: "no-store" })).json()).door === "public";
+      if (s.active) {
+        const r = row({ title: "Activo", detail: "Se pide un código para actualizar desde fuera de la tailnet." });
+        if (!outside) {
+          const b = el("button", "forget", "Quitar"); b.type = "button";
+          b.addEventListener("click", async () => { b.disabled = true; await api("api/totp", { method: "DELETE" }); loadTotp(); loadUpdate(); });
+          r.append(b);
+        }
+        box.push(r);
+      } else if (outside) {
+        box.push(row({ title: "Sin configurar", detail: "Se configura desde la tailnet." }));
+      } else {
+        const b = el("button", null, "Configurar el autenticador"); b.type = "button";
+        b.style.margin = "12px 16px"; b.style.width = "calc(100% - 32px)";
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          const d = await (await api("api/totp/setup", { method: "POST" })).json();
+          const info = el("div", "row"); const m = el("div", "main");
+          m.append(el("div", "title", "1. Agrégalo a tu app"));
+          const a = el("a", null, "Abrir en el autenticador"); a.href = d.uri; a.style.display = "block"; a.style.margin = "6px 0";
+          m.append(a);
+          const sec = el("div", "detail", "O escribe esta clave a mano: " + d.secret.match(/.{1,4}/g).join(" "));
+          sec.style.whiteSpace = "normal"; sec.style.wordBreak = "break-all"; m.append(sec);
+          m.append(el("div", "title", "2. Escribe el código que te muestra"));
+          const inp = el("input"); inp.type = "text"; inp.inputMode = "numeric"; inp.maxLength = 6; inp.placeholder = "000000"; inp.className = "codebox";
+          const ok = el("button", null, "Confirmar"); ok.type = "button"; ok.style.marginTop = "8px";
+          const msg = el("div", "note", ""); msg.hidden = true;
+          ok.addEventListener("click", async () => {
+            const p = await api("api/totp/confirm", { method: "POST", keepSession: true, body: JSON.stringify({ code: inp.value.trim() }) });
+            if (p.ok) { loadTotp(); loadUpdate(); } else { msg.textContent = (await p.json()).detail; msg.hidden = false; }
+          });
+          m.append(inp, ok, msg); info.append(m); g.replaceChildren(info);
+        });
+        box.push(b);
+      }
+      g.replaceChildren(...box);
+    } catch (e) {}
   }
 
   async function loadGuests() {

@@ -74,8 +74,11 @@ def test_update_is_refused_on_the_public_door_and_reports_versions(tmp_path):
     assert c.post("/api/update", headers=A, json={"version": "0.99.0"}).status_code == 503
     assert c.post("/api/update", headers=A, json={"version": "latest"}).status_code == 422
     pub = TestClient(app, base_url="http://testserver:8001")
+    # no authenticator set up: updating from outside stays shut, reading versions is fine
     assert pub.post("/api/update", headers=A, json={"version": "0.99.0"}).status_code == 403
-    assert pub.get("/api/update", headers=A).status_code == 403
+    assert pub.get("/api/update", headers=A).json()["door"] == "public"
+    assert pub.post("/api/totp/setup", headers=A).status_code == 403          # set up only on the tailnet
+    assert pub.delete("/api/totp", headers=A).status_code == 403
 
 
 def test_home_screen_app_files_are_served_on_both_doors(tmp_path):
@@ -102,3 +105,72 @@ def test_core_serves_installers_and_code_on_the_tailnet_only(tmp_path):
     pub = TestClient(app, base_url="http://testserver:8001")
     assert pub.get("/install/windows.ps1").status_code == 404
     assert pub.get("/install/code.tar.gz").status_code == 404
+
+
+# --- updating from outside the tailnet: admin key + authenticator code ---------------------
+def _public_with_totp(tmp_path, clock=None, latest="0.99.0"):
+    from core.totp import code_at
+    from sim.scenario import VirtualClock
+    clock = clock or VirtualClock()
+    clock.now = 1_700_000_000.0
+    app = create_app(str(tmp_path / "x.db"), "e", "a", clock=clock, sweep_every_s=None, public_port=8001,
+                     latest_fn=lambda: latest, updater_url="http://127.0.0.1:1")
+    tail, pub = TestClient(app), TestClient(app, base_url="http://testserver:8001")
+    secret = tail.post("/api/totp/setup", headers=A).json()["secret"]
+    return app, tail, pub, secret, clock, lambda off=0: code_at(secret, int(clock.now // 30) + off)
+
+
+def test_totp_matches_the_rfc_test_vector():
+    from core.totp import code_at
+    assert code_at("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 59 // 30) == "287082"
+
+
+def test_totp_is_inactive_until_a_code_confirms_it(tmp_path):
+    app, tail, pub, secret, clock, code = _public_with_totp(tmp_path)
+    assert tail.get("/api/totp", headers=A).json() == {"active": False}
+    assert tail.post("/api/totp/confirm", headers=A, json={"code": "000000"}).status_code == 422
+    assert tail.post("/api/totp/confirm", headers=A, json={"code": code()}).status_code == 200
+    assert tail.get("/api/totp", headers=A).json() == {"active": True}
+    assert "otpauth://" in tail.post("/api/totp/setup", headers=A).json()["uri"]
+
+
+def test_public_update_needs_key_plus_code_and_only_the_newest_version(tmp_path):
+    app, tail, pub, secret, clock, code = _public_with_totp(tmp_path)
+    tail.post("/api/totp/confirm", headers=A, json={"code": code()})
+    body = {"version": "0.99.0"}
+    assert pub.post("/api/update", json=body).status_code == 401                         # no admin key
+    assert pub.post("/api/update", headers=A, json=body).status_code == 401              # key but no code
+    assert pub.post("/api/update", headers={**A, "X-Totp": "123456"}, json=body).status_code == 401
+    clock.now += 30                                                                      # fresh step: the confirm code is spent
+    ok = pub.post("/api/update", headers={**A, "X-Totp": code()}, json={"version": "0.98.0"})
+    assert ok.status_code == 409 and "última versión" in ok.json()["detail"]             # not the newest: refused
+    clock.now += 30
+    r = pub.post("/api/update", headers={**A, "X-Totp": code()}, json=body)
+    assert r.status_code == 503                                                          # accepted; the fake updater is absent
+    assert pub.post("/api/update", headers={**A, "X-Totp": code()}, json=body).status_code == 401   # same code twice: replay
+
+
+def test_a_guest_or_chat_key_cannot_update_from_outside(tmp_path):
+    app, tail, pub, secret, clock, code = _public_with_totp(tmp_path)
+    tail.post("/api/totp/confirm", headers=A, json={"code": code()})
+    g = tail.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()["key"]
+    clock.now += 30
+    assert pub.post("/api/update", headers={"X-Admin-Key": g, "X-Totp": code()}, json={"version": "0.99.0"}).status_code == 401
+
+
+def test_five_wrong_codes_lock_public_updates(tmp_path):
+    app, tail, pub, secret, clock, code = _public_with_totp(tmp_path)
+    tail.post("/api/totp/confirm", headers=A, json={"code": code()})
+    clock.now += 30
+    for _ in range(5):
+        assert pub.post("/api/update", headers={**A, "X-Totp": "000000"}, json={"version": "0.99.0"}).status_code == 401
+    r = pub.post("/api/update", headers={**A, "X-Totp": code()}, json={"version": "0.99.0"})
+    assert r.status_code == 429                                                          # even the right code waits
+    clock.now += 901
+    assert pub.post("/api/update", headers={**A, "X-Totp": code()}, json={"version": "0.99.0"}).status_code == 503
+
+
+def test_tailnet_update_needs_no_code(tmp_path):
+    app, tail, pub, secret, clock, code = _public_with_totp(tmp_path)
+    tail.post("/api/totp/confirm", headers=A, json={"code": code()})
+    assert tail.post("/api/update", headers=A, json={"version": "0.99.0"}).status_code == 503

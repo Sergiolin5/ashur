@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from core.brain import (SECRET_WORDS, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
                         looks_like_secret, month_start)
 from core.db import DB, hash_token
+from core.totp import Totp, uri as totp_uri
 from shared.protocol import (
     OFFLINE_AFTER_S, Heartbeat, DocsBatch, InventoryBatch, Mode, NewTask, NodeStatus,
     RegisterRequest, RegisterResponse, Task, TaskResult, Weight,
@@ -111,7 +112,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.18.5", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.19.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -135,9 +136,9 @@ def create_app(
             allowed = path in ("/", "/health") + APP_FILES or path.startswith("/api/")
             if not allowed:
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
-            if path.startswith("/api/update"):
-                # updating drives Docker on the server: never from the internet, key or not
-                return JSONResponse({"detail": "Las actualizaciones solo se hacen desde la tailnet."},
+            if path.startswith("/api/totp") and request.method != "GET":
+                # setting up or removing the second key: only from the tailnet
+                return JSONResponse({"detail": "El autenticador solo se configura desde la tailnet."},
                                     status_code=403)
             if path.startswith("/api/"):
                 now = clock()
@@ -761,15 +762,20 @@ def create_app(
         except Exception as e:
             return 0, {"detail": f"El actualizador no responde ({type(e).__name__}). ¿Está corriendo ashur-updater?"}
 
+    totp = Totp(data_dir / "totp.json")
+    totp_failures: list[float] = []
+    totp_locked = [0.0]
+
     @app.get("/api/update", dependencies=[Depends(require_admin)])
-    def update_info():
+    def update_info(request: Request):
         latest = latest_version()
         code, st = ask_updater("GET", "/status")
         shipped = node_code()[0]
         nodes = [{"id": n["id"], "version": db.code_label(n.get("code_version")),
                   "current": bool(shipped) and n.get("code_version") == shipped}
                  for n in db.nodes() if not n["simulated"]]
-        return {"current": app.version, "latest": latest, "nodes": nodes,
+        return {"door": "public" if on_public_port(request.scope) else "tailnet", "totp": totp.active,
+                "current": app.version, "latest": latest, "nodes": nodes,
                 "nodes_version": db.code_label(shipped),
                 "available": bool(latest and vtuple(latest) > vtuple(app.version)),
                 "updater": st if code == 200 else None,
@@ -779,11 +785,59 @@ def create_app(
         version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
 
     @app.post("/api/update", dependencies=[Depends(require_admin)])
-    def update_start(body: UpdateIn):
+    def update_start(body: UpdateIn, request: Request, x_totp: str = Header(default="")):
+        if on_public_port(request.scope):
+            # from the internet, updating drives Docker on the server: admin key AND an authenticator
+            # code, only to the newest published version (no downgrades, no arbitrary versions)
+            now = clock()
+            if not totp.active:
+                raise HTTPException(403, "Para actualizar desde fuera de la tailnet primero configura el "
+                                         "autenticador (Ajustes, estando en la tailnet).")
+            if now < totp_locked[0]:
+                raise HTTPException(429, "Demasiados códigos incorrectos. Inténtalo en 15 minutos o usa la tailnet.")
+            if not totp.check(x_totp, now):
+                totp_failures[:] = [t for t in totp_failures if now - t < 900] + [now]
+                if len(totp_failures) >= 5:
+                    totp_locked[0] = now + 900
+                    totp_failures.clear()
+                    db.log(now, None, "update_locked", {"minutes": 15})
+                raise HTTPException(401, "Código del autenticador incorrecto o ya usado.")
+            latest = latest_version()
+            if not latest or body.version != latest or vtuple(latest) <= vtuple(app.version):
+                raise HTTPException(409, "Desde fuera solo se puede instalar la última versión publicada.")
         code, st = ask_updater("POST", "/update", {"version": body.version})
         if code != 202:
             raise HTTPException(409 if code else 503, st.get("detail") or "No se pudo iniciar.")
-        db.log(clock(), None, "update_started", {"from": app.version, "to": body.version})
+        db.log(clock(), None, "update_started",
+               {"from": app.version, "to": body.version,
+                "door": "public" if on_public_port(request.scope) else "tailnet"})
+        return {"ok": True}
+
+    # --- authenticator (second key for updating from outside; set up on the tailnet) ---
+    @app.get("/api/totp", dependencies=[Depends(require_admin)])
+    def totp_state():
+        return {"active": totp.active}
+
+    @app.post("/api/totp/setup", dependencies=[Depends(require_admin)])
+    def totp_setup():
+        secret = totp.start()
+        db.log(clock(), None, "totp_setup_started", {})
+        return {"secret": secret, "uri": totp_uri(secret)}
+
+    class TotpIn(BaseModel):
+        code: str = Field(max_length=12)
+
+    @app.post("/api/totp/confirm", dependencies=[Depends(require_admin)])
+    def totp_confirm(body: TotpIn):
+        if not totp.check(body.code, clock(), confirm=True):
+            raise HTTPException(422, "Ese código no corresponde. Revisa que el autenticador tenga la hora automática.")
+        db.log(clock(), None, "totp_active", {})
+        return {"ok": True}
+
+    @app.delete("/api/totp", dependencies=[Depends(require_admin)])
+    def totp_off():
+        totp.disable()
+        db.log(clock(), None, "totp_removed", {})
         return {"ok": True}
 
     @app.get("/health")

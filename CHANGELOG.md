@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.19.0 | 2026-10-31 | New look: glass cards, soft depth, a sliding tab pill, views that glide in, live CPU/RAM/GPU bars (motion off for people who ask the system for less motion). Updating from outside the tailnet is now possible with the admin key **plus an authenticator code** (TOTP, set up in Ajustes → Autenticador on the tailnet only); from outside only the newest published version can be installed, a code works once, 5 wrong codes lock it for 15 minutes, and guest or chat keys never qualify |
 | 0.18.5 | 2026-10-31 | Ajustes → Archivos duplicados: «Repasar inventario ahora» queues an inventory rescan on every device that has `inventory` (still waits for the device to be free), so duplicates show up without waiting 7 days |
 | 0.18.4 | 2026-10-31 | `docs` reads only document formats (Word, Excel, PowerPoint, PDF, txt, md, csv, tsv, tex, rst, org); code and configuration (json, xml, html, ini, scripts) are no longer read and leave the index on the next pass. The largest-files list shows files only, not system folder summaries |
 | 0.18.3 | 2026-10-31 | A documents pass now reports real progress to the panel ("N documentos encontrados, buscando más", then "X de N documentos leídos") instead of "Empezando" for the whole pass |

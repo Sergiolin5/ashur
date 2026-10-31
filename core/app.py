@@ -110,13 +110,14 @@ def create_app(
                         app.state.inventory_due()
                         app.state.docs_due()
                         app.state.diary_due()
+                        app.state.notify_due()
             task = asyncio.create_task(loop())
         yield
         if task:
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.26.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.27.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -344,7 +345,7 @@ def create_app(
             return {"ok": True, "requeued": True}
         db.finish_task(task_id, res.ok, res.model_dump(), now)
         db.log(now, t["node_id"], "task_done" if res.ok else "task_failed",
-               {"task_id": task_id, "error": res.error})
+               {"task_id": task_id, "module": t["module"], "error": res.error})
         return {"ok": True}
 
     @app.post("/nodes/{node_id}/inventory")
@@ -884,6 +885,103 @@ def create_app(
         db.set_setting("diary_enabled", "1" if body.enabled else "0")
         db.set_setting("diary_hour", str(body.hour))
         return diary_settings()
+
+    # --- system notifications: tasks, devices, updates and spending, read from the session log ---
+    NOTIFY_CATS = {"tasks": "Tareas largas terminadas o fallidas", "devices": "Un equipo lleva rato desconectado (y cuando vuelve)",
+                   "update": "Hay una versión nueva de Ashur", "budget": "El gasto con Claude llega al 80% del mes"}
+    NOTIFY_WATCHED = ("inventory", "docs")                       # background jobs worth a tap on the shoulder
+
+    def notify_settings() -> dict:
+        return {"cats": {k: db.setting("notify_" + k, "1") == "1" for k in NOTIFY_CATS},
+                "quiet": {"enabled": db.setting("notify_quiet", "1") == "1",
+                          "from": int(db.setting("notify_quiet_from", "23")), "to": int(db.setting("notify_quiet_to", "7"))},
+                "labels": NOTIFY_CATS}
+
+    class NotifyIn(BaseModel):
+        cats: dict[str, bool] = {}
+        quiet_enabled: Optional[bool] = None
+        quiet_from: Optional[int] = Field(default=None, ge=0, le=23)
+        quiet_to: Optional[int] = Field(default=None, ge=0, le=23)
+
+    @app.get("/api/notify", dependencies=[Depends(require_self)])
+    def notify_get():
+        return notify_settings()
+
+    @app.put("/api/notify", dependencies=[Depends(require_self)])
+    def notify_put(body: NotifyIn):
+        for k, v in body.cats.items():
+            if k in NOTIFY_CATS:
+                db.set_setting("notify_" + k, "1" if v else "0")
+        if body.quiet_enabled is not None:
+            db.set_setting("notify_quiet", "1" if body.quiet_enabled else "0")
+        if body.quiet_from is not None:
+            db.set_setting("notify_quiet_from", str(body.quiet_from))
+        if body.quiet_to is not None:
+            db.set_setting("notify_quiet_to", str(body.quiet_to))
+        return notify_settings()
+
+    def _in_quiet(now: float, q: dict) -> bool:
+        if not q["enabled"]:
+            return False
+        h = dt.datetime.fromtimestamp(now, BOGOTA).hour
+        a, b = q["from"], q["to"]
+        return (a <= h < b) if a < b else (h >= a or h < b)
+
+    def notify_due(sync: bool = False) -> list[str]:
+        """Turn what happened in the log into taps on the shoulder. While he sleeps nothing is sent
+        and nothing is skipped: the news waits and arrives as one message when quiet hours end."""
+        cfg = notify_settings()
+        if not db.push_subs():
+            return []
+        now = clock()
+        cur = db.setting("notify_cursor", "")
+        if cur == "":                                              # first run: do not announce the past
+            db.set_setting("notify_cursor", str(db.log_max_rowid()))
+            return []
+        if _in_quiet(now, cfg["quiet"]):
+            return []
+        lines: list[str] = []
+        events = db.log_since(int(cur))
+        for ev in events:
+            d, node = ev["detail"], ev["node_id"] or "un equipo"
+            if ev["event"] == "task_failed" and cfg["cats"]["tasks"]:
+                lines.append(f"Falló {d.get('module') or 'una tarea'} en {node}.")
+            elif ev["event"] == "task_done" and cfg["cats"]["tasks"] and d.get("module") in NOTIFY_WATCHED:
+                lines.append(f"Terminó {d['module']} en {node}.")
+        if events:
+            db.set_setting("notify_cursor", str(events[-1]["rid"]))
+        if cfg["cats"]["devices"]:
+            told = set(filter(None, db.setting("notify_offline", "").split(",")))
+            for n in db.nodes():
+                if n["simulated"]:
+                    continue
+                gone = n["mode"] == Mode.OFFLINE.value and n["last_seen"] is not None and now - n["last_seen"] > OFFLINE_AFTER_S + 600
+                if gone and n["id"] not in told:
+                    told.add(n["id"]); lines.append(f"{n['id']} lleva un rato desconectado.")
+                elif n["mode"] != Mode.OFFLINE.value and n["id"] in told:
+                    told.discard(n["id"]); lines.append(f"{n['id']} volvió.")
+            db.set_setting("notify_offline", ",".join(sorted(told)))
+        if cfg["cats"]["update"]:
+            latest = latest_version()
+            if latest and vtuple(latest) > vtuple(app.version) and db.setting("notify_update_seen", "") != latest:
+                db.set_setting("notify_update_seen", latest); lines.append(f"Hay una versión nueva de Ashur: {latest}.")
+        if cfg["cats"]["budget"] and brain.s.monthly_budget_usd > 0:
+            month = dt.datetime.fromtimestamp(now, BOGOTA).strftime("%Y-%m")
+            if brain.spent_this_month() >= 0.8 * brain.s.monthly_budget_usd and db.setting("notify_budget_month", "") != month:
+                db.set_setting("notify_budget_month", month)
+                lines.append("El gasto con Claude llegó al 80% del tope de este mes.")
+        if not lines:
+            return []
+        body = lines[0] if len(lines) == 1 else f"{len(lines)} novedades: " + " ".join(lines[:3]) + (" …" if len(lines) > 3 else "")
+        payload = {"title": "Ashur", "body": body, "url": "/#estado", "tag": "system"}
+        if sync:
+            _push_all(payload)
+        else:
+            threading.Thread(target=_push_all, args=(payload,), daemon=True, name="notify-push").start()
+        db.log(now, None, "notified", {"items": len(lines)})
+        return lines
+
+    app.state.notify_due = notify_due
 
     def _push_all(payload: dict) -> dict:
         sent = gone = 0

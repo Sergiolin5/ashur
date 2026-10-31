@@ -48,6 +48,7 @@ def describe(event: str, d: dict) -> str:
         "totp_active": "el autenticador quedó activo",
         "totp_removed": "quitaste el autenticador",
         "diary_entry": f"escribiste en el diario ({d.get('chars')} caracteres)",
+        "notified": f"te avisé de {d.get('items')} novedad(es)",
         "diary_deleted": "borraste una entrada del diario",
         "diary_reminder": "te recordé escribir en el diario" + (" (segundo aviso)" if d.get("which") == "second" else ""),
         "push_subscribed": "activaste los avisos en un dispositivo",

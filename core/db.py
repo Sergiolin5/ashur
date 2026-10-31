@@ -189,6 +189,16 @@ class DB:
             except Exception:
                 pass
 
+    def log_max_rowid(self) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM session_log").fetchone()[0]
+
+    def log_since(self, rowid: int, limit: int = 500) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT rowid AS rid, * FROM session_log WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                                     (rowid, limit)).fetchall()
+        return [dict(r) | {"detail": json.loads(r["detail"])} for r in rows]
+
     def log_rows(self, limit: int = 200) -> list[dict]:
         with self.lock:
             rows = self.conn.execute(

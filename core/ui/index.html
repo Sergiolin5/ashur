@@ -532,6 +532,12 @@
     </section>
 
     <section>
+      <h2>Avisos del sistema</h2>
+      <div class="group" id="n-group"></div>
+      <div class="note">Ashur te avisa de lo que importa y junta varias novedades en un solo mensaje. De noche no suena: lo pendiente llega junto cuando termina el descanso.</div>
+    </section>
+
+    <section>
       <h2>Entradas</h2>
       <div id="d-entries"></div>
     </section>
@@ -1015,6 +1021,7 @@
   let tab = "chat";
   try { tab = localStorage.getItem("ashur.tab") || "chat"; } catch (e) {}
   if (location.hash === "#diario") tab = "diary";
+  if (location.hash === "#estado") tab = "status";
   let unlocked = false, historyLoaded = false;
   function unlock() {
     if (unlocked) return;                       // only the first successful load switches views
@@ -1619,6 +1626,7 @@
     try {
       const r = await api("api/diary");
       if (r.ok) renderDiary(await r.json());
+      loadNotify();
     } catch (e) {}
   }
   $("d-save").addEventListener("click", async () => {
@@ -1636,6 +1644,24 @@
       er.textContent = "No se pudo guardar (sin conexión con el núcleo). Tu texto sigue aquí y en el borrador de este dispositivo; reintenta.";
     } finally { $("d-save").disabled = false; }
   });
+
+  async function loadNotify() {
+    try {
+      const r = await api("api/notify"); if (!r.ok) return;
+      const n = await r.json(), nodes = [];
+      const put = (body) => api("api/notify", { method: "PUT", body: JSON.stringify(body) }).then(loadNotify);
+      for (const [k, label] of Object.entries(n.labels)) {
+        const rw = row({ title: label }), sw = el("input"); sw.type = "checkbox"; sw.checked = n.cats[k];
+        sw.setAttribute("aria-label", label); sw.addEventListener("change", () => put({ cats: { [k]: sw.checked } }));
+        rw.append(sw); nodes.push(rw);
+      }
+      const q = row({ title: "Descanso nocturno", detail: n.quiet.enabled ? "Sin avisos de " + n.quiet.from + ":00 a " + n.quiet.to + ":00" : "Apagado" });
+      const qs = el("input"); qs.type = "checkbox"; qs.checked = n.quiet.enabled; qs.setAttribute("aria-label", "Descanso nocturno");
+      qs.addEventListener("change", () => put({ quiet_enabled: qs.checked }));
+      q.append(qs); nodes.push(q);
+      $("n-group").replaceChildren(...nodes);
+    } catch (e) {}
+  }
 
   // notifications: service worker + Web Push
   const pushOK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -1710,8 +1736,12 @@
     } catch (e) { note.textContent = "No se pudo enviar la prueba."; }
   }
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.addEventListener("message", (ev) => { if (ev.data && ev.data.open === "/#diario" && unlocked) showTab("diary"); });
-    window.addEventListener("hashchange", () => { if (location.hash === "#diario" && unlocked) showTab("diary"); });
+    navigator.serviceWorker.addEventListener("message", (ev) => {
+      const o = ev.data && ev.data.open;
+      if (unlocked && o === "/#diario") showTab("diary");
+      if (unlocked && o === "/#estado") showTab("status");
+    });
+    window.addEventListener("hashchange", () => { if (unlocked && location.hash === "#diario") showTab("diary"); if (unlocked && location.hash === "#estado") showTab("status"); });
     swReg();
   }
 

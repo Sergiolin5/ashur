@@ -182,100 +182,158 @@
   .forget { flex: none; width: auto; margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 14px;
             font-weight: 500; background: var(--field); color: var(--red); }
 
-  /* ---- skin 2: glass, soft depth, gentle motion (colors and shapes only; structure is unchanged) ---- */
+  /* ---- skin 3: liquid glass. Light refracting through layered panes; calm, with motion only where it helps ---- */
   :root {
-    --bg: #F4F3FB; --row: rgba(255,255,255,.78); --tint: #6A5CF0; --tint-2: #A25BF5;
-    --separator: rgba(60,50,110,.12); --field: rgba(110,100,170,.10); --seg-on: #FFFFFF;
-    --card-border: rgba(255,255,255,.7); --shadow: 0 1px 2px rgba(40,30,90,.05), 0 10px 30px -12px rgba(60,40,140,.22);
-    --ease: cubic-bezier(.22,.8,.24,1);
+    --bg: #EEF0FA; --label: #14142B; --secondary: #6B6B85; --tint: #6A5CF0; --tint-2: #3FA7FF; --tint-3: #C35BFF;
+    --separator: rgba(40,40,100,.10); --field: rgba(90,90,170,.09); --seg-on: rgba(255,255,255,.92);
+    --glass: linear-gradient(145deg, rgba(255,255,255,.72), rgba(255,255,255,.38));
+    --glass-edge: rgba(255,255,255,.75);
+    --glass-shadow: inset 0 1px 0 rgba(255,255,255,.9), inset 0 -1px 0 rgba(255,255,255,.25), 0 1px 2px rgba(40,40,110,.05), 0 18px 40px -18px rgba(60,50,160,.38);
+    --ease: cubic-bezier(.22,.8,.24,1); --spring: cubic-bezier(.34,1.4,.5,1);
+    --gap: clamp(14px, 2.4vw, 22px); --pad: clamp(14px, 3.2vw, 20px);
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #0B0A14; --row: rgba(30,28,48,.72); --tint: #8D82FF; --tint-2: #C58BFF;
-            --separator: rgba(160,150,220,.16); --field: rgba(150,140,220,.14); --seg-on: rgba(255,255,255,.14);
-            --card-border: rgba(255,255,255,.07); --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px -14px rgba(0,0,0,.7); }
+    :root { --bg: #07060F; --label: #F3F2FF; --secondary: #9A98B8; --tint: #8D82FF; --tint-2: #4FB3FF; --tint-3: #D08BFF;
+            --separator: rgba(200,190,255,.10); --field: rgba(160,150,255,.12); --seg-on: rgba(255,255,255,.16);
+            --glass: linear-gradient(145deg, rgba(255,255,255,.12), rgba(255,255,255,.04));
+            --glass-edge: rgba(255,255,255,.16);
+            --glass-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(255,255,255,.04), 0 18px 40px -18px rgba(0,0,0,.8); }
   }
   html { background: var(--bg); }
-  body { background:
-      radial-gradient(60rem 36rem at 12% -8%, color-mix(in srgb, var(--tint) 20%, transparent), transparent 60%),
-      radial-gradient(48rem 30rem at 100% 4%, color-mix(in srgb, var(--tint-2) 16%, transparent), transparent 62%),
-      var(--bg);
-    background-attachment: fixed; }
-  h1 { font-size: 40px; letter-spacing: -0.02em;
-       background: linear-gradient(100deg, var(--label) 20%, var(--tint) 70%, var(--tint-2));
-       -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; }
-  .subtitle .live { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); animation: pulse 2.4s var(--ease) infinite; }
+  body { background: transparent; }
+  /* a slow aurora behind everything: three soft light sources that drift */
+  body::before { content: ""; position: fixed; inset: -25%; z-index: -1; pointer-events: none;
+    background: radial-gradient(38% 30% at 20% 18%, color-mix(in srgb, var(--tint) 34%, transparent), transparent 70%),
+                radial-gradient(34% 28% at 82% 12%, color-mix(in srgb, var(--tint-2) 28%, transparent), transparent 70%),
+                radial-gradient(40% 32% at 62% 88%, color-mix(in srgb, var(--tint-3) 22%, transparent), transparent 72%);
+    filter: blur(30px); animation: drift 38s ease-in-out infinite alternate; will-change: transform; }
+  @keyframes drift { from { transform: translate3d(-3%, -2%, 0) scale(1); } to { transform: translate3d(4%, 3%, 0) scale(1.12); } }
+
+  main { max-width: min(1040px, 100%); padding-inline: var(--pad); }
+  header { padding-block: clamp(20px, 5vw, 40px) 14px; }
+  h1 { font-size: clamp(36px, 7vw, 56px); font-weight: 700; letter-spacing: -0.03em;
+       background: linear-gradient(100deg, var(--label) 25%, var(--tint) 65%, var(--tint-2));
+       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+  .subtitle { font-size: clamp(14px, 2vw, 16px); }
+  .subtitle .live { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); animation: pulse 2.6s var(--ease) infinite; }
   .subtitle.stale .live, .subtitle.locked .live { animation: none; box-shadow: none; }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); }
-                     70%,100% { box-shadow: 0 0 0 8px transparent; } }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 9px transparent; } }
 
-  .group { border-radius: 20px; border: 1px solid var(--card-border); box-shadow: var(--shadow);
-           -webkit-backdrop-filter: saturate(160%) blur(18px); backdrop-filter: saturate(160%) blur(18px); }
-  h2 { margin-left: 18px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-  .row { transition: background-color .25s var(--ease); }
-  .row:hover { background: color-mix(in srgb, var(--tint) 5%, transparent); }
+  /* glass: every surface is the same material */
+  .group, .seg, .menu-item, .composer textarea, .bubble.ashur, .page-head .back {
+    background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%); }
+  .group { border-radius: 24px; }
+  section { margin-top: clamp(22px, 4vw, 34px); }
+  h2 { margin: 0 0 9px 18px; font-size: 11.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+  .row { padding: 13px var(--pad); transition: background-color .3s var(--ease); }
+  .row + .row::before { left: var(--pad); border-top-color: var(--separator); }
+  .row:hover { background: color-mix(in srgb, var(--tint) 6%, transparent); }
   .row .title { font-weight: 500; }
-  .dot { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent); transition: background-color .4s var(--ease); }
-  .dot.full { box-shadow: 0 0 10px color-mix(in srgb, var(--green) 70%, transparent); }
-  .dot.light { box-shadow: 0 0 10px color-mix(in srgb, var(--amber) 60%, transparent); }
+  .row .value { font-weight: 500; }
+  .dot { transition: background-color .4s var(--ease), box-shadow .4s var(--ease); }
+  .dot.full { box-shadow: 0 0 12px color-mix(in srgb, var(--green) 75%, transparent); }
+  .dot.light { box-shadow: 0 0 12px color-mix(in srgb, var(--amber) 65%, transparent); }
 
-  .meters { gap: 10px; flex-wrap: nowrap; }
-  .meter { position: relative; padding-bottom: 5px; flex: 1 1 0; min-width: 0; white-space: nowrap; }
+  /* devices become their own glass tiles; they sit side by side when there is room */
+  #devices.group { background: none; border: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+                   overflow: visible; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); }
+  #devices .row { background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: var(--glass-shadow); border-radius: 22px;
+                  -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%);
+                  align-items: flex-start; padding: 16px var(--pad); }
+  #devices .row::before { display: none; }
+  #devices .dot { margin-top: 5px; }
+  .meters { gap: 10px; flex-wrap: nowrap; margin-top: 8px; }
+  .meter { position: relative; padding-bottom: 6px; flex: 1 1 0; min-width: 0; white-space: nowrap; font-size: 12.5px; }
   .meter::before, .meter::after { content: ""; position: absolute; left: 0; bottom: 0; height: 3px; border-radius: 3px; }
   .meter::before { right: 0; background: var(--field); }
-  .meter::after { width: calc(var(--v, 0) * 1%); background: linear-gradient(90deg, var(--tint), var(--tint-2));
-                  transition: width .9s var(--ease); }
-  .meter.hot::after { background: linear-gradient(90deg, var(--amber), var(--red)); }
+  .meter::after { width: calc(var(--v, 0) * 1%); background: linear-gradient(90deg, var(--tint), var(--tint-2)); transition: width 1s var(--ease); }
   .meter.hot { color: var(--red); }
+  .meter.hot::after { background: linear-gradient(90deg, var(--amber), var(--red)); }
 
   .work .count { background: linear-gradient(100deg, var(--label), var(--tint)); -webkit-background-clip: text;
-                 background-clip: text; -webkit-text-fill-color: transparent; }
+                 background-clip: text; -webkit-text-fill-color: transparent; font-size: clamp(34px, 6vw, 46px); }
   .work .count small { -webkit-text-fill-color: var(--secondary); }
   .bar { height: 4px; }
   .bar i { background: linear-gradient(90deg, transparent, var(--tint), var(--tint-2), transparent); width: 45%; }
 
-  button { background: linear-gradient(135deg, var(--tint), var(--tint-2)); border-radius: 14px;
-           box-shadow: 0 6px 16px -8px color-mix(in srgb, var(--tint) 80%, transparent);
-           transition: transform .18s var(--ease), box-shadow .25s var(--ease), filter .25s var(--ease), opacity .25s; }
-  button:hover { filter: brightness(1.06); }
-  button:active { transform: scale(.975); box-shadow: none; }
-  button:disabled { opacity: .55; filter: saturate(.6); }
-  .link, .forget, .seg button { background: none; box-shadow: none; }
-  .link:hover { filter: none; background: color-mix(in srgb, var(--tint) 7%, transparent); }
+  button { background: linear-gradient(135deg, var(--tint), var(--tint-2)); border-radius: 16px;
+           box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 10px 22px -10px color-mix(in srgb, var(--tint) 85%, transparent);
+           transition: transform .35s var(--spring), box-shadow .3s var(--ease), filter .3s var(--ease), opacity .3s; }
+  button:hover { filter: brightness(1.07); }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .5; filter: saturate(.5); }
+  .link, .forget, .seg button, .menu-item, .back { background: none; box-shadow: none; }
+  .link:hover { filter: none; background: color-mix(in srgb, var(--tint) 8%, transparent); }
   .forget { background: var(--field); }
-  input, textarea, select { transition: box-shadow .25s var(--ease), background-color .25s var(--ease); }
-  input:focus, textarea:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tint) 55%, transparent); }
-  .codebox { display: block; margin: 12px 16px 0; width: calc(100% - 32px); text-align: center; letter-spacing: .4em;
+  input, textarea, select { transition: box-shadow .3s var(--ease), background-color .3s var(--ease); }
+  input { background: var(--field); border: 1px solid transparent; border-radius: 14px; }
+  input:focus, textarea:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--tint) 55%, transparent), 0 0 24px -6px var(--tint); }
+  .codebox { display: block; margin: 12px var(--pad) 0; width: calc(100% - 2 * var(--pad)); text-align: center; letter-spacing: .4em;
              font-size: 22px; font-variant-numeric: tabular-nums; }
 
-  /* tabs: a pill that slides under the selected one */
-  .seg { position: sticky; top: max(8px, env(safe-area-inset-top)); z-index: 5; padding: 3px; border-radius: 16px;
-         background: var(--row); border: 1px solid var(--card-border); box-shadow: var(--shadow);
-         -webkit-backdrop-filter: saturate(160%) blur(18px); backdrop-filter: saturate(160%) blur(18px); }
-  .seg::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 3);
-                 border-radius: 13px; background: var(--seg-on); box-shadow: 0 2px 8px rgba(40,30,90,.14);
-                 transform: translateX(calc(var(--i, 0) * 100%)); transition: transform .45s var(--ease); }
-  .seg button { position: relative; padding: 9px 0; border-radius: 13px; color: var(--secondary);
+  /* tabs: a glass capsule whose lens slides to the selected tab */
+  .seg { position: sticky; top: max(10px, env(safe-area-inset-top)); z-index: 6; padding: 4px; border-radius: 22px; margin: 0 auto;
+         max-width: 520px; }
+  .seg::before { content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 3); border-radius: 18px;
+                 background: var(--seg-on); box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 6px 18px -6px rgba(60,50,160,.45);
+                 transform: translateX(calc(var(--i, 0) * 100%)); transition: transform .6s var(--spring); }
+  .seg button { position: relative; padding: 10px 0; border-radius: 18px; color: var(--secondary); font-size: 14.5px;
                 transition: color .3s var(--ease); }
+  .seg button:active { transform: none; }
   .seg button[aria-selected="true"] { background: none; box-shadow: none; color: var(--label); }
 
-  /* views and sections glide in when shown */
-  #chat, #dashboard, #settings { animation: view .45s var(--ease) both; }
-  @keyframes view { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-  #dashboard section, #settings section { animation: rise .6s var(--ease) both; }
-  #dashboard section:nth-child(2), #settings section:nth-child(2) { animation-delay: .04s; }
-  #dashboard section:nth-child(3), #settings section:nth-child(3) { animation-delay: .08s; }
-  #dashboard section:nth-child(4), #settings section:nth-child(4) { animation-delay: .12s; }
-  #dashboard section:nth-child(n+5), #settings section:nth-child(n+5) { animation-delay: .16s; }
-  @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+  /* views, pages and sections rise out of the glass */
+  #chat, #dashboard, #settings { animation: view .55s var(--ease) both; }
+  @keyframes view { from { opacity: 0; transform: translateY(14px); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+  #dashboard section { animation: rise .7s var(--ease) both; }
+  #dashboard section:nth-child(2) { animation-delay: .06s; } #dashboard section:nth-child(3) { animation-delay: .12s; }
+  #dashboard section:nth-child(n+4) { animation-delay: .18s; }
+  @keyframes rise { from { opacity: 0; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: none; } }
 
-  .bubble { animation: pop .35s var(--ease) both; box-shadow: 0 1px 2px rgba(40,30,90,.06); }
-  @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; transform: none; } }
-  .bubble.me { background: linear-gradient(135deg, var(--tint), var(--tint-2)); border-radius: 20px 20px 6px 20px; }
-  .bubble.ashur { background: var(--row); border: 1px solid var(--card-border); border-radius: 20px 20px 20px 6px;
-                  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
-  .bubble.note { box-shadow: none; }
-  .composer { border-top: 1px solid var(--card-border); }
-  .composer textarea { border-radius: 22px; background: var(--row); }
+  /* Ajustes as a menu: one calm list; each entry opens its own page */
+  .menu { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); margin-top: clamp(18px, 3vw, 28px); }
+  .menu-item { display: flex; align-items: center; gap: 14px; width: 100%; margin: 0; padding: 16px var(--pad); border-radius: 22px;
+               text-align: left; color: var(--label); font-weight: 400; animation: rise .6s var(--ease) both;
+               background: var(--glass); box-shadow: var(--glass-shadow); }
+  .menu-item:nth-child(2) { animation-delay: .05s; } .menu-item:nth-child(3) { animation-delay: .1s; }
+  .menu-item:nth-child(4) { animation-delay: .15s; } .menu-item:nth-child(5) { animation-delay: .2s; } .menu-item:nth-child(6) { animation-delay: .25s; }
+  .menu-item:hover { transform: translateY(-2px); filter: none; }
+  .menu-item:active { transform: scale(.98); }
+  .mi-ico { flex: none; width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; color: #fff;
+            background: linear-gradient(135deg, var(--tint), var(--tint-2)); box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 8px 18px -8px var(--tint); }
+  .mi-ico svg { width: 22px; height: 22px; }
+  .mi-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .mi-text b { font-weight: 600; font-size: 16.5px; }
+  .mi-text small { color: var(--secondary); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mi-go { color: var(--secondary); font-size: 24px; line-height: 1; transition: transform .35s var(--spring); }
+  .menu-item:hover .mi-go { transform: translateX(4px); }
+  .page { animation: slidein .5s var(--ease) both; }
+  @keyframes slidein { from { opacity: 0; transform: translateX(28px); filter: blur(5px); } to { opacity: 1; transform: none; filter: none; } }
+  .page-head { display: flex; align-items: center; gap: 12px; margin-top: clamp(18px, 3vw, 28px); }
+  .page-head .back { width: auto; margin: 0; padding: 8px 14px; border-radius: 999px; color: var(--tint); font-size: 15px; font-weight: 500;
+                     background: var(--glass); }
+  .page-title { font-size: clamp(20px, 3.4vw, 26px); font-weight: 650; letter-spacing: -0.02em; }
+  .page section:first-of-type { margin-top: 18px; }
+  .signout { margin-top: clamp(22px, 4vw, 34px); max-width: 420px; margin-inline: auto; }
+  @media (min-width: 880px) {
+    .page { max-width: 760px; margin-inline: auto; }
+    #dashboard { display: grid; grid-template-columns: 1fr 1fr; column-gap: var(--gap); align-items: start; }
+    #dashboard section { grid-column: span 1; }
+    #dashboard section:nth-child(1), #dashboard section:nth-child(2) { grid-column: 1 / -1; }
+  }
+
+  .thread { max-width: 760px; margin-inline: auto; }
+  .bubble { animation: pop .45s var(--spring) both; }
+  @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.94); } to { opacity: 1; transform: none; } }
+  .bubble.me { background: linear-gradient(135deg, var(--tint), var(--tint-2)); border-radius: 22px 22px 6px 22px;
+               box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 10px 22px -12px var(--tint); }
+  .bubble.ashur { border-radius: 22px 22px 22px 6px; }
+  .bubble.note { background: none; border: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .composer { background: linear-gradient(to top, color-mix(in srgb, var(--bg) 70%, transparent), transparent);
+              -webkit-backdrop-filter: none; backdrop-filter: none; border-top: 0; }
+  .composer .inner { max-width: 760px; }
+  .composer textarea { border-radius: 24px; padding: 11px 18px; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -337,6 +395,17 @@
   </div>
 
   <div id="settings" hidden>
+    <nav class="menu" id="menu" aria-label="Ajustes">
+      <button type="button" class="menu-item" data-page="space"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="mi-text"><b>Archivos y espacio</b><small>Duplicados y los archivos más grandes</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="docs"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span><span class="mi-text"><b>Documentos</b><small>Buscar y releer lo que Ashur ha leído</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="memory"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7 4 4 0 0 0 5 5 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 5"/></svg></span><span class="mi-text"><b>Memoria</b><small>Recuerdos, resúmenes e importar</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="update"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="mi-text"><b>Actualización y seguridad</b><small>Versiones y autenticador</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="voices"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mi-text"><b>Personas</b><small>Cómo te habla Ashur en cada dispositivo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+    </nav>
+
+    <div class="page" data-page="space" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Archivos y espacio</div></div>
     <section>
       <h2>Archivos duplicados</h2>
       <div class="group" id="dups"></div>
@@ -350,6 +419,10 @@
       <div class="group" id="largest"></div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="docs" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Documentos</div></div>
     <section>
       <h2>Documentos</h2>
       <div class="group" id="docs-summary"></div>
@@ -363,6 +436,10 @@
       <div class="note">Ashur lee el texto de Word, Excel, PowerPoint, PDF y archivos de texto de los equipos que tengan el módulo docs, solo cuando están libres. Lo sensible (claves, bóvedas, perfiles del navegador) no se lee. La búsqueda es local: nada de esto sale a Claude salvo que marques «Compartir fragmentos» en un mensaje.</div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="memory" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Memoria</div></div>
     <section>
       <h2>Recuerdos de Ashur</h2>
       <div class="group" id="memories"></div>
@@ -376,6 +453,22 @@
     </section>
 
     <section>
+      <h2>Importar recuerdos</h2>
+      <div class="group signin">
+        <p>Pega un recuerdo por línea. Las líneas que empiezan con # se ignoran. Primero revisas, luego guardas.</p>
+        <textarea id="import-text" rows="6" aria-label="Recuerdos para importar"
+          style="width:100%;font:inherit;font-size:15px;color:var(--label);background:var(--field);border:0;border-radius:10px;padding:11px 12px;resize:vertical"></textarea>
+        <button type="button" id="import-check">Revisar</button>
+        <div id="import-result" class="note" style="margin:10px 0 0" hidden></div>
+        <button type="button" id="import-save" hidden>Guardar</button>
+      </div>
+    </section>
+
+    </div>
+
+    <div class="page" data-page="update" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Actualización y seguridad</div></div>
+    <section>
       <h2>Actualización</h2>
       <div class="group" id="update"></div>
       <div class="note" id="update-note" hidden></div>
@@ -387,6 +480,10 @@
       <div class="note">Para actualizar desde fuera de la tailnet hacen falta tu clave de administrador y un código de esta app (Google Authenticator, Microsoft Authenticator, Contraseñas del iPhone…). Se configura solo estando en la tailnet.</div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="voices" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Personas</div></div>
     <section>
       <h2>Personas por dispositivo</h2>
       <div class="group signin">
@@ -402,6 +499,10 @@
       </div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="access" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Acceso</div></div>
     <section>
       <h2>Invitados</h2>
       <div class="group" id="guests"></div>
@@ -419,19 +520,9 @@
       </div>
     </section>
 
-    <section>
-      <h2>Importar recuerdos</h2>
-      <div class="group signin">
-        <p>Pega un recuerdo por línea. Las líneas que empiezan con # se ignoran. Primero revisas, luego guardas.</p>
-        <textarea id="import-text" rows="6" aria-label="Recuerdos para importar"
-          style="width:100%;font:inherit;font-size:15px;color:var(--label);background:var(--field);border:0;border-radius:10px;padding:11px 12px;resize:vertical"></textarea>
-        <button type="button" id="import-check">Revisar</button>
-        <div id="import-result" class="note" style="margin:10px 0 0" hidden></div>
-        <button type="button" id="import-save" hidden>Guardar</button>
-      </div>
-    </section>
+    </div>
 
-    <section>
+    <section class="signout" id="signout-row">
       <div class="group"><button class="link" id="signout" type="button">Olvidar la clave en este navegador</button></div>
     </section>
   </div>
@@ -744,10 +835,19 @@
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("dashboard").hidden = t !== "status";
     $("settings").hidden = t !== "settings";
+    if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
     if (t === "settings") { loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
     if (t === "chat") loadVoices();
   }
+  // Ajustes is a menu; each entry opens its own page
+  function showPage(name) {
+    $("menu").hidden = !!name; $("signout-row").hidden = !!name;
+    for (const pg of document.querySelectorAll("#settings .page")) pg.hidden = pg.dataset.page !== name;
+    window.scrollTo({ top: 0 });
+  }
+  $("menu").addEventListener("click", (e) => { const b = e.target.closest(".menu-item"); if (b) showPage(b.dataset.page); });
+  for (const b of document.querySelectorAll("#settings .back")) b.addEventListener("click", () => showPage(null));
   $("tab-chat").addEventListener("click", () => showTab("chat"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
   $("tab-settings").addEventListener("click", () => { showTab("settings"); refresh(); });

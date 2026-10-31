@@ -489,3 +489,50 @@ def test_a_guest_cannot_share_documents_and_has_no_such_tool(tmp_path):
     g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()
     c.post("/api/chat", headers={"X-Admin-Key": g["key"]}, json={"message": "hola", "share_docs": True})
     assert "tools" not in fake.calls[0]
+
+
+# --- the local model reads the documents index ------------------------------------------
+def _local_app(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    c = TestClient(create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None))
+    c.app.state.db.docs_apply("mac", [{"path": "/d/contrato.docx", "modified": 1.0,
+                                       "chunks": ["Arrendamiento: el canon mensual es de dos millones de pesos"]},
+                                      {"path": "/d/receta.txt", "modified": 1.0, "chunks": ["arroz con coco"]}], [])
+    return c
+
+
+def test_local_model_gets_document_fragments_when_the_question_is_about_documents(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    th, seen = fake_llm_node(c, reply="Dos millones, según contrato.docx.")
+    r = c.post("/api/chat", headers=A, json={"message": "¿cuánto es el canon en mi contrato de arrendamiento?"}).json()
+    th.join(5)
+    assert r["provider"] == "local" and r["sources"] == ["/d/contrato.docx"]
+    system = seen["payload"]["system"]
+    assert "dos millones" in system and "/d/contrato.docx" in system and "arroz" not in system
+    log = [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"][-1]
+    assert log["detail"]["docs_used"] == 1 and "millones" not in json.dumps(log)       # the words never reach the log
+
+
+def test_local_model_is_told_when_nothing_matches_and_is_not_given_unrelated_text(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    th, seen = fake_llm_node(c)
+    r = c.post("/api/chat", headers=A, json={"message": "¿qué dice mi documento sobre la hipoteca?"}).json()
+    th.join(5)
+    assert r["sources"] == [] and "no apareció nada" in seen["payload"]["system"]
+
+
+def test_ordinary_messages_do_not_search_the_documents(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    th, seen = fake_llm_node(c)
+    r = c.post("/api/chat", headers=A, json={"message": "hola, ¿cómo estás?"}).json()
+    th.join(5)
+    assert r["sources"] == [] and "Fragmentos" not in seen["payload"]["system"] and "no apareció" not in seen["payload"]["system"]
+
+
+def test_guests_never_get_documents_in_the_local_model(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()["key"]
+    th, seen = fake_llm_node(c)
+    r = c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "¿cuánto es el canon en el contrato de arrendamiento?"}).json()
+    th.join(5)
+    assert "sources" not in r and "dos millones" not in seen["payload"]["system"]

@@ -938,6 +938,7 @@
         const said = [];
         if (data.provider === "local" && role !== "guest") said.push("Respondió el modelo local en " + data.device + ".");
         if ((data.tools || []).includes("remember")) said.push("Ashur guardó un recuerdo.");
+        if ((data.sources || []).length) said.push("Miró: " + data.sources.map((p) => p.split(/[\\/]/).pop()).join(", ") + ".");
         if (data.note && data.provider !== "local") said.unshift(data.note);
         else if (data.note) said.unshift(data.note.replace(/ Respondí con un modelo local\.$/, ""));
         if (said.length) bubble("note", said.join(" "));

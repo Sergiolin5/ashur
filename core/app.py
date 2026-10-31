@@ -112,7 +112,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.20.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.21.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -634,7 +634,7 @@ def create_app(
                              allow_claude=body.allow_claude and guest is None,
                              share_docs=body.share_docs and guest is None)
             if guest:                     # which device answered and which tools ran stay Sergio's business
-                return {k: v for k, v in out.items() if k not in ("device", "tools", "model")}
+                return {k: v for k, v in out.items() if k not in ("device", "tools", "model", "sources")}
             summarize_soon()
             return out
         except (BrainUnavailable, LocalUnavailable) as e:

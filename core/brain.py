@@ -59,6 +59,13 @@ TOOLS = [
          "device_id": {"type": "string", "description": "Si se da, lista sus ejecutables más grandes."}}}},
 ]
 
+DOC_CUES = re.compile(r"documento|archivo|carpeta|informe|contrato|\bpdf\b|\bword\b|\bexcel\b|power ?point|presentaci|"
+                      r"escrib[ií]|guard[eé]|tengo (guardad|escrit)|mis (notas|apuntes|papeles)|\bnota\b")
+STOPWORDS_ES = set("""sobre entre para como cuál cual cuáles cuales dónde donde cuándo cuando quién quien qué que esto esta este
+estos estas aquel hay tengo tienes tiene puedes puedo busca buscar busques mis mio mía tuyo del los las una unos unas con por
+sin pero también tambien algún algun alguna dime dame muestra muéstrame cuánto cuanto cuántos fue era son soy está estan
+documento documentos archivo archivos carpeta guardado guardados escrito escribí escribi tengo""".split())
+
 TOOLS.append(
     {"name": "search_documents",
      "description": "Busca en el texto de los documentos de Sergio (Word, Excel, PowerPoint, PDF, texto) en todos sus "
@@ -335,7 +342,29 @@ class Brain:
         reply = "\n\n".join(p for p in reply_parts if p).strip() or "(Sin respuesta.)"
         return reply, cost_total, tools_used
 
-    def _local_system(self, guest: Optional[dict] = None, voice: Optional[str] = None) -> str:
+    def docs_context(self, text: str) -> tuple[str, list[str]]:
+        """Fragments of Sergio's documents for the local model, when his message is about them.
+
+        Local only: the model runs on his own devices and the fragments travel over the tailnet.
+        Returns ("", []) when the message does not look like a question about documents."""
+        low = text.lower()
+        if not DOC_CUES.search(low):
+            return "", []
+        words = []
+        for w in re.findall(r"[a-záéíóúñü0-9]{4,}", low):
+            if w not in STOPWORDS_ES and w not in words:
+                words.append(w)
+        hits = self.db.docs_search(words[:6], 4, with_text=True, any_word=True, full=True) if words else []
+        if not hits:
+            return ("Buscaste en los documentos de Sergio con las palabras de su mensaje y no apareció nada. "
+                    "Dilo con claridad y no inventes el contenido.", [])
+        lines = [f"[{i}] {h['path']} (en {h['node_id']}):\n{h['snippet']}" for i, h in enumerate(hits, 1)]
+        return ("Fragmentos de los documentos de Sergio que podrían servir (pueden no ser relevantes). Responde solo "
+                "con lo que dicen; menciona de qué archivo sale cada dato; si no alcanzan para responder, dilo.\n\n"
+                + "\n\n".join(lines), [h["path"] for h in hits])
+
+    def _local_system(self, guest: Optional[dict] = None, voice: Optional[str] = None,
+                      docs_block: str = "") -> str:
         if guest:
             return GUEST_PERSONA.format(name=guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
@@ -343,7 +372,8 @@ class Brain:
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
                 "No tienes herramientas: no puedes guardar ni borrar recuerdos; si te lo piden, dilo con "
                 "claridad. Responde breve y en español.\n\n"
-                f"Estado actual de tus dispositivos: {net}")
+                f"Estado actual de tus dispositivos: {net}"
+                + (f"\n\n{docs_block}" if docs_block else ""))
 
     # --- conversation memory --------------------------------------------------
     def pending_summary(self) -> list[dict]:
@@ -417,6 +447,7 @@ class Brain:
         local_first = self.s.brain == "local-first"
         provider, device, note = None, None, None
         reply, cost, tools = "", 0.0, []
+        doc_files: list[str] = []
 
         if want_claude and not over_budget:
             try:
@@ -445,7 +476,8 @@ class Brain:
                 note = ("Respondí con un modelo local." if guest
                         else "Llegué al tope de gasto del mes con Claude. Respondí con un modelo local.")
             try:
-                reply, device = self.local(self._local_system(guest, voice), messages)
+                docs_block, doc_files = ("", []) if guest else self.docs_context(text)
+                reply, device = self.local(self._local_system(guest, voice, docs_block), messages)
                 provider = "local"
             except LocalUnavailable as e:
                 # local-first: Claude only for Sergio, only for this message, only once he says yes
@@ -471,6 +503,8 @@ class Brain:
         # and a guest only as an anonymous number
         detail = {"channel": channel, "provider": provider, "chars_in": len(text),
                   "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools}
+        if doc_files and provider == "local":
+            detail["docs_used"] = len(doc_files)
         if share_docs and provider == "claude" and "search_documents" in tools:
             detail["docs_shared"] = True
         if allow_claude and provider == "claude":
@@ -481,4 +515,5 @@ class Brain:
             detail["persona"] = voice
         self.db.log(end, device, "chat", detail)
         return {"reply": reply, "note": note, "provider": provider, "device": device,
-                "cost_usd": round(cost, 5), "tools": tools, **self.budget(guest)}
+                "cost_usd": round(cost, 5), "tools": tools, "sources": doc_files if provider == "local" else [],
+                **self.budget(guest)}

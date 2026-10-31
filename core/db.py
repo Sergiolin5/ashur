@@ -431,14 +431,16 @@ class DB:
                 "GROUP BY node_id ORDER BY node_id").fetchall()
         return [dict(r) for r in rows]
 
-    def docs_search(self, words: list[str], limit: int = 8, with_text: bool = True) -> list[dict]:
+    def docs_search(self, words: list[str], limit: int = 8, with_text: bool = True,
+                    any_word: bool = False, full: bool = False) -> list[dict]:
         """Chunks containing all the words (prefix match), best first. with_text=False returns
         only where they are: that is all a caller without permission may see."""
         terms = ['"' + w.replace('"', "") + '"*' for w in words if w.replace('"', "").strip()][:6]
         if not terms:
             return []
-        q = " ".join(terms)
-        sel = ("snippet(doc_chunks, 0, '', '', ' … ', 40) AS snippet, " if with_text else "")
+        q = (" OR " if any_word else " ").join(terms)
+        sel = ("" if not with_text else "substr(content, 1, 700) AS snippet, " if full
+               else "snippet(doc_chunks, 0, '', '', ' … ', 40) AS snippet, ")
         try:
             with self.lock:
                 rows = self.conn.execute(

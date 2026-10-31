@@ -7,8 +7,9 @@ import re
 import zipfile
 from typing import Optional
 
-TEXT_EXT = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml", ".html",
-            ".htm", ".tex", ".rst", ".org", ".py", ".js", ".ts", ".sql", ".sh", ".ps1", ".ini", ".cfg"}
+# Only things people write as documents. Configuration and code (json, xml, html, ini, scripts...)
+# by the thousand inside games and programs buried the real documents in the index.
+TEXT_EXT = {".txt", ".md", ".markdown", ".csv", ".tsv", ".tex", ".rst", ".org"}
 OFFICE_EXT = {".docx", ".pptx", ".xlsx"}
 SUPPORTED = TEXT_EXT | OFFICE_EXT | {".pdf"}
 MAX_FILE_BYTES = 30 << 20

@@ -115,3 +115,19 @@ def test_progress_is_reported_while_scanning_and_reading(tmp_path):
     action.run({"roots": [str(docs)]}, ctx)
     assert ctx.progress and ctx.progress[0]["phase"] == "scan" and ctx.progress[0]["found"] >= 1
     assert all(set(b) <= {"phase", "found", "read", "folder"} for b in ctx.progress)    # no document text in progress
+
+
+def test_code_and_config_are_not_read_and_leave_the_index_on_the_next_pass(tmp_path):
+    docs, state = tmp_path / "docs", tmp_path / "state"
+    docs.mkdir(); state.mkdir()
+    for n in ("nota.txt", "settings.json", "page.html", "run.py", "game.ini"):
+        (docs / n).write_text("contenido", encoding="utf-8")
+    ctx = Ctx(state)
+    action.run({"roots": [str(docs)]}, ctx)
+    assert {u["path"] for b in ctx.sent for u in b["upserts"]} == {str(docs / "nota.txt")}
+    # an index made by the older version that did read them: those entries are removed
+    import json
+    (state / action.STATE).write_text(json.dumps({"seen": {str(docs / "settings.json"): 1.0, str(docs / "nota.txt"): (docs / "nota.txt").stat().st_mtime}}))
+    ctx2 = Ctx(state)
+    s = action.run({"roots": [str(docs)]}, ctx2)
+    assert s["removed"] == 1 and ctx2.sent[-1]["deletes"] == [str(docs / "settings.json")]

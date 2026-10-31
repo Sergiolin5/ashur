@@ -397,7 +397,7 @@ class DB:
                      SELECT size, COUNT(*) n FROM inventory WHERE hash IS NOT NULL AND hash != '' AND size >= ?
                      GROUP BY hash, size HAVING n > 1)""", (min_size,)).fetchone()
             largest = [dict(r) for r in c.execute(
-                "SELECT node_id, path, size FROM inventory ORDER BY size DESC LIMIT ?", (top,)).fetchall()]
+                "SELECT node_id, path, size FROM inventory WHERE kind = 'file' ORDER BY size DESC LIMIT ?", (top,)).fetchall()]
             return {"duplicates": dups, "duplicate_groups": totals["groups"], "wasted": totals["wasted"],
                     "largest": largest}
         finally:

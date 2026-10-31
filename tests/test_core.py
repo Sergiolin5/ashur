@@ -456,3 +456,14 @@ def test_documents_pass_shows_real_progress_not_a_stuck_start(env):
     c.post("/nodes/mac/docs", headers=h, json={"phase": "read", "found": 120, "read": 30})
     assert (run()["phase"], run()["read"]) == ("read", 30)
     assert c.post("/nodes/mac/docs", headers=h, json={"phase": "hack"}).status_code == 422
+
+
+def test_largest_files_list_has_files_only(env):
+    c, _ = env
+    h = register(c)
+    c.post("/nodes/mac/inventory", headers=h, json={"reset": True, "rows": [
+        {"path": "/Windows", "kind": "folder_summary", "size": 50 << 30},
+        {"path": "/big.iso", "kind": "file", "size": 5 << 30},
+        {"path": "/small.txt", "kind": "file", "size": 10}]})
+    rep = c.app.state.db.inventory_report_readonly()
+    assert [r["path"] for r in rep["largest"]] == ["/big.iso", "/small.txt"]

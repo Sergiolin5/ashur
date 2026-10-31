@@ -108,7 +108,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.14.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.15.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -267,6 +267,24 @@ def create_app(
         elif prev != hb.mode.value:
             db.log(now, node["id"], "mode_change", {"from": prev, "to": hb.mode.value, "reason": reason})
         return {"ok": True, "code_version": node_code()[0]}
+
+    # --- installers, served by the core so the repo can be private (tailnet only) ----
+    @app.get("/install/{name}")
+    def installer(name: str, request: Request):
+        if name == "code.tar.gz":
+            _, bundle = node_code()
+            if not bundle:
+                raise HTTPException(404, "this core ships no node code")
+            return Response(bundle, media_type="application/gzip")
+        scripts = {"windows.ps1": "install_windows.ps1", "mac.sh": "install_mac.sh"}
+        if name not in scripts:
+            raise HTTPException(404, "no")
+        script = code_root / "deploy" / scripts[name]
+        if not script.exists():
+            raise HTTPException(404, "installer not in this image")
+        here = f"{request.url.scheme}://{request.headers.get('host', '')}"   # the address the device used
+        text = script.read_text(encoding="utf-8").replace("__ASHUR_CORE__", here)
+        return Response(text, media_type="text/plain; charset=utf-8")
 
     @app.get("/nodes/{node_id}/code")
     def node_code_info(node: dict = Depends(require_node)):
@@ -724,7 +742,9 @@ def vtuple(v: str) -> tuple:
 def newest_published(image: str) -> Optional[str]:
     """Highest x.y.z tag of ghcr.io/sergiolin5/<image> (public package: anonymous token)."""
     repo = f"sergiolin5/{image}"
-    tok = httpx.get(f"https://ghcr.io/token?scope=repository:{repo}:pull", timeout=10).json()["token"]
+    pat = os.environ.get("ASHUR_GHCR_TOKEN", "").strip()       # needed once the packages are private
+    auth = ("sergiolin5", pat) if pat else None
+    tok = httpx.get(f"https://ghcr.io/token?scope=repository:{repo}:pull", timeout=10, auth=auth).json()["token"]
     tags = httpx.get(f"https://ghcr.io/v2/{repo}/tags/list?n=1000", timeout=10,
                      headers={"Authorization": f"Bearer {tok}"}).json().get("tags", [])
     versions = [t for t in tags if re.fullmatch(r"\d+\.\d+\.\d+", t)]

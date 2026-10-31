@@ -86,3 +86,19 @@ def test_home_screen_app_files_are_served_on_both_doors(tmp_path):
     icon = pub.get("/apple-touch-icon.png")
     assert icon.status_code == 200 and icon.content[:8] == b"\x89PNG\r\n\x1a\n"
     assert 'rel="apple-touch-icon"' in pub.get("/").text
+
+
+def test_core_serves_installers_and_code_on_the_tailnet_only(tmp_path):
+    import io, tarfile
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None, public_port=8001)
+    c = TestClient(app, base_url="http://zimaos:8711")
+    ps1 = c.get("/install/windows.ps1").text
+    assert '$Core    = "http://zimaos:8711"' in ps1 and "__ASHUR_CORE__" not in ps1
+    assert 'CORE="http://zimaos:8711"' in c.get("/install/mac.sh").text
+    code = c.get("/install/code.tar.gz")
+    names = tarfile.open(fileobj=io.BytesIO(code.content), mode="r:gz").getnames()
+    assert "node/agent.py" in names and "requirements-node.txt" in names
+    assert c.get("/install/../keys.json").status_code == 404
+    pub = TestClient(app, base_url="http://testserver:8001")
+    assert pub.get("/install/windows.ps1").status_code == 404
+    assert pub.get("/install/code.tar.gz").status_code == 404

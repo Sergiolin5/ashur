@@ -45,7 +45,7 @@ Check it from any tailnet device: `http://<server>:8711/health`.
 In PowerShell, as your normal user, with Tailscale on:
 
 ```powershell
-irm https://raw.githubusercontent.com/Sergiolin5/ashur/main/deploy/install_windows.ps1 | iex
+irm http://zimaos:8711/install/windows.ps1 | iex
 ```
 
 It installs Python if needed, asks for the device name, the server's Tailscale
@@ -59,7 +59,7 @@ is idle (Full mode).
 In Terminal, as your normal user, with Tailscale on:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Sergiolin5/ashur/main/deploy/install_mac.sh | bash
+curl -fsSL http://zimaos:8711/install/mac.sh | bash
 ```
 
 Same questions and rules as on Windows; the agent runs as a LaunchAgent at login.

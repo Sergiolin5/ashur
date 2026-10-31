@@ -1,10 +1,13 @@
 # Ashur node installer for Windows (Ryzen 9, Legion Go).
-# Run in PowerShell, as your normal user (not as administrator):
-#   irm https://raw.githubusercontent.com/Sergiolin5/ashur/main/deploy/install_windows.ps1 | iex
+# Run in PowerShell, as your normal user (not as administrator), with Tailscale on:
+#   irm http://zimaos:8711/install/windows.ps1 | iex
+# The core serves this script and the node code (tailnet only), so it works with a private repo.
 # Running it again updates the code and keeps the node's identity.
 
 $ErrorActionPreference = "Stop"
 $Repo    = "https://github.com/Sergiolin5/ashur/archive/refs/heads/main.zip"
+$Core    = "__ASHUR_CORE__"          # filled in by the core that serves this script
+$FromCore = -not $Core.StartsWith("__")
 $Home_   = Join-Path $env:LOCALAPPDATA "Ashur"
 $App     = Join-Path $Home_ "app"
 $Venv    = Join-Path $Home_ "venv"
@@ -51,11 +54,21 @@ if ($running) {
     Start-Sleep -Seconds 2
 }
 Say "Descargando Ashur..."
-$zip = Join-Path $env:TEMP "ashur-main.zip"
-Invoke-WebRequest -Uri $Repo -OutFile $zip -UseBasicParsing
 $tmp = Join-Path $env:TEMP "ashur-extract"
 if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
-Expand-Archive -Path $zip -DestinationPath $tmp
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+if ($FromCore) {
+    $zip = Join-Path $env:TEMP "ashur-code.tar.gz"
+    Invoke-WebRequest -Uri "$Core/install/code.tar.gz" -OutFile $zip -UseBasicParsing
+    $inner = Join-Path $tmp "app"
+    New-Item -ItemType Directory -Force -Path $inner | Out-Null
+    tar -xzf $zip -C $inner                     # tar.exe ships with Windows 10 and 11
+    if ($LASTEXITCODE -ne 0) { throw "No pude descomprimir el código que mandó el núcleo." }
+} else {
+    $zip = Join-Path $env:TEMP "ashur-main.zip"
+    Invoke-WebRequest -Uri $Repo -OutFile $zip -UseBasicParsing
+    Expand-Archive -Path $zip -DestinationPath $tmp
+}
 if (Test-Path $App) {
     for ($i = 1; $i -le 5; $i++) {
         try { Remove-Item -Recurse -Force $App -ErrorAction Stop; break }
@@ -83,7 +96,10 @@ if (-not (Test-Path $Config)) {
     do {
         $device = (Read-Host "Nombre de este equipo para Ashur (minúsculas, ej. ryzen9 o legion-go)").Trim()
     } until ($device -cmatch '^[a-z0-9][a-z0-9_-]*$')
-    $server = (Read-Host "Nombre del servidor en Tailscale (ej. zimaos)").Trim()
+    if ($FromCore) { $coreUrl = $Core } else {
+        $server = (Read-Host "Nombre del servidor en Tailscale (ej. zimaos)").Trim()
+        $coreUrl = "http://${server}:8711"
+    }
     Write-Host "Política de recursos:"
     Write-Host "  1 = máquina principal compartida (Ryzen 9)"
     Write-Host "  2 = portátil con batería (Legion Go)"
@@ -92,7 +108,7 @@ if (-not (Test-Path $Config)) {
     $yaml = @"
 device_id: $device
 persona: $device
-core_url: http://${server}:8711
+core_url: $coreUrl
 modules: [inventory]
 yield_policy: $policy
 "@

@@ -14,6 +14,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/casaos/apps:/var/lib/casaos/apps
       - /DATA/AppData/ashur:/data
+      - /root/.docker:/root/.docker:ro   # the server's `docker login ghcr.io`, for private images
     environment:
       ASHUR_UPDATER_PORT: "8713"
       ASHUR_PORT: "8711"

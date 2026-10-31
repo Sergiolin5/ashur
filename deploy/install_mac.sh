@@ -1,7 +1,8 @@
 #!/bin/bash
 # Ashur node installer for macOS (Mac M1).
-# Run in Terminal, as your normal user (no sudo):
-#   curl -fsSL https://raw.githubusercontent.com/Sergiolin5/ashur/main/deploy/install_mac.sh | bash
+# Run in Terminal, as your normal user (no sudo), with Tailscale on:
+#   curl -fsSL http://zimaos:8711/install/mac.sh | bash
+# The core serves this script and the node code (tailnet only), so it works with a private repo.
 # Running it again updates the code and keeps the node's identity.
 set -euo pipefail
 
@@ -11,7 +12,7 @@ VENV="$STATE/venv"
 CONFIG="$STATE/node.yaml"
 LABEL="com.ashur.node"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-TARBALL="https://github.com/Sergiolin5/ashur/archive/refs/heads/main.tar.gz"
+CORE="__ASHUR_CORE__"            # filled in by the core that serves this script
 
 say() { printf '\033[36m[ashur]\033[0m %s\n' "$*"; }
 ask() { local v; read -r -p "$1" v < /dev/tty; printf '%s' "$v"; }
@@ -30,9 +31,16 @@ fi
 # 2. Code (replaced on every run; identity and logs live outside it)
 say "Descargando Ashur..."
 tmp="$(mktemp -d)"
-curl -fsSL "$TARBALL" | tar -xz -C "$tmp"
+if [[ "$CORE" == __* ]]; then                       # run from GitHub (public repo): the old way
+    curl -fsSL "https://github.com/Sergiolin5/ashur/archive/refs/heads/main.tar.gz" | tar -xz -C "$tmp"
+    src="$tmp/ashur-main"
+else
+    mkdir -p "$tmp/app"
+    curl -fsSL "$CORE/install/code.tar.gz" | tar -xz -C "$tmp/app"
+    src="$tmp/app"
+fi
 rm -rf "$APP"
-mv "$tmp"/ashur-main "$APP"
+mv "$src" "$APP"
 rm -rf "$tmp"
 
 # 3. Private Python environment
@@ -50,7 +58,12 @@ if [ ! -f "$CONFIG" ]; then
         device="$(printf '%s' "$device" | tr -d '[:space:]')"
         [[ "$device" =~ ^[a-z0-9][a-z0-9_-]*$ ]] && break
     done
-    server="$(ask 'Nombre del servidor en Tailscale (ej. zimaos): ' | tr -d '[:space:]')"
+    if [[ "$CORE" == __* ]]; then
+        server="$(ask 'Nombre del servidor en Tailscale (ej. zimaos): ' | tr -d '[:space:]')"
+        core_url="http://$server:8711"
+    else
+        core_url="$CORE"
+    fi
     echo "Política de recursos:"
     echo "  1 = portátil con batería (Mac M1)"
     echo "  2 = máquina principal compartida"
@@ -59,7 +72,7 @@ if [ ! -f "$CONFIG" ]; then
     cat > "$CONFIG" <<EOF
 device_id: $device
 persona: $device
-core_url: http://$server:8711
+core_url: $core_url
 modules: [inventory]
 yield_policy: $policy
 EOF

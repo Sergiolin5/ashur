@@ -89,6 +89,12 @@ TOOLS.append(
 
 DIARY_SECRET = re.compile(r"\b(clave|pin|c[oó]digo|cvv)\s*[:=]", re.I)      # a diary is prose: also catch «clave: …»
 
+PROPOSER = """Lee lo que Sergio escribió (diario y chat) y extrae hasta 5 hechos duraderos sobre él o su vida.
+- Un hecho por línea, empezando con "- ", en frases cortas y literales.
+- Solo lo que él afirma. No interpretes emociones, no diagnostiques, no deduzcas su personalidad.
+- Omite lo pasajero (lo que comió hoy), claves, contraseñas y números de documentos.
+- Si no hay nada duradero, responde solo: NADA"""
+
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
 MAX_SUMMARY_CHARS = 4000
@@ -229,8 +235,9 @@ class Brain:
             return True
         return False
 
-    def _system(self, voice: Optional[str] = None) -> str:
-        notes = self.db.memories()
+    def _system(self, voice: Optional[str] = None, local: bool = False) -> str:
+        # memories marked «solo local» never enter a prompt that goes to Claude
+        notes = [m for m in self.db.memories() if local or m.get("tier", "claude") == "claude"]
         lines, size = [], 0
         for m in reversed(notes):                      # newest first until the cap, then restore order
             line = f"[{m['id']}] {m['text']}"
@@ -414,7 +421,7 @@ class Brain:
         if guest:
             return GUEST_PERSONA.format(name=guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
-        return (f"{self._system(voice)}\n\n"
+        return (f"{self._system(voice, local=True)}\n\n"
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
                 "No tienes herramientas: no puedes guardar ni borrar recuerdos; si te lo piden, dilo con "
                 "claridad. Responde breve y en español.\n\n"
@@ -473,6 +480,42 @@ class Brain:
         self.db.log(self.clock(), None, "conversation_summarized",
                     {"summary_id": sid, "messages": len(chunk), "provider": provider})
         return sid
+
+    def propose_memories(self) -> int:
+        """Read what Sergio wrote since last time (diary and chat) with a LOCAL model only, and put lasting facts
+        in the inbox for him to accept or discard. Nothing is saved as a memory without his say-so, and the
+        diary never goes to Claude for this."""
+        if self.local is None or self.s.brain == "claude":
+            return 0
+        d_cur, m_cur = int(self.db.setting("prop_diary_cursor", "0")), int(self.db.setting("prop_msg_cursor", "0"))
+        entries, msgs = self.db.diary_after(d_cur), self.db.user_messages_after(m_cur)
+        if not entries and not msgs:
+            return 0
+        material = ("Diario de Sergio:\n" + "\n---\n".join(f"[{e['day']}] {self._clean_diary(e['text'])[:1200]}" for e in entries)
+                    if entries else "") + ("\n\nLo que escribió en el chat:\n" + "\n".join("- " + m["content"][:400] for m in msgs)
+                                           if msgs else "")
+        try:
+            text, _device = self.local(PROPOSER, [{"role": "user", "content": material[:6000]}])
+        except LocalUnavailable:
+            return 0                                      # cursors stay put: it is retried later
+        if entries:
+            self.db.set_setting("prop_diary_cursor", str(entries[-1]["id"]))
+        if msgs:
+            self.db.set_setting("prop_msg_cursor", str(msgs[-1]["id"]))
+        known = {m["text"].strip().lower() for m in self.db.memories()} | self.db.proposal_texts()
+        added = 0
+        for ln in (text or "").splitlines():
+            ln = ln.strip().lstrip("-•* ").strip()
+            low = ln.lower()
+            if not (8 <= len(ln) <= 300) or low.startswith("nada") or low in known or looks_like_secret(ln) or DIARY_SECRET.search(ln):
+                continue
+            self.db.proposal_add(self.clock(), ln, "diary" if entries else "chat")
+            known.add(low)
+            added += 1
+            if added >= 5:
+                break
+        self.db.log(self.clock(), None, "memories_proposed", {"count": added})
+        return added
 
     def estimate_usd(self, messages: list[dict], voice: Optional[str] = None) -> float:
         """Rough cost of answering with Claude: ~3.5 characters per token, ~400 tokens out."""

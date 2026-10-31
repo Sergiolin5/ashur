@@ -76,6 +76,13 @@ CREATE TABLE IF NOT EXISTS memory (
     text        TEXT NOT NULL,
     source      TEXT
 );
+CREATE TABLE IF NOT EXISTS memory_proposals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,
+    text        TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending'
+);
 CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          REAL NOT NULL,
@@ -163,6 +170,9 @@ class DB:
                 self.conn.execute(f"ALTER TABLE nodes ADD COLUMN {c} REAL")
         if "mode_reason" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN mode_reason TEXT")
+        mem = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory)")}
+        if "tier" not in mem:                          # 'claude' = may travel to Claude; 'local' = local models only
+            self.conn.execute("ALTER TABLE memory ADD COLUMN tier TEXT NOT NULL DEFAULT 'claude'")
         # who said it: 'sergio' or 'g<guest id>'; older rows are all Sergio's
         mcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(messages)")}
         if "user" not in mcols:
@@ -633,6 +643,17 @@ class DB:
                 (user, limit)).fetchall()
         return [dict(r) for r in reversed(rows)]
 
+    def user_messages_after(self, after_id: int, limit: int = 40) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT id, ts, content FROM messages WHERE user = 'sergio' AND role = 'user' AND id > ? "
+                                     "ORDER BY id LIMIT ?", (after_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def diary_after(self, after_id: int, limit: int = 20) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT id, ts, day, text FROM diary WHERE id > ? ORDER BY id LIMIT ?", (after_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
     def count_messages_since(self, user: str, ts: float) -> int:
         with self.lock:
             return int(self.conn.execute("SELECT COUNT(*) FROM messages WHERE user = ? AND role = 'user' AND ts >= ?",
@@ -688,17 +709,49 @@ class DB:
             self.conn.commit()
         return cur.rowcount > 0
 
-    def add_memory(self, ts: float, text: str, source: str = "ashur") -> int:
+    def add_memory(self, ts: float, text: str, source: str = "ashur", tier: str = "claude") -> int:
         with self.lock:
-            cur = self.conn.execute("INSERT INTO memory (created, kind, text, source) VALUES (?, 'note', ?, ?)",
-                                    (ts, text, source))
+            cur = self.conn.execute("INSERT INTO memory (created, kind, text, source, tier) VALUES (?, 'note', ?, ?, ?)",
+                                    (ts, text, source, tier))
             self.conn.commit()
             return cur.lastrowid
 
     def memories(self) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.conn.execute(
-                "SELECT id, created, text, source FROM memory ORDER BY id").fetchall()]
+                "SELECT id, created, text, source, tier FROM memory ORDER BY id").fetchall()]
+
+    def set_memory_tier(self, memory_id: int, tier: str) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE memory SET tier = ? WHERE id = ?", (tier, memory_id))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    # --- proposals: what Ashur thinks is worth remembering, until Sergio decides ---
+    def proposal_add(self, ts: float, text: str, source: str) -> int:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO memory_proposals (ts, text, source) VALUES (?, ?, ?)", (ts, text, source))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def proposals(self, status: str = "pending") -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT id, ts, text, source, status FROM memory_proposals WHERE status = ? ORDER BY id", (status,)).fetchall()]
+
+    def proposal_texts(self) -> set[str]:
+        with self.lock:
+            return {r[0].strip().lower() for r in self.conn.execute("SELECT text FROM memory_proposals").fetchall()}
+
+    def proposal_get(self, pid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT id, ts, text, source, status FROM memory_proposals WHERE id = ?", (pid,)).fetchone()
+        return dict(r) if r else None
+
+    def proposal_set(self, pid: int, status: str) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE memory_proposals SET status = ? WHERE id = ?", (status, pid))
+            self.conn.commit()
 
     def delete_memory(self, memory_id: int) -> bool:
         with self.lock:

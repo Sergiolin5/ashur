@@ -610,3 +610,83 @@ def test_guests_never_get_the_diary_in_the_local_model(tmp_path, monkeypatch):
     r = c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "¿qué dice mi diario?"}).json()
     th.join(5)
     assert "diary_used" not in r and "frustrado" not in seen["payload"]["system"]
+
+
+# --- memory tiers and the proposals inbox -------------------------------------------------------
+def _claude_system(fake):
+    return fake.calls[0]["system"]
+
+
+def test_local_only_memories_never_enter_a_prompt_that_goes_to_claude(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([text("ok")])])
+    db = c.app.state.db
+    db.add_memory(1.0, "Le gusta el café sin azúcar", tier="claude")
+    db.add_memory(2.0, "Discutió con su jefe y se sintió frustrado", tier="local")
+    c.post("/api/chat", headers=A, json={"message": "hola"})
+    assert "café sin azúcar" in _claude_system(fake) and "frustrado" not in _claude_system(fake)
+
+
+def test_the_local_model_sees_every_memory(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    db = c.app.state.db
+    db.add_memory(1.0, "Le gusta el café sin azúcar", tier="claude")
+    db.add_memory(2.0, "Discutió con su jefe y se sintió frustrado", tier="local")
+    th, seen = fake_llm_node(c)
+    c.post("/api/chat", headers=A, json={"message": "hola"})
+    th.join(5)
+    assert "café sin azúcar" in seen["payload"]["system"] and "frustrado" in seen["payload"]["system"]
+
+
+def test_old_memories_default_to_claude_and_the_tier_can_be_changed(tmp_path):
+    c, _, _ = make(tmp_path, [])
+    mid = c.app.state.db.add_memory(1.0, "dato")
+    assert c.get("/api/memory", headers=A).json()[0]["tier"] == "claude"
+    assert c.put(f"/api/memory/{mid}/tier", headers=A, json={"tier": "local"}).status_code == 200
+    assert c.get("/api/memory", headers=A).json()[0]["tier"] == "local"
+    assert c.put(f"/api/memory/{mid}/tier", headers=A, json={"tier": "otro"}).status_code == 422
+
+
+def test_proposals_come_from_the_local_model_and_wait_for_sergio(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    c.app.state.db.diary_add(1.0, "2026-11-01", "Empecé terapia de pareja con mi novio, voy los martes.\nclave: abc123", "typed")
+    th, seen = fake_llm_node(c, reply="- Va a terapia de pareja los martes\n- Toma café sin azúcar\n- clave: abc123\nNADA")
+    r = c.post("/api/proposals/run", headers=A).json()
+    th.join(5)
+    assert r["added"] == 2
+    assert "abc123" not in seen["payload"]["system"] + json.dumps(seen["payload"].get("messages", ""))
+    props = c.get("/api/proposals", headers=A).json()
+    assert [p["source"] for p in props] == ["diary", "diary"] and c.get("/api/memory", headers=A).json() == []   # nothing saved yet
+
+
+def test_accepting_a_diary_proposal_defaults_to_local_and_rejected_ones_never_come_back(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    db = c.app.state.db
+    db.diary_add(1.0, "2026-11-01", "Voy a terapia los martes", "typed")
+    th, _ = fake_llm_node(c, reply="- Va a terapia los martes\n- Tiene un gato")
+    c.post("/api/proposals/run", headers=A); th.join(5)
+    p1, p2 = c.get("/api/proposals", headers=A).json()
+    assert c.post(f"/api/proposals/{p1['id']}/approve", headers=A, json={}).json()["tier"] == "local"
+    assert c.post(f"/api/proposals/{p2['id']}/reject", headers=A).status_code == 200
+    assert c.get("/api/proposals", headers=A).json() == []
+    assert c.post(f"/api/proposals/{p1['id']}/approve", headers=A, json={}).status_code == 404
+    db.diary_add(2.0, "2026-11-02", "otro día", "typed")
+    th, _ = fake_llm_node(c, reply="- Va a terapia los martes\n- Tiene un gato\n- Corre por las mañanas")
+    c.post("/api/proposals/run", headers=A); th.join(5)
+    assert [p["text"] for p in c.get("/api/proposals", headers=A).json()] == ["Corre por las mañanas"]
+
+
+def test_chat_proposals_default_to_claude_and_without_a_local_model_nothing_happens(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch)
+    c.app.state.db.add_message(1.0, "app", "user", "Trabajo en Beazley como ingeniero", "sergio")
+    assert c.post("/api/proposals/run", headers=A).json() == {"added": 0}             # no node online: retried later
+    th, _ = fake_llm_node(c, reply="- Trabaja en Beazley")
+    assert c.post("/api/proposals/run", headers=A).json() == {"added": 1}; th.join(5)
+    p = c.get("/api/proposals", headers=A).json()[0]
+    assert p["source"] == "chat" and c.post(f"/api/proposals/{p['id']}/approve", headers=A, json={}).json()["tier"] == "claude"
+
+
+def test_the_proposals_endpoints_are_admin_only(tmp_path):
+    c, _, _ = make(tmp_path, [])
+    g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()["key"]
+    for m, path in (("get", "/api/proposals"), ("post", "/api/proposals/run"), ("post", "/api/proposals/1/approve")):
+        assert getattr(c, m)(path, headers={"X-Admin-Key": g}).status_code == 401, path

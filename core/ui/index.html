@@ -616,9 +616,16 @@
     <div class="page" data-page="memory" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Memoria</div></div>
     <section>
+      <h2>Por revisar</h2>
+      <div class="group" id="proposals"></div>
+      <div class="group" style="margin-top:12px"><button class="link" id="prop-run" type="button">Buscar recuerdos nuevos ahora</button></div>
+      <div class="note" id="prop-note">Ashur lee lo nuevo de tu diario y tu chat con un modelo local, nunca con Claude, y te propone lo que parece duradero. Nada se guarda sin que lo aceptes. Lo que sale del diario se guarda «solo local» salvo que tú digas otra cosa.</div>
+    </section>
+
+    <section>
       <h2>Recuerdos de Ashur</h2>
       <div class="group" id="memories"></div>
-      <div class="note">Ashur los guarda cuando algo le parece útil más adelante. Puedes borrar cualquiera.</div>
+      <div class="note">Los que dicen «solo local» solo los leen los modelos de tus equipos; los demás pueden viajar a Claude en cada mensaje. Puedes cambiar el nivel o borrar cualquiera.</div>
     </section>
 
     <section>
@@ -1048,7 +1055,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
+    if (t === "settings") { renderCmds(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -1216,8 +1223,15 @@
       const list = await r.json();
       fill("memories", list.slice().reverse().map((m) => {
         const r = row({ title: m.text, detail: new Date(m.created * 1000).toLocaleDateString("es-CO",
-                        { day: "numeric", month: "short", year: "numeric" }) });
+                        { day: "numeric", month: "short", year: "numeric" }) + " · " + (m.tier === "local" ? "solo local" : "puede ir a Claude") });
         r.querySelector(".title").style.whiteSpace = "normal";
+        const tb = el("button", "forget", m.tier === "local" ? "Permitir Claude" : "Solo local"); tb.type = "button";
+        tb.addEventListener("click", async () => {
+          tb.disabled = true;
+          await api("api/memory/" + m.id + "/tier", { method: "PUT", body: JSON.stringify({ tier: m.tier === "local" ? "claude" : "local" }) });
+          loadMemories();
+        });
+        r.append(tb);
         const b = el("button", "forget", "Olvidar"); b.type = "button";
         b.setAttribute("aria-label", "Olvidar: " + m.text);
         b.addEventListener("click", async () => {
@@ -1230,6 +1244,32 @@
       }), "Ashur todavía no ha guardado recuerdos.", 5);
     } catch (e) {}
   }
+
+  async function loadProposals() {
+    try {
+      const r = await api("api/proposals"); const list = await r.json();
+      fill("proposals", list.map((p) => {
+        const rw = row({ title: p.text, detail: (p.source === "diary" ? "Del diario" : "Del chat") });
+        rw.querySelector(".title").style.whiteSpace = "normal";
+        const act = (path, body) => async () => { await api("api/proposals/" + p.id + path, { method: "POST", body: JSON.stringify(body || {}) }); loadProposals(); loadMemories(); };
+        const a = el("button", "forget", p.source === "diary" ? "Guardar (solo local)" : "Guardar"); a.type = "button";
+        a.addEventListener("click", act("/approve", {}));
+        const d = el("button", "forget", "Descartar"); d.type = "button";
+        d.addEventListener("click", act("/reject"));
+        rw.append(a, d);
+        return rw;
+      }), "Nada por revisar.");
+    } catch (e) {}
+  }
+  $("prop-run").addEventListener("click", async () => {
+    const b = $("prop-run"), note = $("prop-note"); b.disabled = true; b.textContent = "Leyendo…";
+    try {
+      const r = await api("api/proposals/run", { method: "POST" }); const j = await r.json();
+      note.textContent = j.added ? "Encontré " + j.added + " para que revises." : "No encontré nada nuevo (o ningún modelo local está libre ahora).";
+      loadProposals();
+    } catch (e) { note.textContent = "No pude leer ahora. Inténtalo en un rato."; }
+    b.disabled = false; b.textContent = "Buscar recuerdos nuevos ahora";
+  });
 
   async function loadSummaries() {
     try {

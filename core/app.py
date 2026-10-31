@@ -111,13 +111,14 @@ def create_app(
                         app.state.docs_due()
                         app.state.diary_due()
                         app.state.notify_due()
+                        app.state.propose_due()
             task = asyncio.create_task(loop())
         yield
         if task:
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.27.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.28.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -741,6 +742,60 @@ def create_app(
         db.log(clock(), None, "summary_deleted", {"summary_id": summary_id, "by": "sergio"})
         return {"ok": True}
 
+    class TierIn(BaseModel):
+        tier: str = Field(pattern=r"^(claude|local)$")
+
+    @app.put("/api/memory/{memory_id}/tier", dependencies=[Depends(require_admin)])
+    def memory_tier(memory_id: int, body: TierIn):
+        if not db.set_memory_tier(memory_id, body.tier):
+            raise HTTPException(404, "no such memory")
+        db.log(clock(), None, "memory_tier", {"memory_id": memory_id, "tier": body.tier})
+        return {"ok": True}
+
+    @app.get("/api/proposals", dependencies=[Depends(require_admin)])
+    def proposals_list():
+        return db.proposals()
+
+    class ApproveIn(BaseModel):
+        tier: Optional[str] = Field(default=None, pattern=r"^(claude|local)$")
+
+    @app.post("/api/proposals/{pid}/approve", dependencies=[Depends(require_admin)])
+    def proposal_approve(pid: int, body: ApproveIn):
+        p = db.proposal_get(pid)
+        if not p or p["status"] != "pending":
+            raise HTTPException(404, "No existe esa propuesta.")
+        tier = body.tier or ("local" if p["source"] == "diary" else "claude")
+        mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier)
+        db.proposal_set(pid, "accepted")
+        db.log(clock(), None, "memory_accepted", {"memory_id": mid, "tier": tier})
+        return {"memory_id": mid, "tier": tier}
+
+    @app.post("/api/proposals/{pid}/reject", dependencies=[Depends(require_admin)])
+    def proposal_reject(pid: int):
+        p = db.proposal_get(pid)
+        if not p or p["status"] != "pending":
+            raise HTTPException(404, "No existe esa propuesta.")
+        db.proposal_set(pid, "rejected")                 # kept as «rejected» so it is not proposed again
+        return {"ok": True}
+
+    @app.post("/api/proposals/run", dependencies=[Depends(require_admin)])
+    def proposals_run():
+        return {"added": brain.propose_memories()}
+
+    def propose_due() -> int:
+        """Every few hours, when enough new writing piled up. Local model only."""
+        now = clock()
+        if now - float(db.setting("prop_last", "0")) < 6 * 3600:
+            return 0
+        d = len(db.diary_after(int(db.setting("prop_diary_cursor", "0")), 3))
+        m = len(db.user_messages_after(int(db.setting("prop_msg_cursor", "0")), 15))
+        if d < 3 and m < 15:
+            return 0
+        db.set_setting("prop_last", str(now))
+        return brain.propose_memories()
+
+    app.state.propose_due = propose_due
+
     @app.delete("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
     def memory_delete(memory_id: int):
         if not db.delete_memory(memory_id):
@@ -888,7 +943,8 @@ def create_app(
 
     # --- system notifications: tasks, devices, updates and spending, read from the session log ---
     NOTIFY_CATS = {"tasks": "Tareas largas terminadas o fallidas", "devices": "Un equipo lleva rato desconectado (y cuando vuelve)",
-                   "update": "Hay una versión nueva de Ashur", "budget": "El gasto con Claude llega al 80% del mes"}
+                   "update": "Hay una versión nueva de Ashur", "budget": "El gasto con Claude llega al 80% del mes",
+                   "proposals": "Ashur tiene recuerdos nuevos por revisar"}
     NOTIFY_WATCHED = ("inventory", "docs")                       # background jobs worth a tap on the shoulder
 
     def notify_settings() -> dict:
@@ -970,6 +1026,12 @@ def create_app(
             if brain.spent_this_month() >= 0.8 * brain.s.monthly_budget_usd and db.setting("notify_budget_month", "") != month:
                 db.set_setting("notify_budget_month", month)
                 lines.append("El gasto con Claude llegó al 80% del tope de este mes.")
+        if cfg["cats"]["proposals"]:
+            top = max((p["id"] for p in db.proposals()), default=0)
+            if top > int(db.setting("notify_prop_seen", "0")):
+                db.set_setting("notify_prop_seen", str(top))
+                n_p = len(db.proposals())
+                lines.append(f"Tengo {n_p} recuerdo{'s' if n_p != 1 else ''} nuevo{'s' if n_p != 1 else ''} por revisar.")
         if not lines:
             return []
         body = lines[0] if len(lines) == 1 else f"{len(lines)} novedades: " + " ".join(lines[:3]) + (" …" if len(lines) > 3 else "")

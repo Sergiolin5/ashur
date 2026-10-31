@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.32.0 | 2026-10-31 | Nodes report their own warnings and errors (update failures, task crashes) in the heartbeat; the core logs them as `node_problem` and Ajustes → Diagnóstico lists them, so nobody has to open agent.log on a device. Connection noise is skipped; the same text is sent at most once an hour. Takes effect on each node once it has updated (needs 0.31.1 first) |
 | 0.31.1 | 2026-10-31 | **Fix: nodes could not update since 0.29.0.** 0.29.0 added requirements-voice.txt to the files that make the node version id; nodes already installed verify a downloaded bundle against their own, older list, so they computed another id and refused every update («bundle content is X, expected Y»). The list is frozen again; the installer tarball adds requirements-voice.txt on the side (not part of the id). Found by reading the Mac's agent.log |
 | 0.31.0 | 2026-10-31 | Ajustes → Diagnóstico: what `ashur errores` shows, inside the panel. Per device: connected or not, code version behind or not, and what to do; recent errors in plain Spanish with a «Copiar todo» button. New `GET /api/diagnostics` (admin only) |
 | 0.30.4 | 2026-10-31 | Panel: devices that are offline sink to the bottom; the Diario no longer switches to orange (one accent everywhere); checkboxes are real circles with a single check |

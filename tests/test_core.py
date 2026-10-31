@@ -508,3 +508,27 @@ def test_code_version_ignores_installer_only_files_so_old_nodes_still_verify(tmp
     out2 = tmp_path / "y"
     extract_bundle(build_bundle(root, extra=("requirements-voice.txt",)), out2)
     assert (out2 / "requirements-voice.txt").exists() and code_version(out2) == code_version(root)
+
+
+def test_node_problems_reach_the_diagnostics(env):
+    c, clock = env
+    h = register(c)
+    assert beat(c, h).status_code == 200
+    r = c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "full", "problems": ["update to abc failed: bundle content is x"]})
+    assert r.status_code == 200
+    d = c.get("/api/diagnostics", headers=A).json()
+    assert any("update to abc failed" in p["text"] and p["node_id"] == "mac" for p in d["problems"])
+
+
+def test_problem_buffer_skips_connection_noise_and_repeats():
+    import logging
+    from node.agent import ProblemBuffer
+    b = ProblemBuffer()
+    lg = logging.getLogger("t.problem"); lg.propagate = False; lg.addHandler(b)
+    lg.warning("core unreachable (ReadTimeout); retrying in 15s")
+    lg.warning("update to %s failed", "abc")
+    lg.warning("update to %s failed", "abc")
+    assert b.take() == ["update to abc failed"]
+    lg.warning("update to %s failed", "abc")
+    assert b.take() == []                                           # same text, within the hour
+    b.give_back(["x"]); assert b.take() == ["x"]

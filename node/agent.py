@@ -27,6 +27,44 @@ from node.policy import Policy, Thresholds
 from shared.protocol import HEARTBEAT_INTERVAL_S, Mode
 
 log = logging.getLogger("ashur.node")
+
+
+class ProblemBuffer(logging.Handler):
+    """Keeps the node's own warnings and errors so the next heartbeat can hand them to the core (the panel shows them).
+    Connection noise is skipped: it cannot be delivered anyway. The same text is sent at most once an hour."""
+    SKIP = ("core unreachable", "could not report")
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.pending: list[str] = []
+        self.sent: dict[str, float] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        if msg.startswith(self.SKIP):
+            return
+        if record.exc_info and record.exc_info[1]:
+            msg += f" ({record.exc_info[0].__name__}: {record.exc_info[1]})"
+        msg = msg[:200]
+        now = time.time()
+        if now - self.sent.get(msg, 0) < 3600 or msg in self.pending:
+            return
+        self.pending = (self.pending + [msg])[-5:]
+
+    def take(self) -> list[str]:
+        out, self.pending = self.pending, []
+        now = time.time()
+        self.sent.update({m: now for m in out})
+        return out
+
+    def give_back(self, items: list[str]) -> None:
+        for m in items:
+            self.sent.pop(m, None)
+        self.pending = (items + self.pending)[-5:]
+
+
+PROBLEMS = ProblemBuffer()
+log.addHandler(PROBLEMS)
 REALTIME_MODULES = {"llm"}            # answered within seconds, outside the heartbeat cycle
 
 
@@ -264,7 +302,14 @@ class Agent:
             beat.update(modules=sorted(self.modules), code_version=self.code_version, fresh_start=True)
         elif self.retry_missing_modules():
             beat["modules"] = sorted(self.modules)
-        reply = self.post(f"/nodes/{self.device_id}/heartbeat", beat)
+        problems = PROBLEMS.take()
+        if problems:
+            beat["problems"] = problems
+        try:
+            reply = self.post(f"/nodes/{self.device_id}/heartbeat", beat)
+        except Exception:
+            PROBLEMS.give_back(problems)
+            raise
         self.announced = True
         try:
             target = reply.json().get("code_version")

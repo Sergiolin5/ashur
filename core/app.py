@@ -118,7 +118,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.31.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.32.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -269,6 +269,8 @@ def create_app(
             db.set_node_code_version(node["id"], hb.code_version)
             if node.get("code_version"):
                 db.log(now, node["id"], "code_updated", {"from": node["code_version"], "to": hb.code_version})
+        for text in (hb.problems or [])[:5]:
+            db.log(now, node["id"], "node_problem", {"text": str(text)[:200]})
         if hb.fresh_start:
             lost = db.requeue_tasks_of(node["id"])
             if lost:
@@ -453,7 +455,7 @@ def create_app(
                         headers={"Cache-Control": "public, max-age=86400"})
 
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
-                   "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget"}
+                   "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem"}
 
     @app.get("/api/diagnostics", dependencies=[Depends(require_admin)])
     def diagnostics():

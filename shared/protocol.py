@@ -68,6 +68,7 @@ class Heartbeat(BaseModel):
     free_gpu_mem_gb: Optional[float] = None
     battery_pct: Optional[float] = None
     on_power: Optional[bool] = None
+    problems: Optional[list[str]] = None   # warnings/errors the agent logged since the last beat, so the panel can show them
 
 
 class NewTask(BaseModel):

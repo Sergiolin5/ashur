@@ -58,6 +58,7 @@ def describe(event: str, d: dict) -> str:
         "diary_deleted": "borraste una entrada del diario",
         "diary_reminder": "te recordé escribir en el diario" + (" (segundo aviso)" if d.get("which") == "second" else ""),
         "push_subscribed": "activaste los avisos en un dispositivo",
+        "node_problem": f"el equipo avisó: {d.get('text')}",
         "push_failed": f"no pude enviar un aviso: {d.get('error')}",
         "chat_key_created": f"creaste una clave de chat para ti ({d.get('guest_id')})",
         "persona_saved": f"guardó la persona {d.get('persona')}",

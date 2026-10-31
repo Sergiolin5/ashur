@@ -39,6 +39,7 @@ APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png") 
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
+INVENTORY_EVERY_S = float(os.environ.get("ASHUR_INVENTORY_EVERY_DAYS", "7")) * 86400
 GUEST_MESSAGES_PER_HOUR = 30
 GUEST_DEFAULT_CAP_USD = 1.0
 
@@ -102,13 +103,14 @@ def create_app(
                     if clock() - last_summary_check >= 60:       # retry pending summaries now and then
                         last_summary_check = clock()
                         app.state.summarize_soon()
+                        app.state.inventory_due()
             task = asyncio.create_task(loop())
         yield
         if task:
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.15.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.16.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -454,10 +456,53 @@ def create_app(
 
     app.state.summarize_soon = summarize_soon
 
+    def inventory_due() -> list[int]:
+        """Rescan each device's files every few days. Heavy: it waits until the device is
+        free (10 minutes untouched and, if portable, plugged in), and resumes if cut."""
+        queued = []
+        now = clock()
+        for n in db.nodes():
+            if n["simulated"] or "inventory" not in n["modules"]:
+                continue
+            last = db.last_inventory_task(n["id"])
+            if last and (last["status"] in ("queued", "running") or now - last["created"] < INVENTORY_EVERY_S):
+                continue
+            tid = db.add_task("inventory", {}, Weight.HEAVY.value, now, target=n["id"])
+            db.log(now, n["id"], "task_queued", {"task_id": tid, "module": "inventory", "reason": "periodic"})
+            queued.append(tid)
+        return queued
+
+    app.state.inventory_due = inventory_due
+
+    # the space report: duplicates and largest files, computed in the background, at most every 6 h
+    _report = {"at": -1e18, "data": None, "busy": False}
+
+    def space_report():
+        if not _report["busy"] and clock() - _report["at"] > 6 * 3600:
+            _report["busy"] = True
+
+            def run():
+                try:
+                    _report["data"] = {**db.inventory_report_readonly(), "computed_at": clock()}
+                except Exception as e:
+                    db.log(clock(), None, "inventory_summary_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+                finally:
+                    _report["at"], _report["busy"] = clock(), False
+            if inventory_in_background:
+                threading.Thread(target=run, daemon=True, name="ashur-report").start()
+            else:
+                run()
+        return _report["data"]
+
+    @app.get("/api/inventory/report", dependencies=[Depends(require_admin)])
+    def inventory_report():
+        return space_report() or {"pending": True}
+
     class ChatIn(BaseModel):
         message: str = Field(min_length=1, max_length=8000)
         channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
         persona: Optional[str] = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,23}$")
+        allow_claude: bool = False           # local-first: Sergio approved Claude for this message
 
     # --- device personas (Sergio only; guests never see them) ---------------
     @app.get("/api/personas")
@@ -498,7 +543,8 @@ def create_app(
         if guest and db.count_messages_since(f"g{guest['id']}", clock() - 3600) >= GUEST_MESSAGES_PER_HOUR:
             raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
         try:
-            out = brain.chat(body.message, body.channel, guest, body.persona)
+            out = brain.chat(body.message, body.channel, guest, body.persona,
+                             allow_claude=body.allow_claude and guest is None)
             if guest:                     # which device answered and which tools ran stay Sergio's business
                 return {k: v for k, v in out.items() if k not in ("device", "tools", "model")}
             summarize_soon()

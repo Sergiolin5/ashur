@@ -236,7 +236,7 @@ def test_inventory_upload_reset_and_keeps_approval(env):
     r = c.get("/inventory/mac", headers=A).json()[0]
     assert r["size"] == 11 and r["approved"] == 1        # rescan without reset keeps approval
     c.post("/nodes/mac/inventory", headers=h, json={"reset": True, "rows": []})
-    assert c.get("/inventory/mac", headers=A).json() == []
+    assert [r["path"] for r in c.get("/inventory/mac", headers=A).json()] == ["C:/a.exe"]   # approvals survive a rescan
     assert c.post("/nodes/mac/inventory", json={"rows": []}).status_code == 401
 
 
@@ -334,3 +334,25 @@ def test_overview_never_waits_for_a_slow_inventory_count(tmp_path):
     assert len(calls) == 1                             # one count at a time, not one per request
     _t.sleep(3.5)
     assert c.get("/api/overview", headers=A).json()["inventory"] == []   # numbers arrive later
+
+
+def test_inventory_is_rescanned_periodically_and_space_report(env):
+    c, clock = env
+    h = register(c, simulated=False)
+    app = c.app
+    assert [t["module"] for t in app.state.db.queued_tasks()] == ["inventory"]   # the first scan
+    assert app.state.inventory_due() == []                          # first scan still queued
+    app.state.db.conn.execute("UPDATE tasks SET status = 'done'")
+    app.state.db.conn.commit()
+    assert app.state.inventory_due() == []                          # done, but recent
+    clock.now += 8 * 86400
+    assert len(app.state.inventory_due()) == 1                      # a week later: once
+    assert app.state.inventory_due() == []
+    big = 5 << 20
+    rows = [{"path": "C:/a.iso", "size": big, "hash": "h1"}, {"path": "D:/copia/a.iso", "size": big, "hash": "h1"},
+            {"path": "C:/secreto.kdbx", "size": big, "hash": ""}]
+    c.post("/nodes/mac/inventory", headers=h, json={"reset": True, "rows": rows})
+    rep = c.get("/api/inventory/report", headers=A).json()
+    assert rep["duplicate_groups"] == 1 and rep["wasted"] == big
+    assert {f["path"] for f in rep["duplicates"][0]["files"]} == {"C:/a.iso", "D:/copia/a.iso"}
+    assert rep["largest"][0]["size"] == big

@@ -21,7 +21,8 @@ def describe(event: str, d: dict) -> str:
         "modules_changed": f"capacidades: {', '.join(d.get('to', []))}",
         "code_updated": f"actualizó su código a {d.get('to', '?')}",
         "restart_requeued": f"reinició; tareas devueltas a la cola: {d.get('requeued_tasks')}",
-        "task_queued": f"tarea {t} en cola ({m}" + (", primera vez" if d.get("reason") == "first join" else "") + ")",
+        "task_queued": f"tarea {t} en cola ({m}" + (", primera vez" if d.get("reason") == "first join"
+                                                    else ", repaso periódico" if d.get("reason") == "periodic" else "") + ")",
         "task_start": f"empezó tarea {t} ({m})",
         "task_done": f"terminó tarea {t}",
         "task_failed": f"FALLÓ tarea {t}: {d.get('error') or 'sin detalle'}",
@@ -32,6 +33,7 @@ def describe(event: str, d: dict) -> str:
                 f"conversación por {d.get('provider', '?')} ({d.get('chars_in', 0)}→{d.get('chars_out', 0)} car., "
                 f"US${d.get('cost_usd', 0)})",
         "chat_error": f"ERROR al hablar con Claude: {d.get('reason') or d.get('error')}",
+        "claude_approval_asked": f"pidió permiso para usar Claude (~US${d.get('estimate_usd')})",
         "chat_unanswered": f"mensaje sin responder: {d.get('reason', '')}",
         "chat_blocked_budget": "mensaje bloqueado por el tope de gasto",
         "memory_saved": f"guardó el recuerdo {d.get('memory_id')}",

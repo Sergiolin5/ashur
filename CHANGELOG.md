@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.16.0 | 2026-10-30 | `ASHUR_BRAIN=local-first`: local models answer; when none can, Ashur asks Sergio before using Claude for that message, with an estimated cost (guests never can). Inventories are rescanned every 7 days (`ASHUR_INVENTORY_EVERY_DAYS`), waiting for each device to be free; a rescan keeps approved files. Estado shows duplicate files (1 MB+, same hash, across devices) and the largest files, computed in the background at most every 6 h; nothing is ever deleted |
 | 0.15.0 | 2026-10-30 | Ready for a private repo: the core serves the installers and the node code on the tailnet (`irm http://zimaos:8711/install/windows.ps1 | iex`, `curl -fsSL http://zimaos:8711/install/mac.sh | bash`); the version check accepts `ASHUR_GHCR_TOKEN` for private packages; the updater can use the server's `docker login`; Windows and macOS CI only run when node or installer code changes |
 | 0.14.0 | 2026-10-30 | Device personas: one Ashur and one memory, a different voice per device. Written in Estado → Personas por dispositivo (stored as `personas/<name>.md` on the server), picked in the chat under "Hablando desde" (remembered per browser). Guests never get them; the log records which persona answered |
 | 0.13.1 | 2026-10-30 | The panel installs as an iPhone home-screen app: icon, name, full screen (manifest and apple-touch-icon, served on both doors) |

@@ -438,3 +438,19 @@ def test_device_persona_changes_the_voice_not_the_memory(tmp_path):
     ev = [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"]
     assert [e["detail"].get("persona") for e in ev].count("iphone") == 1
     assert c.delete("/api/personas/iphone", headers=A).status_code == 200
+
+
+def test_local_first_asks_before_spending_on_claude(tmp_path, monkeypatch):
+    clock = VirtualClock()
+    fake = FakeClaude([resp([text("Respuesta de Claude.")])])
+    app = create_app(str(tmp_path / "x.db"), "e", "a", clock=clock, sweep_every_s=None,
+                     brain_settings=BrainSettings(brain="local-first"), brain_client=fake)
+    c = TestClient(app)
+    r = c.post("/api/chat", headers=A, json={"message": "hola"}).json()          # no local model is up
+    assert r["needs_approval"] and r["estimate_usd"] > 0 and fake.calls == []
+    assert c.get("/api/chat/history", headers=A).json()["messages"] == []
+    r = c.post("/api/chat", headers=A, json={"message": "hola", "allow_claude": True}).json()
+    assert r["provider"] == "claude" and r["reply"] == "Respuesta de Claude." and len(fake.calls) == 1
+    g = c.post("/api/guests", headers=A, json={"name": "Ana"}).json()["key"]
+    r = c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "hola", "allow_claude": True}).json()
+    assert r["provider"] == "none" and len(fake.calls) == 1                        # a guest can't approve

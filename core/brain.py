@@ -87,6 +87,7 @@ class BrainSettings:
     max_tokens: int = 1024
     history_messages: int = 20
     brain: str = "auto"                  # auto: Claude if it works, else a local model; or claude | local
+                                         # | local-first: local; Claude only when Sergio approves that message
 
     @classmethod
     def from_env(cls) -> "BrainSettings":
@@ -377,8 +378,14 @@ class Brain:
                     {"summary_id": sid, "messages": len(chunk), "provider": provider})
         return sid
 
+    def estimate_usd(self, messages: list[dict], voice: Optional[str] = None) -> float:
+        """Rough cost of answering with Claude: ~3.5 characters per token, ~400 tokens out."""
+        chars = len(self._system(voice)) + sum(len(str(m.get("content", ""))) for m in messages)
+        est = chars / 3.5 * self.s.price_in_per_mtok / 1e6 + 400 * self.s.price_out_per_mtok / 1e6
+        return round(max(est, 0.001), 3)
+
     def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
-             voice: Optional[str] = None) -> dict:
+             voice: Optional[str] = None, allow_claude: bool = False) -> dict:
         voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice
         text = text.strip()
         now = self.clock()
@@ -387,6 +394,7 @@ class Brain:
         over_budget = self.spent_this_month() >= self.s.monthly_budget_usd or (
             guest is not None and self.spent_this_month(user) >= guest["monthly_cap_usd"])
         want_claude = self.s.brain in ("auto", "claude") and self._has_claude()
+        local_first = self.s.brain == "local-first"
         provider, device, note = None, None, None
         reply, cost, tools = "", 0.0, []
 
@@ -420,9 +428,20 @@ class Brain:
                 reply, device = self.local(self._local_system(guest, voice), messages)
                 provider = "local"
             except LocalUnavailable as e:
-                self.db.log(self.clock(), None, "chat_unanswered", {"channel": channel, "reason": str(e)[:200]})
-                said = "Ashur no puede responder ahora. Inténtalo más tarde." if guest else str(e)
-                return {"reply": said, "note": note, "provider": "none", "cost_usd": 0.0, **self.budget(guest)}
+                # local-first: Claude only for Sergio, only for this message, only once he says yes
+                if local_first and not guest and self._has_claude() and not over_budget:
+                    if not allow_claude:
+                        est = self.estimate_usd(messages, voice)
+                        self.db.log(self.clock(), None, "claude_approval_asked",
+                                    {"channel": channel, "estimate_usd": est})
+                        return {"reply": str(e), "note": None, "provider": "none", "needs_approval": True,
+                                "estimate_usd": est, "cost_usd": 0.0, **self.budget(guest)}
+                    reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice)
+                    provider, note = "claude", "Respondió Claude con tu autorización."
+                else:
+                    self.db.log(self.clock(), None, "chat_unanswered", {"channel": channel, "reason": str(e)[:200]})
+                    said = "Ashur no puede responder ahora. Inténtalo más tarde." if guest else str(e)
+                    return {"reply": said, "note": note, "provider": "none", "cost_usd": 0.0, **self.budget(guest)}
 
         reply = (reply or "").strip() or "(Sin respuesta.)"
         end = self.clock()
@@ -432,6 +451,8 @@ class Brain:
         # and a guest only as an anonymous number
         detail = {"channel": channel, "provider": provider, "chars_in": len(text),
                   "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools}
+        if allow_claude and provider == "claude":
+            detail["approved"] = True
         if guest:
             detail["guest"] = guest["id"]
         if voice:

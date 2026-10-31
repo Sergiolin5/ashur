@@ -342,9 +342,45 @@ class DB:
 
     # --- inventory ---------------------------------------------------------
     def inventory_reset(self, node_id: str) -> None:
+        """A fresh scan starts clean, except files Sergio approved: those keep their approval."""
         with self.lock:
-            self.conn.execute("DELETE FROM inventory WHERE node_id = ?", (node_id,))
+            self.conn.execute("DELETE FROM inventory WHERE node_id = ? AND approved = 0", (node_id,))
             self.conn.commit()
+
+    def last_inventory_task(self, node_id: str) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT id, status, created FROM tasks WHERE module = 'inventory' AND target = ?"
+                " ORDER BY id DESC LIMIT 1", (node_id,)).fetchone()
+        return dict(r) if r else None
+
+    def inventory_report_readonly(self, min_size: int = 1 << 20, top: int = 30) -> dict:
+        """Duplicates (same hash and size, 1 MB or more) and the largest files, on its own
+        connection so the panel never waits for it. Sensitive files have no hash: never listed."""
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            groups = c.execute(
+                """SELECT hash, size, COUNT(*) n FROM inventory
+                   WHERE hash IS NOT NULL AND hash != '' AND size >= ?
+                   GROUP BY hash, size HAVING n > 1 ORDER BY size * (n - 1) DESC LIMIT ?""",
+                (min_size, top)).fetchall()
+            dups = []
+            for g in groups:
+                files = c.execute("SELECT node_id, path FROM inventory WHERE hash = ? AND size = ? LIMIT 10",
+                                  (g["hash"], g["size"])).fetchall()
+                dups.append({"size": g["size"], "count": g["n"], "wasted": g["size"] * (g["n"] - 1),
+                             "files": [dict(f) for f in files]})
+            totals = c.execute(
+                """SELECT COUNT(*) groups, COALESCE(SUM(size * (n - 1)), 0) wasted FROM (
+                     SELECT size, COUNT(*) n FROM inventory WHERE hash IS NOT NULL AND hash != '' AND size >= ?
+                     GROUP BY hash, size HAVING n > 1)""", (min_size,)).fetchone()
+            largest = [dict(r) for r in c.execute(
+                "SELECT node_id, path, size FROM inventory ORDER BY size DESC LIMIT ?", (top,)).fetchall()]
+            return {"duplicates": dups, "duplicate_groups": totals["groups"], "wasted": totals["wasted"],
+                    "largest": largest}
+        finally:
+            c.close()
 
     def inventory_add(self, node_id: str, rows: list[dict]) -> int:
         """Upsert a batch; the approved flag survives rescans."""

@@ -222,6 +222,18 @@
     <section>
       <h2>Inventario</h2>
       <div class="group" id="inventory"></div>
+      <div class="note">Se repasa solo cada semana, cuando cada equipo está libre y conectado.</div>
+    </section>
+
+    <section>
+      <h2>Archivos duplicados</h2>
+      <div class="group" id="dups"></div>
+      <div class="note" id="dups-note">Copias idénticas de 1 MB o más, entre todos tus equipos. Ashur no borra nada: solo te muestra dónde están.</div>
+    </section>
+
+    <section>
+      <h2>Archivos más grandes</h2>
+      <div class="group" id="largest"></div>
     </section>
 
     <section>
@@ -578,7 +590,7 @@
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("dashboard").hidden = t !== "status";
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "status") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); }
+    if (t === "status") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); loadSpace(); }
     if (t === "chat") loadVoices();
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
@@ -639,23 +651,27 @@
     }
   });
   let sending = false;
-  $("chat-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = msg.value.trim();
-    if (!text || sending) return;
-    sending = true; $("send").disabled = true;
-    document.querySelectorAll(".bubble.intro").forEach((n) => n.remove());
-    bubble("me", text, Date.now() / 1000);
-    msg.value = ""; msg.style.height = "auto";
+  async function ask(text, allowClaude) {
     const wait = bubble("ashur", "");
     const dots = el("span", "typing"); dots.append(el("i"), el("i"), el("i")); wait.append(dots);
     try {
       const v = $("voice-row").hidden ? "" : $("voice").value;
-      const r = await api("api/chat", { method: "POST", body: JSON.stringify(v ? { message: text, persona: v } : { message: text }) });
+      const body = { message: text };
+      if (v) body.persona = v;
+      if (allowClaude) body.allow_claude = true;
+      const r = await api("api/chat", { method: "POST", body: JSON.stringify(body) });
       const data = await r.json();
       wait.remove();
       if (!r.ok) {
         bubble("note bad", (data && data.detail) || "No pude responder.");
+      } else if (data.needs_approval) {
+        // local-first: no local model could answer; Claude only if Sergio says yes, for this message
+        const n = bubble("note", data.reply + " ");
+        const b = el("button", "link", "Preguntarle a Claude (~" + money.format(data.estimate_usd) + ")");
+        b.type = "button"; b.style.cssText = "display:inline;padding:0;margin:0;width:auto;font-size:inherit";
+        b.addEventListener("click", () => { b.disabled = true; n.remove(); ask(text, true); });
+        n.append(b);
+        showBudget(data);
       } else if (data.provider === "none") {
         if (data.note) bubble("note", data.note);
         bubble("note bad", data.reply);
@@ -673,9 +689,18 @@
     } catch (err) {
       wait.remove();
       if (String(err.message) !== "401") bubble("note bad", "Sin conexión con el núcleo. Tu mensaje no se envió.");
-    } finally {
-      sending = false; $("send").disabled = !msg.value.trim();
     }
+  }
+  $("chat-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = msg.value.trim();
+    if (!text || sending) return;
+    sending = true; $("send").disabled = true;
+    document.querySelectorAll(".bubble.intro").forEach((n) => n.remove());
+    bubble("me", text, Date.now() / 1000);
+    msg.value = ""; msg.style.height = "auto";
+    try { await ask(text, false); }
+    finally { sending = false; $("send").disabled = !msg.value.trim(); }
   });
 
   // --- memories -----------------------------------------------------------
@@ -841,6 +866,29 @@
       loadGuests();
     } catch (err) { out.textContent = "No pude crear el invitado."; out.hidden = false; }
   });
+
+  // --- space: duplicates and largest files (computed by the core, at most every 6 h) ---
+  async function loadSpace() {
+    try {
+      const r = await api("api/inventory/report");
+      const d = await r.json();
+      if (d.pending) {
+        fill("dups", [], "Calculando… vuelve a abrir Estado en un momento.");
+        fill("largest", [], "Calculando…");
+        setTimeout(() => { if (tab === "status") loadSpace(); }, 15000);
+        return;
+      }
+      const wrap = (r) => { r.querySelector(".title").style.whiteSpace = "pre-line"; r.querySelector(".title").style.wordBreak = "break-all"; return r; };
+      const head = d.duplicate_groups
+        ? [row({ title: "Podrías recuperar " + bytes(d.wasted), detail: nf.format(d.duplicate_groups) + (d.duplicate_groups === 1 ? " archivo repetido" : " archivos repetidos") })]
+        : [];
+      fill("dups", head.concat(d.duplicates.map((g) => wrap(row({
+        title: g.files.map((f) => f.node_id + ": " + f.path).join("\n"),
+        detail: g.count + " copias de " + bytes(g.size) + " · sobran " + bytes(g.wasted) })))), "No encontré copias repetidas.", 6);
+      fill("largest", d.largest.map((f) => wrap(row({ title: f.path, detail: f.node_id, value: bytes(f.size) }))),
+           "Aún no hay inventarios.", 5);
+    } catch (e) {}
+  }
 
   // --- device personas ---------------------------------------------------------
   let personas = [];

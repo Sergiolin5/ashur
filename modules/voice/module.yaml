@@ -1,0 +1,5 @@
+name: voice
+version: 0.1.0
+os: [macos, windows, linux]
+tier: read          # downloads one audio file to a temp folder, transcribes it here, deletes it
+needs: {}

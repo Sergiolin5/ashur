@@ -49,6 +49,11 @@ if [ ! -x "$VENV/bin/python" ]; then
     "$UV" venv --quiet --python 3.12 "$VENV"
 fi
 "$UV" pip install --quiet --python "$VENV/bin/python" -r "$APP/requirements-node.txt"
+# the voice module (speech to text, on this Mac only) is opt-in: add "voice" to modules in node.yaml, then run this again
+if [ -f "$CONFIG" ] && grep -Eq '^modules:.*voice' "$CONFIG"; then
+    say "Instalando el módulo de voz (puede tardar unos minutos)..."
+    "$UV" pip install --quiet --python "$VENV/bin/python" -r "$APP/requirements-voice.txt"
+fi
 PY="$VENV/bin/python"
 
 # 4. Config (asked only the first time)

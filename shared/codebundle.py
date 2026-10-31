@@ -10,7 +10,7 @@ import tarfile
 from pathlib import Path
 from typing import Iterator
 
-CODE_PATHS = ("shared", "node", "modules", "requirements-node.txt")
+CODE_PATHS = ("shared", "node", "modules", "requirements-node.txt", "requirements-voice.txt")
 
 
 def iter_files(root: Path) -> Iterator[tuple[str, Path]]:

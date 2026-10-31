@@ -95,6 +95,15 @@ PROPOSER = """Lee lo que Sergio escribió (diario y chat) y extrae hasta 5 hecho
 - Omite lo pasajero (lo que comió hoy), claves, contraseñas y números de documentos.
 - Si no hay nada duradero, responde solo: NADA"""
 
+NOTER = """Estás leyendo un fragmento de la transcripción de una conversación entre Sergio y {who}.
+Anota solo lo importante: decisiones, compromisos, fechas y planes, cosas que alguien pidió o prometió, y temas que
+claramente importan a alguno. Una nota por línea, empezando con "- ", frases cortas y literales, sin citar textualmente
+largos tramos, sin interpretar emociones ni diagnosticar. Omite charla trivial, claves y números de documentos.
+Si no hay nada importante, responde solo: NADA"""
+
+NOTER_MERGE = """Estas son notas sueltas de una misma conversación. Quédate con un máximo de 12 de las más importantes,
+junta las repetidas y mantén el orden. Una por línea, empezando con "- "."""
+
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
 MAX_SUMMARY_CHARS = 4000
@@ -480,6 +489,23 @@ class Brain:
         self.db.log(self.clock(), None, "conversation_summarized",
                     {"summary_id": sid, "messages": len(chunk), "provider": provider})
         return sid
+
+    def conversation_notes(self, transcript: str, label: str = "") -> str:
+        """Notes (not a transcript) of a long conversation, with a LOCAL model only, chunk by chunk."""
+        if self.local is None or self.s.brain == "claude":
+            raise LocalUnavailable("No hay modelo local para sacar las notas.")
+        step, size = [], 5000
+        chunks = [transcript[i:i + size] for i in range(0, len(transcript), size)] or [""]
+        for i, ch in enumerate(chunks, 1):
+            text, _d = self.local(NOTER.format(who=label or "otra persona"), [{"role": "user", "content": ch}])
+            step += [ln.strip() for ln in text.splitlines() if ln.strip().startswith(("-", "•", "*")) and not looks_like_secret(ln)
+                     and not DIARY_SECRET.search(ln)]
+        step = list(dict.fromkeys(step))
+        if len(step) > 14:                              # long talk: one more pass to keep only what matters most
+            text, _d = self.local(NOTER_MERGE, [{"role": "user", "content": "\n".join(step)[:6000]}])
+            merged = [ln.strip() for ln in text.splitlines() if ln.strip().startswith(("-", "•", "*"))]
+            step = merged or step[:14]
+        return "\n".join("- " + ln.lstrip("-•* ").strip() for ln in step[:20])
 
     def propose_memories(self) -> int:
         """Read what Sergio wrote since last time (diary and chat) with a LOCAL model only, and put lasting facts

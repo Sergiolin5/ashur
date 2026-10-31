@@ -352,6 +352,22 @@
   @keyframes said { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .entry .del.sure { color: var(--red); }
   .error { color: color-mix(in srgb, var(--red) 82%, var(--amber)); line-height: 1.35; }
+  /* voice */
+  input[type=file] { font-size: 14px; color: var(--secondary); }
+  input[type=file]::file-selector-button { font: inherit; font-weight: 600; color: #fff; border: 0; border-radius: 999px; padding: 8px 16px; margin-right: 10px;
+                                           background: linear-gradient(180deg, var(--tint-2), var(--tint)); }
+  .composer .mic { flex: none; width: 34px; height: 34px; margin: 0 0 2px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+                   background: var(--glass); color: var(--tint); box-shadow: var(--glass-shadow); border: 1px solid var(--glass-edge); }
+  .composer .mic svg { width: 18px; height: 18px; }
+  .rec { animation: recpulse 1.4s var(--expo) infinite; background: linear-gradient(180deg, #ff6b6b, var(--red)) !important; color: #fff !important; }
+  @keyframes recpulse { 0% { box-shadow: 0 0 0 0 rgba(255,59,48,.5); } 70%, 100% { box-shadow: 0 0 0 12px rgba(255,59,48,0); } }
+  .job { padding: 12px 16px; }
+  .job .notes { white-space: pre-wrap; margin: 8px 0; line-height: 1.4; }
+  .job .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .job .acts button { width: auto; margin: 0; padding: 7px 14px; font-size: 14px; }
+  .job + .job::before { content: ""; display: block; border-top: .5px solid var(--separator); margin: -12px 0 12px; }
+  #a-group .row button { flex: none; width: auto; margin: 0; padding: 9px 18px; }
+  #a-group input[type=text], #a-group input:not([type]) { flex: 1; min-width: 0; }
   /* commands */
   .cmd { padding: 12px 16px; }
   .cmd .why { font-size: 15px; font-weight: 500; }
@@ -524,6 +540,13 @@
       <button type="button" id="d-save">Guardar</button>
     </div>
     <div class="error" id="d-error" role="alert" hidden></div>
+
+    <section>
+      <h2>Voz</h2>
+      <div class="group" id="a-group"></div>
+      <div class="note" id="a-note"></div>
+      <div id="a-jobs" style="margin-top:12px"></div>
+    </section>
 
     <section>
       <h2>Avisos</h2>
@@ -729,6 +752,9 @@
       <input type="checkbox" id="share-diary"> Compartir mi diario con Claude en este mensaje
     </label>
     <form id="chat-form">
+      <button class="mic" id="mic" type="button" aria-label="Dictar un mensaje">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
       <textarea id="msg" rows="1" placeholder="Cuéntame o pregúntame algo" aria-label="Mensaje para Ashur" maxlength="8000"></textarea>
       <button class="send" id="send" type="submit" aria-label="Enviar" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>
@@ -1521,7 +1547,7 @@
       sel.value = list.some((p) => p.name === saved) ? saved : "";
       $("voice-row").hidden = !list.length;
     } catch (e) {}
-    $("docs-row").hidden = $("diary-row").hidden = role === "guest";
+    $("docs-row").hidden = $("diary-row").hidden = $("mic").hidden = role === "guest";
   }
   $("voice").addEventListener("change", () => { try { localStorage.setItem("ashur.voice", $("voice").value); } catch (e) {} });
 
@@ -1590,6 +1616,12 @@
       ["Ver las últimas líneas del registro del nodo", "tail -50 ~/.ashur/agent.log"],
       ["Comprobar que el modelo local está descargado", "ollama list"],
       ["Descargar el modelo local si falta", "ollama pull qwen2.5:3b"]]],
+    ["Voz en la Mac (opcional, una vez)", "Terminal", [
+      ["1. Abrir la configuración del nodo y añadir «voice» a la línea modules (queda: modules: [inventory, docs, voice])", "open -e ~/.ashur/node.yaml"],
+      ["2. Correr el instalador otra vez: instala el módulo de voz; el modelo se descarga la primera vez que se usa", "curl -fsSL http://zimaos:8711/install/mac.sh | bash"]]],
+    ["Voz en Windows (opcional, una vez)", "PowerShell normal", [
+      ["1. Abrir la configuración del nodo y añadir «voice» a la línea modules", "notepad $env:LOCALAPPDATA\\Ashur\\node.yaml"],
+      ["2. Correr el instalador otra vez", "irm http://zimaos:8711/install/windows.ps1 | iex"]]],
     ["Núcleo (ZimaOS)", "Terminal de ZimaOS → contenedor ashur-core", [
       ["Resumen del estado", "ashur"],
       ["Autoprueba de todo", "ashur probar"],
@@ -1666,7 +1698,7 @@
     try {
       const r = await api("api/diary");
       if (r.ok) renderDiary(await r.json());
-      loadNotify();
+      loadNotify(); loadAudio();
     } catch (e) {}
   }
   $("d-save").addEventListener("click", async () => {
@@ -1783,6 +1815,117 @@
     });
     window.addEventListener("hashchange", () => { if (unlocked && location.hash === "#diario") showTab("diary"); if (unlocked && location.hash === "#estado") showTab("status"); });
     swReg();
+  }
+
+
+  // --- voice: dictation (his own words go into a text box) and long conversations (only notes are kept) ---
+  let recorder = null, recStream = null;
+  const pickMime = () => (window.MediaRecorder && ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((m) => MediaRecorder.isTypeSupported(m))) || "";
+  async function uploadAudio(body, params) {
+    const q = new URLSearchParams(params).toString();
+    return api("api/audio?" + q, { method: "POST", body, headers: { "Content-Type": "application/octet-stream" } });
+  }
+  async function waitDictation(id) {
+    for (let i = 0; i < 120; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const r = await api("api/audio/" + id); if (!r.ok) throw new Error("se perdió el audio");
+      const j = await r.json();
+      if (j.status === "done") return j.text || "";
+      if (j.status === "failed") throw new Error(j.error || "falló la transcripción");
+    }
+    throw new Error("tardó demasiado");
+  }
+  // one recorder for both places: the diary box and the chat box
+  async function dictate(btn, target, say) {
+    if (recorder) { recorder.stop(); return; }
+    if (!window.MediaRecorder || !navigator.mediaDevices) { say("Este navegador no puede grabar."); return; }
+    try { recStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { say("No tengo permiso para usar el micrófono."); return; }
+    const mime = pickMime(), chunks = [];
+    recorder = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      recStream.getTracks().forEach((t) => t.stop()); recorder = null; btn.classList.remove("rec");
+      btn.dataset.busy = "1"; say("Transcribiendo…");
+      try {
+        const type = mime || "audio/webm", ext = type.includes("mp4") ? "m4a" : "webm";
+        const r = await uploadAudio(new Blob(chunks, { type }), { kind: "dictation", ext });
+        if (!r.ok) { say(((await r.json()).detail) || "No se pudo enviar el audio."); return; }
+        const id = (await r.json()).id, text = await waitDictation(id);
+        await api("api/audio/" + id, { method: "DELETE" });
+        target.value = (target.value ? target.value.replace(/\s*$/, " ") : "") + text;
+        target.dispatchEvent(new Event("input", { bubbles: true })); target.focus();
+        say(text ? "Listo: revisa el texto antes de guardar o enviar." : "No se oyó nada.");
+      } catch (e) { say("No pude transcribir: " + (e.message || e)); }
+      finally { delete btn.dataset.busy; btn.textContent = btn.dataset.label || ""; if (btn.id === "mic") btn.replaceChildren(...micIcon.cloneNode(true).childNodes); }
+    };
+    recorder.start(); btn.classList.add("rec"); say("Grabando… toca otra vez para terminar.");
+    if (btn.id !== "mic") btn.textContent = "Detener";
+  }
+  const micIcon = $("mic").cloneNode(true);
+  $("mic").addEventListener("click", () => {
+    const hint = (t) => { $("spend").textContent = t; };
+    dictate($("mic"), $("msg"), hint);
+  });
+
+  const JOB_TEXT = { uploaded: "En cola…", transcribing: "Transcribiendo en uno de tus equipos…", noting: "Sacando las notas…", done: "Listo", failed: "No salió" };
+  let jobsTimer = null;
+  async function loadAudio() {
+    try {
+      const r = await api("api/audio"); if (!r.ok) return;
+      const data = await r.json(), g = $("a-group"), nodes = [];
+      if (!g.dataset.built) {
+        g.dataset.built = "1";
+        const r1 = row({ title: "Dictar al diario", detail: "Habla; el texto aparece arriba para que lo revises" });
+        const b1 = el("button", null, "Dictar"); b1.type = "button"; b1.dataset.label = "Dictar";
+        b1.addEventListener("click", () => dictate(b1, dtxt, (t) => { $("a-note").textContent = t; }));
+        r1.append(b1);
+        const r2 = el("div", "row"); r2.style.flexDirection = "column"; r2.style.alignItems = "stretch";
+        r2.append(el("div", "title", "Subir una conversación grabada"),
+                  el("div", "detail", "Desde Notas de voz: Compartir → guarda en Archivos y elígela aquí. Se transcribe en tu Mac o Legion Go, el audio se borra al terminar y solo quedan las notas."));
+        const f = el("input"); f.type = "file"; f.accept = "audio/*,.m4a,.mp3,.wav,.aac,.mp4,.caf"; f.id = "a-file"; f.setAttribute("aria-label", "Archivo de audio");
+        const who = el("input"); who.type = "text"; who.placeholder = "¿Con quién era? (opcional)"; who.maxLength = 40; who.id = "a-who";
+        const lab = el("label"); lab.style.cssText = "display:flex;gap:8px;align-items:flex-start;font-size:14px;margin:8px 0";
+        const cb = el("input"); cb.type = "checkbox"; cb.id = "a-consent";
+        lab.append(cb, el("span", null, "La otra persona sabe que se grabó y está de acuerdo."));
+        const go = el("button", null, "Subir y sacar notas"); go.type = "button"; go.style.cssText = "width:auto;margin:0;align-self:flex-start";
+        go.addEventListener("click", async () => {
+          const note = $("a-note"), file = f.files[0];
+          if (!file) { note.textContent = "Elige primero el archivo de audio."; return; }
+          if (!cb.checked) { note.textContent = "Marca la casilla: la otra persona debe saber y estar de acuerdo."; return; }
+          go.disabled = true; note.textContent = "Subiendo… (los audios largos tardan un poco)";
+          try {
+            const ext = (file.name.split(".").pop() || "m4a").toLowerCase().slice(0, 5);
+            const r = await uploadAudio(file, { kind: "conversation", ext, label: who.value.trim(), consent: "true" });
+            if (!r.ok) { note.textContent = ((await r.json()).detail) || "No se pudo subir."; }
+            else { note.textContent = "Subido. Puedes cerrar esta pantalla; te aviso cuando estén las notas."; f.value = ""; cb.checked = false; loadAudio(); }
+          } catch (e) { note.textContent = "No se pudo subir: " + (e.message || e); }
+          go.disabled = false;
+        });
+        r2.append(f, who, lab, go);
+        g.replaceChildren(r1, r2);
+      }
+      if (!data.voice_ready && !$("a-note").textContent) $("a-note").textContent = "Ningún equipo tiene todavía el módulo de voz: se activa en la Mac o el Legion Go (Ajustes → Comandos → Voz).";
+      const jobs = data.jobs.filter((j) => j.kind === "conversation");
+      for (const j of jobs) {
+        const it = el("div", "job");
+        const when = new Date(j.ts * 1000).toLocaleDateString("es-CO", { day: "numeric", month: "short" });
+        it.append(el("div", "title", (j.label ? "Conversación con " + j.label : "Conversación") + " · " + when), el("div", "detail", JOB_TEXT[j.status] || j.status));
+        it.lastChild.style.whiteSpace = "normal";
+        if (j.status === "done") it.append(el("div", "notes", j.notes || ""));
+        if (j.status === "failed") { const e = el("div", "error", j.error || ""); it.append(e); }
+        const acts = el("div", "acts");
+        const act = (label, fn) => { const b = el("button", label === "Borrar" ? "forget" : null, label); b.type = "button"; b.addEventListener("click", async () => { b.disabled = true; await fn(); loadAudio(); }); acts.append(b); };
+        if (j.status === "done") act("Pasar al diario", () => api("api/audio/" + j.id + "/to-diary", { method: "POST" }).then(() => { if (tab === "diary") loadDiary(); }));
+        if (j.status === "failed") act("Reintentar", () => api("api/audio/" + j.id + "/retry", { method: "POST" }));
+        if (j.status !== "transcribing" && j.status !== "noting") act("Borrar", () => api("api/audio/" + j.id, { method: "DELETE" }));
+        it.append(acts); nodes.push(it);
+      }
+      const box = el("div", "group"); box.append(...nodes);
+      $("a-jobs").replaceChildren(...(nodes.length ? [box] : []));
+      clearTimeout(jobsTimer);
+      if (jobs.some((j) => j.status === "transcribing" || j.status === "noting" || j.status === "uploaded") && tab === "diary") jobsTimer = setTimeout(loadAudio, 5000);
+    } catch (e) {}
   }
 
   // --- motion: light follows the pointer; the wallpaper leans a little. Off for reduced motion and touch ---

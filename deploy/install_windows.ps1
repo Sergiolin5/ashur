@@ -90,6 +90,12 @@ $vpy  = Join-Path $Venv "Scripts\python.exe"
 $vpyw = Join-Path $Venv "Scripts\pythonw.exe"
 & $vpy -m pip install --quiet --upgrade pip
 & $vpy -m pip install --quiet -r (Join-Path $App "requirements-node.txt")
+# the voice module (speech to text, on this PC only) is opt-in: add "voice" to modules in node.yaml, then run this again
+$cfgPath = Join-Path $Home_ "node.yaml"
+if ((Test-Path $cfgPath) -and (Select-String -Path $cfgPath -Pattern '^modules:.*voice' -Quiet)) {
+    Write-Host "Instalando el módulo de voz (puede tardar unos minutos)..."
+    & $vpy -m pip install --quiet -r (Join-Path $App "requirements-voice.txt")
+}
 
 # 4. Config (asked only the first time)
 if (-not (Test-Path $Config)) {

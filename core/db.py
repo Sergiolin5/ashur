@@ -76,6 +76,19 @@ CREATE TABLE IF NOT EXISTS memory (
     text        TEXT NOT NULL,
     source      TEXT
 );
+CREATE TABLE IF NOT EXISTS audio_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,
+    kind        TEXT NOT NULL,                 -- 'dictation' (his own words) or 'conversation' (notes only)
+    label       TEXT NOT NULL DEFAULT '',
+    ext         TEXT NOT NULL DEFAULT 'm4a',
+    bytes       INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL,                 -- uploaded, transcribing, noting, done, failed
+    task_id     INTEGER,
+    text        TEXT,                          -- dictation only
+    notes       TEXT,                          -- conversation only
+    error       TEXT
+);
 CREATE TABLE IF NOT EXISTS memory_proposals (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          REAL NOT NULL,
@@ -724,6 +737,44 @@ class DB:
     def set_memory_tier(self, memory_id: int, tier: str) -> bool:
         with self.lock:
             cur = self.conn.execute("UPDATE memory SET tier = ? WHERE id = ?", (tier, memory_id))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    # --- audio jobs ---
+    def audio_add(self, ts: float, kind: str, label: str, ext: str, nbytes: int) -> int:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO audio_jobs (ts, kind, label, ext, bytes, status) VALUES (?, ?, ?, ?, ?, 'uploaded')",
+                                    (ts, kind, label, ext, nbytes))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def audio_get(self, aid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM audio_jobs WHERE id = ?", (aid,)).fetchone()
+        return dict(r) if r else None
+
+    def audio_by_task(self, task_id: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM audio_jobs WHERE task_id = ?", (task_id,)).fetchone()
+        return dict(r) if r else None
+
+    def audio_list(self, limit: int = 30) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute("SELECT * FROM audio_jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+
+    def audio_set(self, aid: int, **fields) -> None:
+        allowed = {"status", "task_id", "text", "notes", "error"}
+        cols = [k for k in fields if k in allowed]
+        if not cols:
+            return
+        with self.lock:
+            self.conn.execute(f"UPDATE audio_jobs SET {', '.join(c + ' = ?' for c in cols)} WHERE id = ?",
+                              (*[fields[c] for c in cols], aid))
+            self.conn.commit()
+
+    def audio_delete(self, aid: int) -> bool:
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM audio_jobs WHERE id = ?", (aid,))
             self.conn.commit()
         return cur.rowcount > 0
 

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from shared.codebundle import build_bundle, code_version, has_node_code
 
@@ -118,7 +118,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.28.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.29.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -347,6 +347,8 @@ def create_app(
         db.finish_task(task_id, res.ok, res.model_dump(), now)
         db.log(now, t["node_id"], "task_done" if res.ok else "task_failed",
                {"task_id": task_id, "module": t["module"], "error": res.error})
+        if t["module"] == "voice":
+            voice_received(task_id, res)
         return {"ok": True}
 
     @app.post("/nodes/{node_id}/inventory")
@@ -940,6 +942,146 @@ def create_app(
         db.set_setting("diary_enabled", "1" if body.enabled else "0")
         db.set_setting("diary_hour", str(body.hour))
         return diary_settings()
+
+    # --- audio: dictation and long conversations, transcribed on one of his own machines ---
+    audio_dir = data_dir / "audio"
+    AUDIO_MAX = int(os.environ.get("ASHUR_AUDIO_MAX_MB", "250")) * 1024 * 1024
+    AUDIO_EXT = re.compile(r"^[a-z0-9]{2,5}$")
+
+    def voice_ready() -> bool:
+        return any("voice" in n["modules"] and n["mode"] != Mode.OFFLINE.value for n in db.nodes())
+
+    def audio_enqueue(job: dict) -> None:
+        weight = Weight.HEAVY.value if job["kind"] == "conversation" else Weight.LIGHT.value
+        tid = db.add_task("voice", {"audio_id": job["id"], "kind": job["kind"]}, weight, clock())
+        db.audio_set(job["id"], status="transcribing", task_id=tid, error=None)
+
+    @app.post("/api/audio", dependencies=[Depends(require_self)])
+    async def audio_upload(request: Request, kind: str = "dictation", label: str = "", ext: str = "m4a", consent: bool = False):
+        ext = ext.lower().lstrip(".")
+        if kind not in ("dictation", "conversation") or not AUDIO_EXT.match(ext) or len(label) > 40:
+            raise HTTPException(422, "Datos del audio no válidos.")
+        if kind == "conversation" and not consent:
+            raise HTTPException(400, "Confirma que la otra persona sabe que se grabó la conversación y está de acuerdo.")
+        if not voice_ready():
+            raise HTTPException(409, "Ningún equipo con el módulo de voz está disponible ahora. Se activa en el nodo de la Mac o del "
+                                     "Legion Go (Ajustes → Comandos).")
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        tmp = audio_dir / f"upload-{int(clock() * 1000)}.part"
+        size = 0
+        try:
+            with open(tmp, "wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > AUDIO_MAX:
+                        raise HTTPException(413, f"El audio pasa de {AUDIO_MAX // (1024 * 1024)} MB.")
+                    f.write(chunk)
+            if size == 0:
+                raise HTTPException(422, "El audio llegó vacío.")
+            job_id = db.audio_add(clock(), kind, label.strip(), ext, size)
+            tmp.replace(audio_dir / f"{job_id}.{ext}")
+        finally:
+            tmp.unlink(missing_ok=True)
+        audio_enqueue(db.audio_get(job_id))
+        db.log(clock(), None, "audio_uploaded", {"kind": kind, "bytes": size, **({"consent": True} if kind == "conversation" else {})})
+        return {"id": job_id}
+
+    @app.get("/nodes/{node_id}/audio/{audio_id}")
+    def audio_download(audio_id: int, node: dict = Depends(require_node)):
+        job = db.audio_get(audio_id)
+        t = db.get_task(job["task_id"]) if job and job["task_id"] else None
+        f = audio_dir / f"{audio_id}.{job['ext']}" if job else None
+        if not t or t["node_id"] != node["id"] or t["status"] != "running" or not f or not f.exists():
+            raise HTTPException(404, "No hay audio para esa tarea.")
+        return FileResponse(f)
+
+    def audio_forget_files(job: dict) -> None:
+        for suffix in (job["ext"], "txt"):
+            (audio_dir / f"{job['id']}.{suffix}").unlink(missing_ok=True)
+
+    def notes_job(job_id: int) -> None:
+        job = db.audio_get(job_id)
+        txt = audio_dir / f"{job_id}.txt"
+        try:
+            transcript = txt.read_text(encoding="utf-8")
+            notes = brain.conversation_notes(transcript, job["label"]) if transcript.strip() else ""
+        except (LocalUnavailable, OSError) as e:
+            db.audio_set(job_id, status="failed", error=("No pude sacar las notas ahora (" + str(e)[:120] + "). "
+                         "El texto sigue guardado solo en el servidor: pulsa Reintentar o bórralo."))
+            return
+        db.audio_set(job_id, status="done", notes=notes or "(No encontré nada importante en esta conversación.)", error=None)
+        audio_forget_files(job)                      # the literal transcript is never kept
+        db.log(clock(), None, "audio_done", {"kind": "conversation", "chars": len(notes)})
+
+    def voice_received(task_id: int, res) -> None:
+        job = db.audio_by_task(task_id)
+        text = ((res.result or {}).get("text") or "").strip() if res.ok else ""
+        db.clear_payload(task_id)                   # the transcript must not linger in the tasks table
+        if not job:
+            return
+        if not res.ok:
+            db.audio_set(job["id"], status="failed", error=f"La transcripción falló en el equipo: {(res.error or 'sin detalle')[:160]}")
+            db.log(clock(), None, "audio_failed", {"kind": job["kind"]})
+            return
+        if job["kind"] == "dictation":
+            db.audio_set(job["id"], status="done", text=text)
+            audio_forget_files(job)
+            db.log(clock(), None, "audio_done", {"kind": "dictation", "chars": len(text)})
+            return
+        txt = audio_dir / f"{job['id']}.txt"
+        txt.write_text(text, encoding="utf-8")
+        try:
+            txt.chmod(0o600)
+        except OSError:
+            pass
+        (audio_dir / f"{job['id']}.{job['ext']}").unlink(missing_ok=True)     # the recording is gone once it is text
+        db.audio_set(job["id"], status="noting")
+        threading.Thread(target=notes_job, args=(job["id"],), daemon=True, name="audio-notes").start()
+
+    @app.get("/api/audio", dependencies=[Depends(require_self)])
+    def audio_list():
+        return {"jobs": db.audio_list(), "voice_ready": voice_ready()}
+
+    @app.get("/api/audio/{audio_id}", dependencies=[Depends(require_self)])
+    def audio_one(audio_id: int):
+        job = db.audio_get(audio_id)
+        if not job:
+            raise HTTPException(404, "No existe ese audio.")
+        return job
+
+    @app.delete("/api/audio/{audio_id}", dependencies=[Depends(require_self)])
+    def audio_remove(audio_id: int):
+        job = db.audio_get(audio_id)
+        if not job:
+            raise HTTPException(404, "No existe ese audio.")
+        audio_forget_files(job)
+        db.audio_delete(audio_id)
+        return {"ok": True}
+
+    @app.post("/api/audio/{audio_id}/retry", dependencies=[Depends(require_self)])
+    def audio_retry(audio_id: int):
+        job = db.audio_get(audio_id)
+        if not job or job["status"] != "failed":
+            raise HTTPException(404, "Nada que reintentar.")
+        if (audio_dir / f"{audio_id}.txt").exists():
+            db.audio_set(audio_id, status="noting", error=None)
+            threading.Thread(target=notes_job, args=(audio_id,), daemon=True, name="audio-notes").start()
+        elif (audio_dir / f"{audio_id}.{job['ext']}").exists() and voice_ready():
+            audio_enqueue(job)
+        else:
+            raise HTTPException(409, "No queda el audio ni el texto, o ningún equipo con voz está disponible.")
+        return {"ok": True}
+
+    @app.post("/api/audio/{audio_id}/to-diary", dependencies=[Depends(require_self)])
+    def audio_to_diary(audio_id: int):
+        job = db.audio_get(audio_id)
+        if not job or job["kind"] != "conversation" or job["status"] != "done" or not job["notes"]:
+            raise HTTPException(404, "No hay notas listas para pasar al diario.")
+        now = clock()
+        who = f" con {job['label']}" if job["label"] else ""
+        eid = db.diary_add(now, local_day(now), f"Notas de una conversación{who}:\n{job['notes']}", "audio")
+        db.log(now, None, "diary_entry", {"chars": len(job["notes"]), "source": "audio"})
+        return {"id": eid}
 
     # --- system notifications: tasks, devices, updates and spending, read from the session log ---
     NOTIFY_CATS = {"tasks": "Tareas largas terminadas o fallidas", "devices": "Un equipo lleva rato desconectado (y cuando vuelve)",

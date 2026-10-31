@@ -10,7 +10,7 @@ COPY core ./core
 # the node code this core ships to its nodes (they update themselves from it)
 COPY node ./node
 COPY modules ./modules
-COPY requirements-node.txt .
+COPY requirements-node.txt requirements-voice.txt ./
 # installers the core serves on the tailnet (the repo can be private)
 COPY deploy/install_windows.ps1 deploy/install_mac.sh ./deploy/
 ENV ASHUR_DB=/data/ashur.db

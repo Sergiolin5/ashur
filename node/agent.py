@@ -57,6 +57,20 @@ class TaskContext:
         """Send a batch to /nodes/<me>/<kind> (docs)."""
         self.agent.post(f"/nodes/{self.agent.device_id}/{kind}", body)
 
+    @property
+    def config(self) -> dict:
+        return self.agent.cfg
+
+    def download(self, path: str, dest) -> None:
+        """Stream a file from the core to disk (audio can be hundreds of MB)."""
+        with self.agent.client.stream("GET", path, headers=self.agent._headers(), timeout=600) as r:
+            if r.status_code == 401:
+                raise NeedsEnrollment(r.text)
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_bytes(1 << 20):
+                    f.write(chunk)
+
     def should_stop(self) -> bool:
         """True when the agent is shutting down, or when Sergio needs the machine back:
         heavy work only runs in Full mode, light work stops when the node is busy or off."""

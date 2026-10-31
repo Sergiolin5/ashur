@@ -34,10 +34,9 @@ def run(payload: dict, ctx) -> dict:
     candidates: dict[str, float] = {}
 
     def emit(row: dict) -> None:
-        if row.get("kind") == "file" and not row.get("runnable") is True or row.get("kind") == "file":
-            p = row["path"]
-            if os.path.splitext(p.lower())[1] in SUPPORTED and (row.get("size") or 0) > 0:
-                candidates[p] = row.get("modified") or 0
+        p = row["path"]
+        if row["kind"] == "file" and os.path.splitext(p.lower())[1] in SUPPORTED and (row.get("size") or 0) > 0:
+            candidates[p] = row.get("modified") or 0
 
     walk = scan(roots, emit, stop=ctx.should_stop)
     stats = {"documents": len(candidates), "read": 0, "unchanged": 0, "empty": 0, "removed": 0, "chars": 0}

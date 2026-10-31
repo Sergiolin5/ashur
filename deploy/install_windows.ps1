@@ -109,7 +109,7 @@ if (-not (Test-Path $Config)) {
 device_id: $device
 persona: $device
 core_url: $coreUrl
-modules: [inventory]
+modules: [inventory, docs]
 yield_policy: $policy
 "@
     # UTF-8 without BOM (PowerShell 5.1 adds one with Set-Content -Encoding UTF8)

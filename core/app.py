@@ -26,11 +26,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.brain import (Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
+from core.brain import (SECRET_WORDS, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
                         looks_like_secret, month_start)
 from core.db import DB, hash_token
 from shared.protocol import (
-    OFFLINE_AFTER_S, Heartbeat, InventoryBatch, Mode, NewTask, NodeStatus,
+    OFFLINE_AFTER_S, Heartbeat, DocsBatch, InventoryBatch, Mode, NewTask, NodeStatus,
     RegisterRequest, RegisterResponse, Task, TaskResult, Weight,
 )
 
@@ -104,13 +104,14 @@ def create_app(
                         last_summary_check = clock()
                         app.state.summarize_soon()
                         app.state.inventory_due()
+                        app.state.docs_due()
             task = asyncio.create_task(loop())
         yield
         if task:
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.17.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.18.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -355,6 +356,21 @@ def create_app(
             p["folder"] = last.rsplit("/", 1)[0] if "/" in last else last
         return {"ok": True, "stored": n}
 
+    @app.post("/nodes/{node_id}/docs")
+    def docs_upload(batch: DocsBatch, node: dict = Depends(require_node)):
+        # a passage that looks like a password or key line never enters the index
+        ups = [{"path": d.path, "modified": d.modified,
+                "chunks": [c for c in d.chunks if not SECRET_WORDS.search(c)]} for d in batch.upserts]
+        out = db.docs_apply(node["id"], ups, batch.deletes)
+        db.log(clock(), node["id"], "docs_indexed", out)
+        return {"ok": True, **out}
+
+    @app.get("/api/docs", dependencies=[Depends(require_admin)])
+    def docs_info(q: str = ""):
+        words = q.split()
+        return {"summary": db.docs_summary(),
+                "hits": db.docs_search(words, 10) if words else []}
+
     # --- Sergio / Ashur endpoints ---------------------------------------
     @app.get("/", response_class=HTMLResponse)
     def root():
@@ -475,6 +491,27 @@ def create_app(
 
     app.state.inventory_due = inventory_due
 
+    def docs_due() -> list[int]:
+        """Read the documents of a device once its inventory has finished, then every few days.
+        Heavy like the inventory, so it waits until the device is free; incremental, so reruns are light."""
+        queued = []
+        now = clock()
+        for n in db.nodes():
+            if n["simulated"] or "docs" not in n["modules"]:
+                continue
+            inv = db.last_inventory_task(n["id"])
+            if not inv or inv["status"] != "done":
+                continue
+            last = db.last_module_task("docs", n["id"])
+            if last and (last["status"] in ("queued", "running") or now - last["created"] < INVENTORY_EVERY_S):
+                continue
+            tid = db.add_task("docs", {}, Weight.HEAVY.value, now, target=n["id"])
+            db.log(now, n["id"], "task_queued", {"task_id": tid, "module": "docs", "reason": "periodic"})
+            queued.append(tid)
+        return queued
+
+    app.state.docs_due = docs_due
+
     # the space report: duplicates and largest files, computed in the background, at most every 6 h
     _report = {"at": -1e18, "data": None, "busy": False}
 
@@ -504,6 +541,7 @@ def create_app(
         channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
         persona: Optional[str] = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,23}$")
         allow_claude: bool = False           # local-first: Sergio approved Claude for this message
+        share_docs: bool = False             # Sergio lets Claude read document fragments for this message
 
     # --- device personas (Sergio only; guests never see them) ---------------
     @app.get("/api/personas")
@@ -545,7 +583,8 @@ def create_app(
             raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
-                             allow_claude=body.allow_claude and guest is None)
+                             allow_claude=body.allow_claude and guest is None,
+                             share_docs=body.share_docs and guest is None)
             if guest:                     # which device answered and which tools ran stay Sergio's business
                 return {k: v for k, v in out.items() if k not in ("device", "tools", "model")}
             summarize_soon()

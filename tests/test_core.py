@@ -381,3 +381,51 @@ def test_metrics_never_invent_a_gpu_reading(monkeypatch):
     metrics._gpu_cache.update(at=-1e9, val=None)
     out = metrics.read(cpu=12.34)
     assert out["cpu_pct"] == 12.3 and 0 <= out["ram_pct"] <= 100 and "gpu_pct" not in out
+
+
+def docs_up(c, h, path, chunks, device="mac", deletes=()):
+    return c.post(f"/nodes/{device}/docs", headers=h,
+                  json={"upserts": [{"path": path, "modified": 1.0, "chunks": chunks}] if path else [],
+                        "deletes": list(deletes)})
+
+
+def test_documents_are_indexed_searched_replaced_and_removed(env):
+    c, _ = env
+    h = register(c)
+    assert docs_up(c, h, "/docs/contrato.docx", ["Contrato de arrendamiento firmado en Bogotá", "Cláusula quinta"]).json()["chunks"] == 2
+    docs_up(c, h, "/docs/notas.txt", ["lista de compras: leche, huevos"])
+    hit = c.get("/api/docs?q=arrendamiento", headers=A).json()
+    assert [x["path"] for x in hit["hits"]] == ["/docs/contrato.docx"] and "arrendamiento" in hit["hits"][0]["snippet"]
+    assert c.get("/api/docs?q=bogota", headers=A).json()["hits"]            # accents and prefixes are forgiven
+    assert c.get("/api/docs?q=arrend", headers=A).json()["hits"]
+    assert c.get("/api/docs", headers=A).json()["summary"] == [{"node_id": "mac", "documents": 2, "chunks": 3}]
+    docs_up(c, h, "/docs/contrato.docx", ["Texto nuevo sin la palabra vieja"])            # re-read: old chunks go
+    assert not c.get("/api/docs?q=arrendamiento", headers=A).json()["hits"]
+    docs_up(c, h, None, [], deletes=["/docs/notas.txt"])
+    assert c.get("/api/docs?q=leche", headers=A).json()["hits"] == []
+    assert c.get("/api/docs").status_code == 401                            # admin only
+    assert c.post("/nodes/mac/docs", json={"upserts": []}).status_code == 401
+
+
+def test_secret_looking_passages_never_enter_the_index(env):
+    c, _ = env
+    h = register(c)
+    docs_up(c, h, "/docs/a.txt", ["la contraseña: hunter2 del wifi", "reunión del martes con el equipo"])
+    assert c.get("/api/docs?q=hunter2", headers=A).json()["hits"] == []
+    assert c.get("/api/docs?q=reunion", headers=A).json()["hits"]
+
+
+def test_documents_task_waits_for_inventory_and_repeats(env):
+    c, clock = env
+    h = register(c, modules=("inventory", "docs"), simulated=False)
+    app = c.app
+    assert app.state.docs_due() == []                      # inventory has not finished
+    inv = c.get("/nodes/mac/tasks/next?modules=inventory", headers=h).json()
+    c.post(f"/tasks/{inv['id']}/result", headers=h, json={"ok": True, "result": {}})
+    first = app.state.docs_due()
+    assert len(first) == 1 and app.state.docs_due() == []   # not twice while queued
+    t = c.get("/nodes/mac/tasks/next?modules=docs", headers=h).json()
+    c.post(f"/tasks/{t['id']}/result", headers=h, json={"ok": True, "result": {}})
+    assert app.state.docs_due() == []
+    clock.now += 8 * 86400
+    assert len(app.state.docs_due()) == 1

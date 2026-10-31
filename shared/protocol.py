@@ -86,6 +86,17 @@ class InventoryRow(BaseModel):
     runnable: bool = False
 
 
+class DocUpsert(BaseModel):
+    path: str = Field(max_length=4096)
+    modified: Optional[float] = None
+    chunks: list[str] = Field(default=[], max_length=200)
+
+
+class DocsBatch(BaseModel):
+    upserts: list[DocUpsert] = Field(default=[], max_length=500)
+    deletes: list[str] = Field(default=[], max_length=2000)
+
+
 class InventoryBatch(BaseModel):
     reset: bool = False               # first batch of a scan clears the node's old rows
     rows: list[InventoryRow] = Field(default_factory=list, max_length=5000)

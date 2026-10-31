@@ -10,6 +10,13 @@ import threading
 from typing import Any, Optional
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS docs (
+    node_id TEXT NOT NULL, path TEXT NOT NULL, modified REAL, chunks INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (node_id, path)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks USING fts5(
+    content, node_id UNINDEXED, path UNINDEXED, seq UNINDEXED, tokenize = 'unicode61 remove_diacritics 2'
+);
 CREATE TABLE IF NOT EXISTS nodes (
     id          TEXT PRIMARY KEY,
     persona     TEXT NOT NULL,
@@ -358,12 +365,15 @@ class DB:
             self.conn.execute("DELETE FROM inventory WHERE node_id = ? AND approved = 0", (node_id,))
             self.conn.commit()
 
-    def last_inventory_task(self, node_id: str) -> Optional[dict]:
+    def last_module_task(self, module: str, node_id: str) -> Optional[dict]:
         with self.lock:
             r = self.conn.execute(
-                "SELECT id, status, created FROM tasks WHERE module = 'inventory' AND target = ?"
-                " ORDER BY id DESC LIMIT 1", (node_id,)).fetchone()
+                "SELECT id, status, created FROM tasks WHERE module = ? AND target = ?"
+                " ORDER BY id DESC LIMIT 1", (module, node_id)).fetchone()
         return dict(r) if r else None
+
+    def last_inventory_task(self, node_id: str) -> Optional[dict]:
+        return self.last_module_task("inventory", node_id)
 
     def inventory_report_readonly(self, min_size: int = 1 << 20, top: int = 30) -> dict:
         """Duplicates (same hash and size, 1 MB or more) and the largest files, on its own
@@ -392,6 +402,60 @@ class DB:
                     "largest": largest}
         finally:
             c.close()
+
+    # --- documents: the text Sergio's files contain, searchable (SQLite FTS5) ----------
+    def docs_apply(self, node_id: str, upserts: list[dict], deletes: list[str]) -> dict:
+        """upserts: [{path, modified, chunks:[text]}]. A document's old chunks are replaced whole."""
+        n_chunks = 0
+        with self.lock:
+            for path in deletes:
+                self.conn.execute("DELETE FROM doc_chunks WHERE node_id = ? AND path = ?", (node_id, path))
+                self.conn.execute("DELETE FROM docs WHERE node_id = ? AND path = ?", (node_id, path))
+            for d in upserts:
+                self.conn.execute("DELETE FROM doc_chunks WHERE node_id = ? AND path = ?", (node_id, d["path"]))
+                self.conn.execute(
+                    "INSERT INTO docs (node_id, path, modified, chunks) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(node_id, path) DO UPDATE SET modified = excluded.modified, chunks = excluded.chunks",
+                    (node_id, d["path"], d.get("modified"), len(d["chunks"])))
+                self.conn.executemany(
+                    "INSERT INTO doc_chunks (content, node_id, path, seq) VALUES (?, ?, ?, ?)",
+                    [(c, node_id, d["path"], i) for i, c in enumerate(d["chunks"])])
+                n_chunks += len(d["chunks"])
+            self.conn.commit()
+        return {"documents": len(upserts), "removed": len(deletes), "chunks": n_chunks}
+
+    def docs_summary(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT node_id, COUNT(*) documents, COALESCE(SUM(chunks), 0) chunks FROM docs "
+                "GROUP BY node_id ORDER BY node_id").fetchall()
+        return [dict(r) for r in rows]
+
+    def docs_search(self, words: list[str], limit: int = 8, with_text: bool = True) -> list[dict]:
+        """Chunks containing all the words (prefix match), best first. with_text=False returns
+        only where they are: that is all a caller without permission may see."""
+        terms = ['"' + w.replace('"', "") + '"*' for w in words if w.replace('"', "").strip()][:6]
+        if not terms:
+            return []
+        q = " ".join(terms)
+        sel = ("snippet(doc_chunks, 0, '', '', ' … ', 40) AS snippet, " if with_text else "")
+        try:
+            with self.lock:
+                rows = self.conn.execute(
+                    f"SELECT {sel}node_id, path, seq FROM doc_chunks WHERE doc_chunks MATCH ? "
+                    "ORDER BY rank LIMIT ?", (q, limit * 3)).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        out, seen = [], set()
+        for r in rows:                                   # one hit per document
+            key = (r["node_id"], r["path"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(r))
+            if len(out) >= limit:
+                break
+        return out
 
     def inventory_add(self, node_id: str, rows: list[dict]) -> int:
         """Upsert a batch; the approved flag survives rescans."""

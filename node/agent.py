@@ -53,6 +53,10 @@ class TaskContext:
     def upload(self, rows: list[dict], reset: bool = False) -> None:
         self.agent.post(f"/nodes/{self.agent.device_id}/inventory", {"reset": reset, "rows": rows})
 
+    def post(self, kind: str, body: dict) -> None:
+        """Send a batch to /nodes/<me>/<kind> (docs)."""
+        self.agent.post(f"/nodes/{self.agent.device_id}/{kind}", body)
+
     def should_stop(self) -> bool:
         """True when the agent is shutting down, or when Sergio needs the machine back:
         heavy work only runs in Full mode, light work stops when the node is busy or off."""

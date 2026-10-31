@@ -249,6 +249,17 @@
     </section>
 
     <section>
+      <h2>Documentos</h2>
+      <div class="group" id="docs-summary"></div>
+      <div class="group signin" style="margin-top:12px">
+        <input id="docs-q" type="search" placeholder="Buscar en mis documentos" autocomplete="off" aria-label="Buscar en mis documentos">
+        <button type="button" id="docs-go">Buscar</button>
+      </div>
+      <div class="group" id="docs-hits" style="margin-top:12px" hidden></div>
+      <div class="note">Ashur lee el texto de Word, Excel, PowerPoint, PDF y archivos de texto de los equipos que tengan el módulo docs, solo cuando están libres. Lo sensible (claves, bóvedas, perfiles del navegador) no se lee. La búsqueda es local: nada de esto sale a Claude salvo que marques «Compartir fragmentos» en un mensaje.</div>
+    </section>
+
+    <section>
       <h2>Recuerdos de Ashur</h2>
       <div class="group" id="memories"></div>
       <div class="note">Ashur los guarda cuando algo le parece útil más adelante. Puedes borrar cualquiera.</div>
@@ -322,6 +333,9 @@
       Hablando desde
       <select id="voice" aria-label="Dispositivo desde el que hablas" style="font:inherit;color:var(--tint);background:none;border:0;padding:2px"></select>
     </div>
+    <label id="docs-row" hidden style="display:flex;align-items:center;gap:6px;margin:0 4px 6px;font-size:13px;color:var(--secondary)">
+      <input type="checkbox" id="share-docs"> Compartir fragmentos de mis documentos con Claude en este mensaje
+    </label>
     <form id="chat-form">
       <textarea id="msg" rows="1" placeholder="Escríbele a Ashur" aria-label="Mensaje para Ashur" maxlength="8000"></textarea>
       <button class="send" id="send" type="submit" aria-label="Enviar" disabled>
@@ -609,7 +623,7 @@
     $("dashboard").hidden = t !== "status";
     $("settings").hidden = t !== "settings";
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); loadSpace(); }
+    if (t === "settings") { loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); loadSpace(); }
     if (t === "chat") loadVoices();
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
@@ -679,6 +693,7 @@
       const body = { message: text };
       if (v) body.persona = v;
       if (allowClaude) body.allow_claude = true;
+      if (!$("docs-row").hidden && $("share-docs").checked) { body.share_docs = true; $("share-docs").checked = false; }
       const r = await api("api/chat", { method: "POST", body: JSON.stringify(body) });
       const data = await r.json();
       wait.remove();
@@ -888,12 +903,37 @@
   });
 
   // --- space: duplicates and largest files (computed by the core, at most every 6 h) ---
+  async function loadDocs(q) {
+    try {
+      const r = await api("api/docs" + (q ? "?q=" + encodeURIComponent(q) : ""));
+      const d = await r.json();
+      fill("docs-summary", d.summary.map((s) => row({
+        title: s.node_id,
+        detail: nf.format(s.documents) + (s.documents === 1 ? " documento leído" : " documentos leídos"),
+        value: nf.format(s.chunks) + " fragmentos"
+      })), "Ningún equipo ha leído documentos todavía.");
+      const box = $("docs-hits");
+      if (q) {
+        box.hidden = false;
+        const rows = d.hits.map((h) => {
+          const x = row({ title: h.path, detail: h.snippet, value: h.node_id });
+          x.querySelector(".title").style.wordBreak = "break-all";
+          x.querySelector(".title").style.whiteSpace = "normal";
+          x.querySelector(".detail").style.whiteSpace = "normal";
+          return x;
+        });
+        fill("docs-hits", rows, "No encontré nada con esas palabras.");
+      } else box.hidden = true;
+    } catch (e) {}
+  }
+  $("docs-go").addEventListener("click", () => loadDocs($("docs-q").value.trim()));
+  $("docs-q").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); loadDocs($("docs-q").value.trim()); } });
   async function loadSpace() {
     try {
       const r = await api("api/inventory/report");
       const d = await r.json();
       if (d.pending) {
-        fill("dups", [], "Calculando… vuelve a abrir Estado en un momento.");
+        fill("dups", [], "Calculando… vuelve a abrir Ajustes en un momento.");
         fill("largest", [], "Calculando…");
         setTimeout(() => { if (tab === "settings") loadSpace(); }, 15000);
         return;
@@ -928,6 +968,7 @@
       sel.value = list.some((p) => p.name === saved) ? saved : "";
       $("voice-row").hidden = !list.length;
     } catch (e) {}
+    $("docs-row").hidden = role === "guest";
   }
   $("voice").addEventListener("change", () => { try { localStorage.setItem("ashur.voice", $("voice").value); } catch (e) {} });
 

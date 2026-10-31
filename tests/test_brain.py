@@ -454,3 +454,38 @@ def test_local_first_asks_before_spending_on_claude(tmp_path, monkeypatch):
     g = c.post("/api/guests", headers=A, json={"name": "Ana"}).json()["key"]
     r = c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "hola", "allow_claude": True}).json()
     assert r["provider"] == "none" and len(fake.calls) == 1                        # a guest can't approve
+
+
+# --- documents -----------------------------------------------------------------
+def _with_docs(c):
+    c.app.state.db.docs_apply("mac", [{"path": "/d/contrato.docx", "modified": 1.0,
+                                       "chunks": ["Arrendamiento: canon mensual de dos millones"]}], [])
+
+
+def test_claude_sees_where_documents_are_but_not_their_text_without_permission(tmp_path):
+    script = lambda: [resp([tool("search_documents", {"words": "arrendamiento"})], stop="tool_use"), resp([text("ok")])]
+    c, fake, _ = make(tmp_path, script())
+    _with_docs(c)
+    c.post("/api/chat", headers=A, json={"message": "¿dónde está mi contrato?"})
+    result = fake.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "/d/contrato.docx" in result and "dos millones" not in result and "no autorizó" in result
+    assert "docs_shared" not in [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"][-1]["detail"]
+
+
+def test_fragments_reach_claude_only_when_sergio_allows_that_message(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([tool("search_documents", {"words": "arrendamiento"})], stop="tool_use"),
+                                 resp([text("ok")])])
+    _with_docs(c)
+    c.post("/api/chat", headers=A, json={"message": "¿cuánto es el canon?", "share_docs": True})
+    result = fake.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "dos millones" in result
+    last = [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"][-1]
+    assert last["detail"]["docs_shared"] is True and "dos millones" not in json.dumps(last)
+
+
+def test_a_guest_cannot_share_documents_and_has_no_such_tool(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([text("hola")])])
+    _with_docs(c)
+    g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()
+    c.post("/api/chat", headers={"X-Admin-Key": g["key"]}, json={"message": "hola", "share_docs": True})
+    assert "tools" not in fake.calls[0]

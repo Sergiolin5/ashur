@@ -59,6 +59,16 @@ TOOLS = [
          "device_id": {"type": "string", "description": "Si se da, lista sus ejecutables más grandes."}}}},
 ]
 
+TOOLS.append(
+    {"name": "search_documents",
+     "description": "Busca en el texto de los documentos de Sergio (Word, Excel, PowerPoint, PDF, texto) en todos sus "
+                    "dispositivos. Sin autorización de Sergio para este mensaje solo devuelve DÓNDE están "
+                    "(ruta y dispositivo), sin su contenido; si necesitas leerlo, dile que active "
+                    "«Compartir fragmentos de documentos» y vuelva a preguntar.",
+     "input_schema": {"type": "object", "properties": {
+         "words": {"type": "string", "description": "Una a tres palabras clave que deben aparecer."}},
+         "required": ["words"]}})
+
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
 MAX_SUMMARY_CHARS = 4000
@@ -234,7 +244,7 @@ class Brain:
         return tin, tout, tin * self.s.price_in_per_mtok / 1e6 + tout * self.s.price_out_per_mtok / 1e6
 
     # --- tools ------------------------------------------------------------
-    def _tool(self, name: str, args: dict) -> str:
+    def _tool(self, name: str, args: dict, share_docs: bool = False) -> str:
         now = self.clock()
         if name == "remember":
             text = str(args.get("text", "")).strip()[:500]
@@ -256,6 +266,15 @@ class Brain:
             return json.dumps([{"fecha": dt.datetime.fromtimestamp(r["ts"], BOGOTA).strftime("%Y-%m-%d %H:%M"),
                                 "quien": "Sergio" if r["role"] == "user" else "Ashur",
                                 "texto": r["content"][:400]} for r in rows], ensure_ascii=False)
+        if name == "search_documents":
+            hits = self.db.docs_search(str(args.get("words", "")).split(), 6, with_text=share_docs)
+            if not hits:
+                return "No encontré documentos con esas palabras (o aún no se han leído)."
+            out = [{"dispositivo": h["node_id"], "ruta": h["path"],
+                    **({"fragmento": h["snippet"]} if share_docs else {})} for h in hits]
+            if not share_docs:
+                out.append({"aviso": "Sergio no autorizó compartir el contenido en este mensaje."})
+            return json.dumps(out, ensure_ascii=False)
         if name == "network_status":
             return json.dumps(self.network(), ensure_ascii=False, default=str)
         if name == "inventory_overview":
@@ -279,7 +298,7 @@ class Brain:
         return self._client is not None or bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
     def _chat_claude(self, messages: list[dict], guest: Optional[dict] = None,
-                     voice: Optional[str] = None) -> tuple[str, float, list[str]]:
+                     voice: Optional[str] = None, share_docs: bool = False) -> tuple[str, float, list[str]]:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
         system = GUEST_PERSONA.format(name=guest["name"]) if guest else self._system(voice)
@@ -308,7 +327,7 @@ class Brain:
             for u in uses:
                 tools_used.append(_get(u, "name"))
                 results.append({"type": "tool_result", "tool_use_id": _get(u, "id"),
-                                "content": self._tool(_get(u, "name"), _get(u, "input") or {})})
+                                "content": self._tool(_get(u, "name"), _get(u, "input") or {}, share_docs)})
             messages.append({"role": "user", "content": results})
             if self.spent_this_month() >= self.s.monthly_budget_usd:
                 reply_parts = ["(Me detuve a mitad de la respuesta: se alcanzó el tope de gasto del mes.)"]
@@ -385,7 +404,8 @@ class Brain:
         return round(max(est, 0.001), 3)
 
     def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
-             voice: Optional[str] = None, allow_claude: bool = False) -> dict:
+             voice: Optional[str] = None, allow_claude: bool = False,
+             share_docs: bool = False) -> dict:
         voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice
         text = text.strip()
         now = self.clock()
@@ -400,7 +420,7 @@ class Brain:
 
         if want_claude and not over_budget:
             try:
-                reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice)
+                reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice, share_docs)
                 provider = "claude"
             except BrainUnavailable:
                 raise
@@ -436,7 +456,7 @@ class Brain:
                                     {"channel": channel, "estimate_usd": est})
                         return {"reply": str(e), "note": None, "provider": "none", "needs_approval": True,
                                 "estimate_usd": est, "cost_usd": 0.0, **self.budget(guest)}
-                    reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice)
+                    reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice, share_docs)
                     provider, note = "claude", "Respondió Claude con tu autorización."
                 else:
                     self.db.log(self.clock(), None, "chat_unanswered", {"channel": channel, "reason": str(e)[:200]})
@@ -451,6 +471,8 @@ class Brain:
         # and a guest only as an anonymous number
         detail = {"channel": channel, "provider": provider, "chars_in": len(text),
                   "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools}
+        if share_docs and provider == "claude" and "search_documents" in tools:
+            detail["docs_shared"] = True
         if allow_claude and provider == "claude":
             detail["approved"] = True
         if guest:

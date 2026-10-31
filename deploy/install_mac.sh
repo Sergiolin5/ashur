@@ -73,7 +73,7 @@ if [ ! -f "$CONFIG" ]; then
 device_id: $device
 persona: $device
 core_url: $core_url
-modules: [inventory]
+modules: [inventory, docs]
 yield_policy: $policy
 EOF
     say "Configuración guardada en $CONFIG"

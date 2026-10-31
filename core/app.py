@@ -35,6 +35,7 @@ from shared.protocol import (
 )
 
 UI_PAGE = Path(__file__).parent / "ui" / "index.html"
+APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png")   # public: the icon and manifest
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
@@ -107,7 +108,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.13.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.13.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -128,7 +129,7 @@ def create_app(
         public = on_public_port(request.scope)
         if public:
             path = request.url.path
-            allowed = path in ("/", "/health") or path.startswith("/api/")
+            allowed = path in ("/", "/health") + APP_FILES or path.startswith("/api/")
             if not allowed:
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             if path.startswith("/api/update"):
@@ -340,6 +341,22 @@ def create_app(
         return HTMLResponse(UI_PAGE.read_text(encoding="utf-8"),
                             headers={"Cache-Control": "no-store",
                                      "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:"})
+
+    # --- home-screen app (iPhone "Agregar a pantalla de inicio") ------------
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        return JSONResponse({"name": "Ashur", "short_name": "Ashur", "lang": "es", "start_url": "/",
+                             "display": "standalone", "background_color": "#F2F2F7", "theme_color": "#5856D6",
+                             "icons": [{"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+                                       {"src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png"}]},
+                            media_type="application/manifest+json")
+
+    @app.get("/apple-touch-icon.png")
+    @app.get("/icon-512.png")
+    def app_icon(request: Request):
+        name = request.url.path.lstrip("/")
+        return Response((UI_PAGE.parent / name).read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/api/overview", dependencies=[Depends(require_admin)])
     def overview():

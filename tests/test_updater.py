@@ -76,3 +76,13 @@ def test_update_is_refused_on_the_public_door_and_reports_versions(tmp_path):
     pub = TestClient(app, base_url="http://testserver:8001")
     assert pub.post("/api/update", headers=A, json={"version": "0.99.0"}).status_code == 403
     assert pub.get("/api/update", headers=A).status_code == 403
+
+
+def test_home_screen_app_files_are_served_on_both_doors(tmp_path):
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None, public_port=8001)
+    pub = TestClient(app, base_url="http://testserver:8001")
+    m = pub.get("/manifest.webmanifest")
+    assert m.status_code == 200 and m.json()["display"] == "standalone"
+    icon = pub.get("/apple-touch-icon.png")
+    assert icon.status_code == 200 and icon.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert 'rel="apple-touch-icon"' in pub.get("/").text

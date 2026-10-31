@@ -353,6 +353,104 @@
   .composer .inner { max-width: 760px; }
   .composer textarea { border-radius: 24px; padding: 11px 18px; }
 
+
+  /* ---- skin 4: desktop-OS glass. Neutral glass over a quiet wallpaper, system-blue accent, sidebar on wide screens ---- */
+  :root {
+    --bg: #E8ECF4; --label: #1D1D1F; --secondary: #6E6E73; --tint: #007AFF; --tint-2: #3A9BFF; --tint-3: #5AC8FA;
+    --separator: rgba(60,60,67,.13); --field: rgba(120,120,128,.12); --seg-on: rgba(255,255,255,.95);
+    --glass: linear-gradient(160deg, rgba(255,255,255,.64), rgba(255,255,255,.34));
+    --glass-edge: rgba(255,255,255,.72);
+    --glass-shadow: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(255,255,255,.28), 0 1px 1px rgba(10,20,50,.03), 0 14px 34px -16px rgba(20,35,80,.30);
+    --spec: rgba(255,255,255,.55);
+    --spring: cubic-bezier(.3,1.5,.5,1); --expo: cubic-bezier(.16,1,.3,1);
+    --side: 232px; --wrap: 1320px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0A0B10; --label: #F5F5F7; --secondary: #9A9AA2; --tint: #0A84FF; --tint-2: #4DA3FF; --tint-3: #64D2FF;
+            --separator: rgba(255,255,255,.10); --field: rgba(255,255,255,.09); --seg-on: rgba(255,255,255,.17);
+            --glass: linear-gradient(160deg, rgba(255,255,255,.11), rgba(255,255,255,.04));
+            --glass-edge: rgba(255,255,255,.15);
+            --glass-shadow: inset 0 1px 0 rgba(255,255,255,.20), inset 0 -1px 0 rgba(255,255,255,.03), 0 16px 36px -18px rgba(0,0,0,.85);
+            --spec: rgba(255,255,255,.16); }
+  }
+  body::before { animation-duration: 70s;
+    background: radial-gradient(40% 32% at 18% 16%, color-mix(in srgb, var(--tint) 26%, transparent), transparent 70%),
+                radial-gradient(36% 30% at 84% 10%, color-mix(in srgb, var(--tint-3) 24%, transparent), transparent 70%),
+                radial-gradient(42% 34% at 60% 90%, color-mix(in srgb, var(--tint-2) 16%, transparent), transparent 72%);
+    translate: calc(var(--px, 0) * 1px) calc(var(--py, 0) * 1px); transition: translate 1.2s var(--expo); }
+  h1 { background: none; -webkit-text-fill-color: currentColor; color: var(--label); font-weight: 700; letter-spacing: -0.035em;
+       animation: hero 1.1s var(--expo) both; }
+  .subtitle { animation: hero .9s .12s var(--expo) both; }
+  @keyframes hero { from { opacity: 0; filter: blur(14px); transform: translateY(10px) scale(.97); letter-spacing: .02em; }
+                    to { opacity: 1; filter: none; transform: none; } }
+  .work .count { background: none; -webkit-text-fill-color: currentColor; color: var(--label); }
+  .work .count small { -webkit-text-fill-color: var(--secondary); }
+  h2 { letter-spacing: .08em; }
+
+  /* the material: a rim of light, a soft bloom under the pointer */
+  .group, .seg, .menu-item, #devices .row, .qcard { position: relative; -webkit-backdrop-filter: blur(26px) saturate(190%); backdrop-filter: blur(26px) saturate(190%); }
+  #devices.group { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .group::after, .menu-item::after, #devices .row::after, .qcard::after, .seg::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .5s var(--expo);
+    background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 0%), var(--spec), transparent 65%); }
+  #devices.group::after { display: none; }
+  @media (hover: hover) { .group:hover::after, .menu-item:hover::after, #devices .row:hover::after, .qcard:hover::after, .seg:hover::after { opacity: 1; } }
+
+  button { background: linear-gradient(180deg, var(--tint-2), var(--tint)); border-radius: 999px;
+           box-shadow: inset 0 1px 0 rgba(255,255,255,.38), 0 1px 2px rgba(0,60,160,.25), 0 8px 18px -10px color-mix(in srgb, var(--tint) 80%, transparent);
+           transition: transform .5s var(--spring), box-shadow .3s var(--expo), filter .3s, opacity .3s; }
+  button:active { transform: scale(.94); }
+  .link, .forget, .seg button, .menu-item, .back { background: none; box-shadow: none; }
+  .forget { background: var(--field); }
+  .menu-item { box-shadow: var(--glass-shadow); background: var(--glass); transition: transform .5s var(--spring); }
+  .menu-item:hover { transform: translateY(-3px) scale(1.01); }
+  .menu-item:active { transform: scale(.97); }
+  .mi-ico { border-radius: 12px; background: linear-gradient(180deg, var(--tint-2), var(--tint)); box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 6px 14px -8px var(--tint); }
+  #devices .row { transition: transform .5s var(--spring), background-color .3s; }
+  #devices .row:hover { transform: translateY(-2px); }
+  .bubble.me { background: linear-gradient(180deg, var(--tint-2), var(--tint)); box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 8px 18px -12px var(--tint); }
+  .meter::after { background: linear-gradient(90deg, var(--tint), var(--tint-3)); }
+  .meter { flex: 1 1 auto; min-width: max-content; }
+  .meters { gap: 14px; flex-wrap: wrap; }
+  .bar i { background: linear-gradient(90deg, transparent, var(--tint), var(--tint-3), transparent); }
+
+  /* tabs: lens that stretches as it travels, like a drop of glass */
+  .seg::before { box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 1px 2px rgba(0,0,0,.08), 0 8px 18px -8px rgba(20,35,80,.35);
+                 transition: transform .65s var(--spring); }
+  .seg.moving::before { animation: squash .7s var(--expo); }
+  @keyframes squash { 30% { scale: 1.16 .9; } 100% { scale: 1 1; } }
+  .seg { animation: drop .9s .2s var(--expo) both; }
+  @keyframes drop { from { opacity: 0; transform: translateY(-16px) scale(.96); filter: blur(8px); } to { opacity: 1; transform: none; filter: none; } }
+  .seg .ti { display: none; width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .seg button { transition: color .3s, transform .5s var(--spring); }
+
+  /* pages take a breath: views come in out of focus, sections follow the scroll */
+  #chat, #diary, #dashboard, #settings { animation: view .7s var(--expo) both; }
+  @supports (animation-timeline: view()) {
+    section .group:not(#devices), .dayhead, .qcard { animation: scrollin linear both; animation-timeline: view(); animation-range: entry 0% entry 40%; }
+    @keyframes scrollin { from { opacity: 0; transform: translateY(26px) scale(.975); filter: blur(5px); } to { opacity: 1; transform: none; filter: none; } }
+  }
+
+  input[type=checkbox] { width: auto; flex: none; margin: 0; accent-color: var(--tint); }
+
+  /* wide screens: Finder-style sidebar */
+  @media (min-width: 900px) {
+    main { max-width: var(--wrap); padding-left: calc(var(--side) + var(--gap) + var(--pad)); }
+    .seg { position: fixed; top: 28px; left: max(16px, calc((100vw - var(--wrap)) / 2 + 16px)); width: var(--side); margin: 0; max-width: none;
+           display: flex; flex-direction: column; padding: 8px; border-radius: 26px; }
+    .seg::before { left: 8px; top: 8px; bottom: auto; width: calc(100% - 16px); height: 44px; border-radius: 18px;
+                   transform: translateY(calc(var(--i, 0) * 44px)); }
+    .seg button { flex: none; display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 14px; text-align: left; font-size: 15.5px; border-radius: 18px; }
+    .seg .ti { display: block; }
+    .seg button[aria-selected="true"] { color: var(--tint); }
+    .composer { padding-left: calc(max(0px, (100vw - var(--wrap)) / 2) + var(--side) + var(--gap) + var(--pad));
+                padding-right: calc(max(0px, (100vw - var(--wrap)) / 2) + var(--pad)); }
+    #dashboard { grid-template-columns: 1fr 1fr; }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .group, .seg, .menu-item, #devices .row, .qcard, .composer textarea, .bubble.ashur { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--row); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
@@ -378,10 +476,10 @@
   </section>
 
   <div class="seg" role="tablist" id="tabs" hidden>
-    <button type="button" role="tab" id="tab-chat" aria-selected="true">Ashur</button>
-    <button type="button" role="tab" id="tab-diary" aria-selected="false">Diario</button>
-    <button type="button" role="tab" id="tab-status" aria-selected="false">Estado</button>
-    <button type="button" role="tab" id="tab-settings" aria-selected="false">Ajustes</button>
+    <button type="button" role="tab" id="tab-chat" aria-selected="true"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Ashur</span></button>
+    <button type="button" role="tab" id="tab-diary" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/></svg><span>Diario</span></button>
+    <button type="button" role="tab" id="tab-status" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg><span>Estado</span></button>
+    <button type="button" role="tab" id="tab-settings" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>Ajustes</span></button>
   </div>
 
   <div id="chat" hidden>
@@ -882,6 +980,8 @@
     $("tab-status").hidden = $("tab-settings").hidden = role === "self";
     $("tabs").style.setProperty("--n", order.length);
     $("tabs").style.setProperty("--i", order.indexOf(t));
+    $("tabs").classList.remove("moving"); void $("tabs").offsetWidth; $("tabs").classList.add("moving");
+    clearTimeout(showTab.mv); showTab.mv = setTimeout(() => $("tabs").classList.remove("moving"), 800);
     for (const n of ["chat", "diary", "status", "settings"]) $("tab-" + n).setAttribute("aria-selected", t === n);
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("diary").hidden = t !== "diary";
@@ -1512,6 +1612,21 @@
     navigator.serviceWorker.addEventListener("message", (ev) => { if (ev.data && ev.data.open === "/#diario" && unlocked) showTab("diary"); });
     window.addEventListener("hashchange", () => { if (location.hash === "#diario" && unlocked) showTab("diary"); });
     swReg();
+  }
+
+  // --- motion: light follows the pointer; the wallpaper leans a little. Off for reduced motion and touch ---
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches && matchMedia("(hover: hover) and (pointer: fine)").matches) {
+    let raf = 0, last = null;
+    document.addEventListener("pointermove", (e) => {
+      last = e; if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const t = last.target.closest && last.target.closest(".group, .menu-item, #devices .row, .qcard, .seg");
+        if (t) { const r = t.getBoundingClientRect(); t.style.setProperty("--mx", (last.clientX - r.left) + "px"); t.style.setProperty("--my", (last.clientY - r.top) + "px"); }
+        document.body.style.setProperty("--px", ((last.clientX / innerWidth) - .5) * -26);
+        document.body.style.setProperty("--py", ((last.clientY / innerHeight) - .5) * -20);
+      });
+    }, { passive: true });
   }
   $("guest-signout").addEventListener("click", () => showSignin());
   document.addEventListener("visibilitychange", loop);

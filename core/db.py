@@ -10,6 +10,19 @@ import threading
 from typing import Any, Optional
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS diary (            -- Sergio's own words; never leaves the server unless he shares it
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, day TEXT NOT NULL, text TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'panel'
+);
+CREATE INDEX IF NOT EXISTS diary_day ON diary (day);
+CREATE TABLE IF NOT EXISTS diary_reminders (  -- what was sent each day, so a reminder is never sent twice
+    day TEXT PRIMARY KEY, first REAL, second REAL
+);
+CREATE TABLE IF NOT EXISTS push_subs (        -- devices that accept notifications
+    id INTEGER PRIMARY KEY AUTOINCREMENT, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL, created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS docs (
     node_id TEXT NOT NULL, path TEXT NOT NULL, modified REAL, chunks INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (node_id, path)
@@ -402,6 +415,70 @@ class DB:
                     "largest": largest}
         finally:
             c.close()
+
+    # --- settings, diary, push -------------------------------------------------------------
+    def setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        with self.lock:
+            r = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return r[0] if r else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+            self.conn.commit()
+
+    def diary_add(self, ts: float, day: str, text: str, source: str = "panel") -> int:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO diary (ts, day, text, source) VALUES (?, ?, ?, ?)", (ts, day, text, source))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def diary_list(self, limit: int = 60, before: Optional[int] = None) -> list[dict]:
+        q, args = "SELECT id, ts, day, text, source FROM diary", []
+        if before:
+            q += " WHERE id < ?"; args.append(before)
+        with self.lock:
+            rows = self.conn.execute(q + " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def diary_delete(self, entry_id: int) -> bool:
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM diary WHERE id = ?", (entry_id,))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def diary_has_day(self, day: str) -> bool:
+        with self.lock:
+            return self.conn.execute("SELECT 1 FROM diary WHERE day = ? LIMIT 1", (day,)).fetchone() is not None
+
+    def reminder_state(self, day: str) -> dict:
+        with self.lock:
+            r = self.conn.execute("SELECT first, second FROM diary_reminders WHERE day = ?", (day,)).fetchone()
+        return dict(r) if r else {"first": None, "second": None}
+
+    def reminder_mark(self, day: str, which: str, ts: float) -> None:
+        with self.lock:
+            self.conn.execute("INSERT OR IGNORE INTO diary_reminders (day) VALUES (?)", (day,))
+            self.conn.execute(f"UPDATE diary_reminders SET {'first' if which == 'first' else 'second'} = ? WHERE day = ?", (ts, day))
+            self.conn.commit()
+
+    def push_add(self, endpoint: str, p256dh: str, auth: str, now: float) -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO push_subs (endpoint, p256dh, auth, created) VALUES (?, ?, ?, ?) "
+                              "ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth",
+                              (endpoint, p256dh, auth, now))
+            self.conn.commit()
+
+    def push_remove(self, endpoint: str) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM push_subs WHERE endpoint = ?", (endpoint,))
+            self.conn.commit()
+
+    def push_subs(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT id, endpoint, p256dh, auth FROM push_subs ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
 
     # --- documents: the text Sergio's files contain, searchable (SQLite FTS5) ----------
     def docs_apply(self, node_id: str, upserts: list[dict], deletes: list[str]) -> dict:

@@ -6,3 +6,4 @@ pyyaml>=6.0
 pytest>=8.0
 psutil>=5.9
 anthropic>=0.40
+pywebpush>=2.0

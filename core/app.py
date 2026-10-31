@@ -5,6 +5,7 @@ Run locally:  ASHUR_ENROLL_KEY=... ASHUR_ADMIN_KEY=... uvicorn --factory core.ap
 """
 import asyncio
 import contextlib
+import datetime as dt
 import hmac
 import json
 import os
@@ -26,9 +27,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.brain import (SECRET_WORDS, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
+from core.brain import (SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
                         looks_like_secret, month_start)
 from core.db import DB, hash_token
+from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
 from shared.protocol import (
     OFFLINE_AFTER_S, Heartbeat, DocsBatch, InventoryBatch, Mode, NewTask, NodeStatus,
@@ -36,7 +38,7 @@ from shared.protocol import (
 )
 
 UI_PAGE = Path(__file__).parent / "ui" / "index.html"
-APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png")   # public: the icon and manifest
+APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", "/sw.js")   # public: the icon and manifest
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
@@ -74,6 +76,7 @@ def create_app(
     inventory_in_background: bool = False,
     updater_url: Optional[str] = None,
     latest_fn: Optional[Callable[[], Optional[str]]] = None,
+    push_fn: Optional[Callable[[dict, dict], str]] = None,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -106,13 +109,14 @@ def create_app(
                         app.state.summarize_soon()
                         app.state.inventory_due()
                         app.state.docs_due()
+                        app.state.diary_due()
             task = asyncio.create_task(loop())
         yield
         if task:
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.21.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.22.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -422,6 +426,12 @@ def create_app(
                                      "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:"})
 
     # --- home-screen app (iPhone "Agregar a pantalla de inicio") ------------
+    @app.get("/sw.js")
+    def service_worker():
+        # the page's own file, served from the root so it can speak for the whole app
+        return Response((UI_PAGE.parent / "sw.js").read_bytes(), media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
     @app.get("/manifest.webmanifest")
     def manifest():
         return JSONResponse({"name": "Ashur", "short_name": "Ashur", "lang": "es", "start_url": "/",
@@ -812,6 +822,141 @@ def create_app(
                {"from": app.version, "to": body.version,
                 "door": "public" if on_public_port(request.scope) else "tailnet"})
         return {"ok": True}
+
+    # --- diary and notifications (Sergio's own devices only: admin key or a "para mí" key) ----------
+    push_keys = PushKeys(data_dir / "vapid.json")
+    send_push = push_fn or make_sender(push_keys)
+    DIARY_HOUR_DEFAULT = 21
+
+    def require_self(x_admin_key: str = Header(default="")) -> None:
+        if _same(x_admin_key, admin_key):
+            return
+        g = db.guest_by_key(x_admin_key)
+        if not g or not g.get("is_self"):
+            raise HTTPException(401, "admin key required")
+
+    def local_day(ts: float) -> str:
+        return dt.datetime.fromtimestamp(ts, BOGOTA).strftime("%Y-%m-%d")
+
+    def diary_settings() -> dict:
+        return {"enabled": db.setting("diary_enabled", "1") == "1",
+                "hour": int(db.setting("diary_hour", str(DIARY_HOUR_DEFAULT)))}
+
+    def today_question(now: float) -> str:
+        return question_for(dt.datetime.fromtimestamp(now, BOGOTA).toordinal())
+
+    @app.get("/api/diary", dependencies=[Depends(require_self)])
+    def diary_get(limit: int = 60, before: Optional[int] = None):
+        now = clock()
+        return {"entries": db.diary_list(max(1, min(limit, 200)), before), "question": today_question(now),
+                "written_today": db.diary_has_day(local_day(now)), "settings": diary_settings(),
+                "devices": len(db.push_subs())}
+
+    class DiaryIn(BaseModel):
+        text: str = Field(min_length=1, max_length=20000)
+        source: str = Field(default="panel", pattern=r"^[a-z]{1,16}$")
+
+    @app.post("/api/diary", dependencies=[Depends(require_self)])
+    def diary_add(body: DiaryIn):
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(422, "La entrada está vacía.")
+        now = clock()
+        eid = db.diary_add(now, local_day(now), text, body.source)
+        db.log(now, None, "diary_entry", {"chars": len(text)})        # never the words
+        return {"id": eid}
+
+    @app.delete("/api/diary/{entry_id}", dependencies=[Depends(require_self)])
+    def diary_delete(entry_id: int):
+        if not db.diary_delete(entry_id):
+            raise HTTPException(404, "No existe esa entrada.")
+        db.log(clock(), None, "diary_deleted", {})
+        return {"ok": True}
+
+    class DiarySettingsIn(BaseModel):
+        enabled: bool
+        hour: int = Field(ge=0, le=22)
+
+    @app.put("/api/diary/settings", dependencies=[Depends(require_self)])
+    def diary_settings_put(body: DiarySettingsIn):
+        db.set_setting("diary_enabled", "1" if body.enabled else "0")
+        db.set_setting("diary_hour", str(body.hour))
+        return diary_settings()
+
+    def _push_all(payload: dict) -> dict:
+        sent = gone = 0
+        for sub_ in db.push_subs():
+            r = send_push(sub_, payload)
+            if r == "ok":
+                sent += 1
+            elif r == "gone":
+                db.push_remove(sub_["endpoint"]); gone += 1
+            else:
+                db.log(clock(), None, "push_failed", {"error": r[:150]})
+        return {"sent": sent, "removed": gone}
+
+    def diary_due(sync: bool = False) -> Optional[str]:
+        """After the chosen hour, ask once; an hour and a half later, ask once more; then leave it.
+        Writing anything that day cancels what is left."""
+        cfg = diary_settings()
+        if not cfg["enabled"] or not db.push_subs():
+            return None
+        now = clock()
+        local = dt.datetime.fromtimestamp(now, BOGOTA)
+        day = local.strftime("%Y-%m-%d")
+        if db.diary_has_day(day):
+            return None
+        start = local.replace(hour=cfg["hour"], minute=0, second=0, microsecond=0).timestamp()
+        st = db.reminder_state(day)
+        which = None
+        if st["first"] is None and now >= start:
+            which, body = "first", today_question(now)
+        elif st["first"] is not None and st["second"] is None and now >= start + 5400:
+            which, body = "second", "Todavía queda hoy. Dos líneas bastan: " + today_question(now)
+        if not which:
+            return None
+        db.reminder_mark(day, which, now)                      # marked first: a slow send is never repeated
+        payload = {"title": "Ashur", "body": body, "url": "/#diario", "tag": "diary-" + day}
+        if sync:
+            _push_all(payload)
+        else:
+            threading.Thread(target=_push_all, args=(payload,), daemon=True, name="diary-push").start()
+        db.log(now, None, "diary_reminder", {"which": which})
+        return which
+
+    app.state.diary_due = diary_due
+
+    @app.get("/api/push/key", dependencies=[Depends(require_self)])
+    def push_key():
+        return {"key": push_keys.public_key()}
+
+    class SubIn(BaseModel):
+        endpoint: str = Field(max_length=1000, pattern=r"^https://")
+        keys: dict[str, str]
+
+    @app.post("/api/push/subscribe", dependencies=[Depends(require_self)])
+    def push_subscribe(body: SubIn):
+        if not body.keys.get("p256dh") or not body.keys.get("auth"):
+            raise HTTPException(422, "Suscripción incompleta.")
+        db.push_add(body.endpoint, body.keys["p256dh"], body.keys["auth"], clock())
+        db.log(clock(), None, "push_subscribed", {})
+        return {"ok": True}
+
+    class UnsubIn(BaseModel):
+        endpoint: str = Field(max_length=1000)
+
+    @app.post("/api/push/unsubscribe", dependencies=[Depends(require_self)])
+    def push_unsubscribe(body: UnsubIn):
+        db.push_remove(body.endpoint)
+        return {"ok": True}
+
+    @app.post("/api/push/check", dependencies=[Depends(require_self)])
+    def push_check(body: UnsubIn):
+        return {"subscribed": any(s["endpoint"] == body.endpoint for s in db.push_subs())}
+
+    @app.post("/api/push/test", dependencies=[Depends(require_self)])
+    def push_test():
+        return _push_all({"title": "Ashur", "body": "Así se verán los avisos del diario.", "url": "/#diario", "tag": "test"})
 
     # --- authenticator (second key for updating from outside; set up on the tailnet) ---
     @app.get("/api/totp", dependencies=[Depends(require_admin)])

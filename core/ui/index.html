@@ -275,7 +275,7 @@
   /* tabs: a glass capsule whose lens slides to the selected tab */
   .seg { position: sticky; top: max(10px, env(safe-area-inset-top)); z-index: 6; padding: 4px; border-radius: 22px; margin: 0 auto;
          max-width: 520px; }
-  .seg::before { content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 3); border-radius: 18px;
+  .seg::before { content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / var(--n, 3)); border-radius: 18px;
                  background: var(--seg-on); box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 6px 18px -6px rgba(60,50,160,.45);
                  transform: translateX(calc(var(--i, 0) * 100%)); transition: transform .6s var(--spring); }
   .seg button { position: relative; padding: 10px 0; border-radius: 18px; color: var(--secondary); font-size: 14.5px;
@@ -332,6 +332,24 @@
   .bubble.note { background: none; border: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .composer { background: linear-gradient(to top, color-mix(in srgb, var(--bg) 70%, transparent), transparent);
               -webkit-backdrop-filter: none; backdrop-filter: none; border-top: 0; }
+  /* diary */
+  #diary textarea#d-text { width: 100%; min-height: 150px; resize: vertical; border-radius: 22px; padding: 14px 16px; font: inherit;
+                           background: var(--field); border: 1px solid transparent; color: inherit; box-sizing: border-box; }
+  .qcard { margin: 6px 0 12px; padding: 14px 16px; border-radius: 22px; background: var(--glass); border: 1px solid var(--glass-edge);
+           box-shadow: var(--glass-shadow); font-size: 17px; line-height: 1.35; }
+  .qcard small { display: block; color: var(--secondary); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+  .dbar { display: flex; align-items: center; gap: 12px; margin: 10px 2px 4px; }
+  #diary .row button, #diary .dbar button { width: auto; flex: none; padding: 9px 18px; }
+  #diary .row select { flex: none; }
+  #diary .row .detail, #diary .row .title { white-space: normal; }
+  .dbar .grow { flex: 1; color: var(--secondary); font-size: 13px; }
+  .entry { padding: 12px 16px; }
+  .entry .when { color: var(--secondary); font-size: 12.5px; margin-bottom: 3px; }
+  .entry .txt { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+  .entry .del { float: right; font-size: 13px; padding: 0 0 0 12px; }
+  .entry + .entry::before { content: ""; display: block; border-top: .5px solid var(--separator); margin: 0 0 12px; }
+  .dayhead { margin: 14px 16px 6px; color: var(--secondary); font-size: 13px; }
+
   .composer .inner { max-width: 760px; }
   .composer textarea { border-radius: 24px; padding: 11px 18px; }
 
@@ -361,12 +379,34 @@
 
   <div class="seg" role="tablist" id="tabs" hidden>
     <button type="button" role="tab" id="tab-chat" aria-selected="true">Ashur</button>
+    <button type="button" role="tab" id="tab-diary" aria-selected="false">Diario</button>
     <button type="button" role="tab" id="tab-status" aria-selected="false">Estado</button>
     <button type="button" role="tab" id="tab-settings" aria-selected="false">Ajustes</button>
   </div>
 
   <div id="chat" hidden>
     <div class="thread" id="thread" aria-live="polite"></div>
+  </div>
+
+  <div id="diary" hidden>
+    <div class="qcard" id="d-question"><small>Pregunta de hoy</small><span id="d-question-text"></span></div>
+    <textarea id="d-text" placeholder="Escribe aquí. Lo que no guardes queda como borrador en este dispositivo." aria-label="Entrada del diario"></textarea>
+    <div class="dbar">
+      <span class="grow" id="d-state"></span>
+      <button type="button" id="d-save">Guardar</button>
+    </div>
+    <div class="error" id="d-error" role="alert" hidden></div>
+
+    <section>
+      <h2>Avisos</h2>
+      <div class="group" id="d-notify-group"></div>
+      <div class="note" id="d-notify-note"></div>
+    </section>
+
+    <section>
+      <h2>Entradas</h2>
+      <div id="d-entries"></div>
+    </section>
   </div>
 
   <div id="dashboard" hidden>
@@ -760,13 +800,21 @@
   function unlockGuest() {
     if (unlocked) return;
     unlocked = true;
-    $("signin").hidden = true; $("tabs").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
-    $("chat").hidden = $("composer").hidden = false; $("guest-signout").hidden = false;
+    $("signin").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
+    $("guest-signout").hidden = false;
     $("subtitle").classList.remove("locked", "stale");
     $("subtitle-text").textContent = "Hola, " + guestName;
-    tab = "chat";
-    if (!historyLoaded) loadHistory();
-    loadVoices();
+    if (role === "self") {            // the home-screen app: chat and diary, nothing administrative
+      $("tabs").hidden = false;
+      if (tab !== "diary") tab = "chat";
+      showTab(tab);
+    } else {
+      $("tabs").hidden = true; $("diary").hidden = true;
+      $("chat").hidden = $("composer").hidden = false;
+      tab = "chat";
+      if (!historyLoaded) loadHistory();
+      loadVoices();
+    }
   }
 
   async function refresh() {
@@ -805,7 +853,7 @@
   function showSignin(error) {
     key = null; role = null;
     try { localStorage.removeItem(KEY); } catch (e) {}
-    for (const id of ["dashboard", "settings", "chat", "tabs", "composer", "guest-signout"]) $(id).hidden = true;
+    for (const id of ["dashboard", "settings", "chat", "diary", "tabs", "composer", "guest-signout"]) $(id).hidden = true;
     $("thread").replaceChildren(); lastDay = null;
     $("signin").hidden = false;
     historyLoaded = false;
@@ -818,6 +866,7 @@
   // --- tabs ---------------------------------------------------------------
   let tab = "chat";
   try { tab = localStorage.getItem("ashur.tab") || "chat"; } catch (e) {}
+  if (location.hash === "#diario") tab = "diary";
   let unlocked = false, historyLoaded = false;
   function unlock() {
     if (unlocked) return;                       // only the first successful load switches views
@@ -828,13 +877,17 @@
   function showTab(t) {
     tab = t;
     try { localStorage.setItem("ashur.tab", t); } catch (e) {}
-    $("tabs").style.setProperty("--i", { chat: 0, status: 1, settings: 2 }[t] || 0);
-    $("tab-chat").setAttribute("aria-selected", t === "chat");
-    $("tab-status").setAttribute("aria-selected", t === "status");
-    $("tab-settings").setAttribute("aria-selected", t === "settings");
+    const order = role === "self" ? ["chat", "diary"] : ["chat", "diary", "status", "settings"];
+    if (!order.includes(t)) t = tab = "chat";
+    $("tab-status").hidden = $("tab-settings").hidden = role === "self";
+    $("tabs").style.setProperty("--n", order.length);
+    $("tabs").style.setProperty("--i", order.indexOf(t));
+    for (const n of ["chat", "diary", "status", "settings"]) $("tab-" + n).setAttribute("aria-selected", t === n);
     $("chat").hidden = $("composer").hidden = t !== "chat";
+    $("diary").hidden = t !== "diary";
     $("dashboard").hidden = t !== "status";
     $("settings").hidden = t !== "settings";
+    if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
     if (t === "settings") { loadDocs(""); loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
@@ -849,6 +902,7 @@
   $("menu").addEventListener("click", (e) => { const b = e.target.closest(".menu-item"); if (b) showPage(b.dataset.page); });
   for (const b of document.querySelectorAll("#settings .back")) b.addEventListener("click", () => showPage(null));
   $("tab-chat").addEventListener("click", () => showTab("chat"));
+  $("tab-diary").addEventListener("click", () => showTab("diary"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
   $("tab-settings").addEventListener("click", () => { showTab("settings"); refresh(); });
 
@@ -1320,6 +1374,145 @@
     refresh();
   });
   $("signout").addEventListener("click", () => showSignin());
+
+  // --- diary --------------------------------------------------------------
+  // The draft lives in this device until the core confirms it saved, so a dropped connection never loses the entry.
+  const DRAFT = "ashur.diary.draft";
+  let diaryInfo = null, pushSub = null;
+  const draftGet = () => { try { return localStorage.getItem(DRAFT) || ""; } catch (e) { return ""; } };
+  const draftSet = (v) => { try { v ? localStorage.setItem(DRAFT, v) : localStorage.removeItem(DRAFT); } catch (e) {} };
+  const dtxt = $("d-text");
+  dtxt.addEventListener("input", () => { draftSet(dtxt.value); $("d-state").textContent = dtxt.value ? "Borrador guardado en este dispositivo" : ""; });
+  function diaryDay(day) {
+    const d = new Date(day + "T12:00:00");
+    const t = d.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  function renderDiary(d) {
+    diaryInfo = d;
+    $("d-question-text").textContent = d.question;
+    const box = $("d-entries"), nodes = [];
+    let lastDay = null, grp = null;
+    for (const e of d.entries) {
+      if (e.day !== lastDay) {
+        lastDay = e.day;
+        nodes.push(el("div", "dayhead", diaryDay(e.day)));
+        grp = el("div", "group"); nodes.push(grp);
+      }
+      const item = el("div", "entry");
+      const del = el("button", "link del", "Borrar"); del.type = "button";
+      del.addEventListener("click", async () => {
+        if (!confirm("¿Borrar esta entrada? No se puede deshacer.")) return;
+        await api("api/diary/" + e.id, { method: "DELETE" }); loadDiary();
+      });
+      const hhmm = new Date(e.ts * 1000).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
+      const w = el("div", "when", hhmm); w.append(del);
+      item.append(w, el("div", "txt", e.text));
+      grp.append(item);
+    }
+    if (!nodes.length) { const g = el("div", "group"); g.append(row({ title: "Todavía no hay entradas" })); g.firstChild.querySelector(".title").classList.add("empty"); nodes.push(g); }
+    box.replaceChildren(...nodes);
+    renderNotify(d);
+  }
+  async function loadDiary() {
+    if (!dtxt.value && draftGet()) { dtxt.value = draftGet(); $("d-state").textContent = "Borrador recuperado de este dispositivo"; }
+    try {
+      const r = await api("api/diary");
+      if (r.ok) renderDiary(await r.json());
+    } catch (e) {}
+  }
+  $("d-save").addEventListener("click", async () => {
+    const text = dtxt.value.trim(), er = $("d-error");
+    if (!text) return;
+    er.hidden = true; $("d-save").disabled = true;
+    try {
+      const r = await api("api/diary", { method: "POST", body: JSON.stringify({ text, source: "typed" }) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      dtxt.value = ""; draftSet(""); $("d-state").textContent = "Guardado ✓";
+      loadDiary();
+    } catch (e) {
+      er.hidden = false;
+      er.textContent = "No se pudo guardar (sin conexión con el núcleo). Tu texto sigue aquí y en el borrador de este dispositivo; reintenta.";
+    } finally { $("d-save").disabled = false; }
+  });
+
+  // notifications: service worker + Web Push
+  const pushOK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  function b64u(s) {
+    const p = "=".repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(b, (c) => c.charCodeAt(0));
+  }
+  async function swReg() {
+    if (!("serviceWorker" in navigator)) return null;
+    try { return await navigator.serviceWorker.register("sw.js"); } catch (e) { return null; }
+  }
+  async function currentSub() {
+    if (!pushOK) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? await reg.pushManager.getSubscription() : null;
+  }
+  async function renderNotify(d) {
+    const g = $("d-notify-group"), note = $("d-notify-note");
+    const nodes = [];
+    pushSub = await currentSub().catch(() => null);
+    let known = false;
+    if (pushSub) {
+      try { const r = await api("api/push/check", { method: "POST", body: JSON.stringify({ endpoint: pushSub.endpoint }) }); known = (await r.json()).subscribed; } catch (e) {}
+    }
+    const on = !!pushSub && known;
+    const r1 = row({ title: on ? "Avisos activos en este dispositivo" : "Avisos apagados en este dispositivo",
+                     detail: on ? "Recibirás la pregunta de la noche" : (pushOK ? "Actívalos para que Ashur te recuerde escribir" : "Este navegador no los permite") });
+    if (pushOK) {
+      const b = el("button", null, on ? "Probar" : "Activar"); b.type = "button";
+      b.addEventListener("click", on ? testPush : enablePush);
+      r1.append(b);
+    }
+    nodes.push(r1);
+    const r2 = row({ title: "Recordatorio nocturno", detail: d.settings.enabled ? "Cada día a las " + d.settings.hour + ":00, y una segunda vez si sigues sin escribir" : "Apagado" });
+    const sel = document.createElement("select"); sel.setAttribute("aria-label", "Hora del aviso");
+    for (let h = 0; h < 23; h++) { const o = el("option", null, h + ":00"); o.value = h; if (h === d.settings.hour) o.selected = true; sel.append(o); }
+    const tg = el("button", null, d.settings.enabled ? "Apagar" : "Encender"); tg.type = "button";
+    const save = async (enabled, hour) => { await api("api/diary/settings", { method: "PUT", body: JSON.stringify({ enabled, hour }) }); loadDiary(); };
+    sel.addEventListener("change", () => save(d.settings.enabled, Number(sel.value)));
+    tg.addEventListener("click", () => save(!d.settings.enabled, d.settings.hour));
+    r2.append(sel, tg);
+    nodes.push(r2);
+    g.replaceChildren(...nodes);
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+    note.textContent = pushOK ? "Dispositivos con avisos: " + d.devices + "."
+      : "En iPhone: abre esta página en Safari, Compartir → «Añadir a pantalla de inicio», y ábrela desde ese icono (iOS 16.4 o más).";
+    if (pushOK && /iPhone|iPad/.test(navigator.userAgent) && !standalone)
+      note.textContent += " Para que funcionen en iPhone debes abrirla desde el icono de la pantalla de inicio.";
+  }
+  async function enablePush() {
+    const note = $("d-notify-note");
+    try {
+      const reg = await swReg();
+      if (!reg) throw new Error("sin service worker");
+      await navigator.serviceWorker.ready;
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { note.textContent = "El permiso fue denegado. Se cambia en los ajustes del sistema para esta app."; return; }
+      const k = await (await api("api/push/key")).json();
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(k.key) });
+      const r = await api("api/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      loadDiary();
+    } catch (e) { note.textContent = "No pude activar los avisos: " + (e && e.message || e); }
+  }
+  async function testPush() {
+    const note = $("d-notify-note");
+    try {
+      const r = await api("api/push/test", { method: "POST" });
+      const j = await r.json();
+      note.textContent = j.sent ? "Aviso de prueba enviado a " + j.sent + " dispositivo(s)." : "No hay dispositivos con avisos.";
+    } catch (e) { note.textContent = "No se pudo enviar la prueba."; }
+  }
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (ev) => { if (ev.data && ev.data.open === "/#diario" && unlocked) showTab("diary"); });
+    window.addEventListener("hashchange", () => { if (location.hash === "#diario" && unlocked) showTab("diary"); });
+    swReg();
+  }
   $("guest-signout").addEventListener("click", () => showSignin());
   document.addEventListener("visibilitychange", loop);
   loop();

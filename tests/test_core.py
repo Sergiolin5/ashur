@@ -480,3 +480,17 @@ def test_sergio_can_ask_for_an_inventory_rescan_now(env):
     first = c.post("/api/inventory/refresh", headers=A).json()
     assert first == {"queued": ["mac"]}
     assert c.post("/api/inventory/refresh", headers=A).json() == {"queued": []}     # no pile-up
+
+
+def test_diagnostics_lists_problems_and_hints_for_offline_nodes(env):
+    c, clock = env
+    h = register(c)
+    assert c.get("/api/diagnostics").status_code == 401
+    tid = c.post("/tasks", headers=A, json={"module": "inventory", "weight": "heavy"}).json()["task_id"]
+    c.get("/nodes/mac/tasks/next", headers=h)
+    c.post(f"/tasks/{tid}/result", headers=h, json={"ok": False, "error": "disco lleno"})
+    clock.now += 3600
+    d = c.get("/api/diagnostics", headers=A).json()
+    assert any("disco lleno" in p["text"] for p in d["problems"])
+    node = d["nodes"][0]
+    assert node["mode"] == "offline" and node["hint"]

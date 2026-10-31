@@ -118,7 +118,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.30.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.31.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -450,6 +450,41 @@ def create_app(
         name = request.url.path.lstrip("/")
         return Response((UI_PAGE.parent / name).read_bytes(), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+    DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
+                   "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget"}
+
+    @app.get("/api/diagnostics", dependencies=[Depends(require_admin)])
+    def diagnostics():
+        """What `ashur errores` shows, plus why each device is not where it should be. Reads only; never prints a key."""
+        from core.events import describe
+        st = status()
+        core_v = node_code()[0]
+        core_label = db.code_label(core_v)
+        nodes = []
+        for n in st["nodes"]:
+            behind = bool(core_v and n.code_version and n.code_version != core_v)
+            off = n.mode == Mode.OFFLINE
+            hint = None
+            if off:
+                hint = ("Sin señal. Comprueba que el equipo esté encendido, con Tailscale activo y el servicio de Ashur corriendo "
+                        "(Ajustes → Comandos).")
+            elif behind:
+                hint = ("Corre una versión anterior del código y debería traer la nueva sola. Si lleva horas así, reinicia su servicio "
+                        "o vuelve a correr el instalador (Ajustes → Comandos).")
+            elif core_v and not n.code_version:
+                hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
+            nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
+                          "code_label": n.code_label, "behind": behind, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint})
+        problems = []
+        for ev in db.log_rows(600):
+            if ev["event"] in DIAG_EVENTS:
+                problems.append({"ts": ev["ts"], "node_id": ev["node_id"], "event": ev["event"],
+                                 "text": describe(ev["event"], ev["detail"])})
+                if len(problems) >= 40:
+                    break
+        return {"version": app.version, "now": clock(), "core_code_label": core_label, "nodes": nodes, "problems": problems,
+                "brain": brain.budget()}
 
     @app.get("/api/overview", dependencies=[Depends(require_admin)])
     def overview():

@@ -663,6 +663,7 @@
       <button type="button" class="menu-item" data-page="voices"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mi-text"><b>Personas</b><small>Cómo te habla Ashur en cada dispositivo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="diag"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span><span class="mi-text"><b>Diagnóstico</b><small>Errores y por qué un equipo no está al día</small></span><span class="mi-go" aria-hidden="true">›</span></button>
     </nav>
 
     <div class="page" data-page="space" hidden>
@@ -767,6 +768,13 @@
       </div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="diag" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Diagnóstico</div></div>
+      <section><h2>Equipos</h2><div class="group" id="diag-nodes"></div><div class="note" id="diag-note"></div></section>
+      <section><h2>Errores recientes</h2><div class="group" id="diag-errors"></div>
+        <button type="button" id="diag-copy" class="link">Copiar todo para pegárselo a Claude</button></section>
     </div>
 
     <div class="page" data-page="cmds" hidden>
@@ -1155,7 +1163,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); }
+    if (t === "settings") { renderCmds(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -1703,6 +1711,33 @@
       ["Últimos errores", "ashur errores"],
       ["Estado de los dispositivos", "ashur dispositivos"]]],
   ];
+  let diagText = "";
+  async function loadDiag() {
+    try {
+      const r = await api("api/diagnostics"); const d = await r.json();
+      const lines = [];
+      fill("diag-nodes", d.nodes.map((n) => {
+        const state = n.mode === "offline" ? "desconectado" : n.behind ? "código atrasado (v" + (n.code_label || "?") + " → v" + d.core_code_label + ")" : "al día";
+        lines.push(n.device_id + ": " + state + (n.hint ? ". " + n.hint : ""));
+        return row({ dot: n.mode, title: n.device_id, detail: state + (n.hint ? " · " + n.hint : ""),
+                     value: ago(n.last_seen_s_ago) });
+      }), "Sin equipos.");
+      for (const x of $("diag-nodes").querySelectorAll(".detail")) x.style.whiteSpace = "normal";
+      $("diag-note").textContent = "Núcleo v" + d.version + ", código de nodos v" + d.core_code_label + ".";
+      lines.push("Núcleo v" + d.version);
+      fill("diag-errors", d.problems.map((p) => {
+        lines.push(clock(p.ts) + " " + (p.node_id || "núcleo") + " " + p.text);
+        return row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + clock(p.ts) });
+      }), "Sin errores recientes.", 8);
+      for (const x of $("diag-errors").querySelectorAll(".title")) x.style.whiteSpace = "normal";
+      diagText = lines.join("\n");
+    } catch (e) { $("diag-note").textContent = "No pude cargar el diagnóstico."; }
+  }
+  $("diag-copy").addEventListener("click", async () => {
+    const b = $("diag-copy");
+    try { await navigator.clipboard.writeText(diagText); b.textContent = "Copiado"; } catch (e) { b.textContent = "No pude copiar"; }
+    setTimeout(() => { b.textContent = "Copiar todo para pegárselo a Claude"; }, 2000);
+  });
   function renderCmds() {
     const root = $("cmds");
     if (root.childElementCount) return;

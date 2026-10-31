@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.31.0 | 2026-10-31 | Ajustes → Diagnóstico: what `ashur errores` shows, inside the panel. Per device: connected or not, code version behind or not, and what to do; recent errors in plain Spanish with a «Copiar todo» button. New `GET /api/diagnostics` (admin only) |
 | 0.30.4 | 2026-10-31 | Panel: devices that are offline sink to the bottom; the Diario no longer switches to orange (one accent everywhere); checkboxes are real circles with a single check |
 | 0.30.3 | 2026-10-31 | Chat: the writing area gets a blurred fading veil, so messages no longer show through the checkboxes and the box |
 | 0.30.2 | 2026-10-31 | Estado: compact «Actividad reciente» (one line per event, device and time together), readable names for diary, notice, memory and audio events, tasks named by module instead of id |

@@ -356,3 +356,28 @@ def test_inventory_is_rescanned_periodically_and_space_report(env):
     assert rep["duplicate_groups"] == 1 and rep["wasted"] == big
     assert {f["path"] for f in rep["duplicates"][0]["files"]} == {"C:/a.iso", "D:/copia/a.iso"}
     assert rep["largest"][0]["size"] == big
+
+
+def test_node_load_is_shown_and_dropped_when_offline(env):
+    c, clock = env
+    h = register(c)
+    r = c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "full", "cpu_pct": 41.5, "ram_pct": 62, "gpu_pct": 8})
+    assert r.status_code == 200
+    n = c.get("/status", headers=A).json()["nodes"][0]
+    assert (n["cpu_pct"], n["ram_pct"], n["gpu_pct"]) == (41.5, 62, 8)
+    beat(c, h)                                              # an old agent sends none: "sin dato", not stale numbers
+    n = c.get("/status", headers=A).json()["nodes"][0]
+    assert n["cpu_pct"] is None and n["gpu_pct"] is None
+    assert c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "full", "cpu_pct": 140}).status_code == 422
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "full", "cpu_pct": 50})
+    clock.now += 60
+    assert c.get("/status", headers=A).json()["nodes"][0]["cpu_pct"] is None   # offline: no number
+
+
+def test_metrics_never_invent_a_gpu_reading(monkeypatch):
+    from node import metrics
+    monkeypatch.setattr(metrics, "_nvidia", lambda: None)
+    monkeypatch.setattr(metrics.platform, "system", lambda: "Linux")
+    metrics._gpu_cache.update(at=-1e9, val=None)
+    out = metrics.read(cpu=12.34)
+    assert out["cpu_pct"] == 12.3 and 0 <= out["ram_pct"] <= 100 and "gpu_pct" not in out

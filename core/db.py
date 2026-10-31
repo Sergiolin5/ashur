@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     simulated   INTEGER NOT NULL DEFAULT 0,
     last_seen   REAL,
     code_version TEXT,
+    cpu_pct REAL, ram_pct REAL, gpu_pct REAL,
     mode_reason TEXT                    -- why the node is in that mode, in Spanish
 );
 CREATE TABLE IF NOT EXISTS tasks (
@@ -136,6 +137,9 @@ class DB:
         ncols = {r["name"] for r in self.conn.execute("PRAGMA table_info(nodes)")}
         if "code_version" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN code_version TEXT")
+        for c in ("cpu_pct", "ram_pct", "gpu_pct"):
+            if c not in ncols:
+                self.conn.execute(f"ALTER TABLE nodes ADD COLUMN {c} REAL")
         if "mode_reason" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN mode_reason TEXT")
         # who said it: 'sergio' or 'g<guest id>'; older rows are all Sergio's
@@ -208,6 +212,13 @@ class DB:
             else:
                 self.conn.execute("UPDATE nodes SET mode = ?, last_seen = ?, mode_reason = ? WHERE id = ?",
                                   (mode, last_seen, reason, node_id))
+            self.conn.commit()
+
+    def set_node_metrics(self, node_id: str, cpu: Optional[float], ram: Optional[float],
+                         gpu: Optional[float]) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE nodes SET cpu_pct = ?, ram_pct = ?, gpu_pct = ? WHERE id = ?",
+                              (cpu, ram, gpu, node_id))
             self.conn.commit()
 
     def label_code(self, code_hash: str, version: str) -> None:

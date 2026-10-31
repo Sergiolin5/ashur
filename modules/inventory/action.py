@@ -100,6 +100,26 @@ def _hash(path: str, limit: int) -> Optional[str]:
         return None
 
 
+FINGERPRINT_MIN = 1 << 20      # duplicates under 1 MB are not worth reporting
+
+
+def fingerprint(path: str, size: int) -> Optional[str]:
+    """Cheap identity for files of 1 MB or more: size plus the first and last MB.
+    Reads at most 2 MB per file, so a weekly rescan stays light; enough to spot copies."""
+    if size < FINGERPRINT_MIN:
+        return None
+    try:
+        h = hashlib.sha256(str(size).encode())
+        with open(path, "rb") as f:
+            h.update(f.read(1 << 20))
+            if size > 2 << 20:
+                f.seek(-(1 << 20), os.SEEK_END)
+                h.update(f.read(1 << 20))
+        return "fp:" + h.hexdigest()[:32]
+    except OSError:
+        return None
+
+
 def _entries(path: str):
     try:
         with os.scandir(path) as it:
@@ -205,7 +225,8 @@ def scan(roots: Iterable[str], emit: Callable[[dict], None], stop: Callable[[], 
                     st = e.stat(follow_symlinks=False)
                     row = {"path": e.path, "kind": "file", "size": st.st_size,
                            "modified": st.st_mtime, "runnable": runnable,
-                           "hash": _hash(e.path, hash_limit) if hash_files else None}
+                           "hash": _hash(e.path, hash_limit) if hash_files
+                                   else fingerprint(e.path, st.st_size)}
                     if out(row):
                         return stats
             except OSError:

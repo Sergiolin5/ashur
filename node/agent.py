@@ -21,6 +21,7 @@ from typing import Optional
 import httpx
 import yaml
 
+from node import metrics
 from node.modules import Module, load, this_os
 from node.policy import Policy, Thresholds
 from shared.protocol import HEARTBEAT_INTERVAL_S, Mode
@@ -240,6 +241,7 @@ class Agent:
             log.info("mode %s -> %s", self.mode.value if self.mode else "-", mode.value)
             self.mode = mode
         beat = {"mode": mode.value, "reason": self.policy.reason}
+        beat.update(metrics.read(getattr(self.policy.reader, "last_cpu", None)))
         if not self.announced:
             beat.update(modules=sorted(self.modules), code_version=self.code_version, fresh_start=True)
         elif self.retry_missing_modules():

@@ -91,6 +91,9 @@
   .row.indent + .row.indent::before { left: 37px; }
   .row .main { flex: 1; min-width: 0; }
   .row .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meters { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 3px; font-size: 13px; color: var(--secondary);
+            font-variant-numeric: tabular-nums; }
+  .meter.hot { color: #d70015; font-weight: 600; }
   .row .detail { color: var(--secondary); font-size: 15px; margin-top: 1px;
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #devices .detail, #activity .title { white-space: normal; }
@@ -201,6 +204,7 @@
   <div class="seg" role="tablist" id="tabs" hidden>
     <button type="button" role="tab" id="tab-chat" aria-selected="true">Ashur</button>
     <button type="button" role="tab" id="tab-status" aria-selected="false">Estado</button>
+    <button type="button" role="tab" id="tab-settings" aria-selected="false">Ajustes</button>
   </div>
 
   <div id="chat" hidden>
@@ -226,6 +230,14 @@
     </section>
 
     <section>
+      <h2>Actividad reciente</h2>
+      <div class="group" id="activity"></div>
+    </section>
+
+  </div>
+
+  <div id="settings" hidden>
+    <section>
       <h2>Archivos duplicados</h2>
       <div class="group" id="dups"></div>
       <div class="note" id="dups-note">Copias idénticas de 1 MB o más, entre todos tus equipos. Ashur no borra nada: solo te muestra dónde están.</div>
@@ -234,11 +246,6 @@
     <section>
       <h2>Archivos más grandes</h2>
       <div class="group" id="largest"></div>
-    </section>
-
-    <section>
-      <h2>Actividad reciente</h2>
-      <div class="group" id="activity"></div>
     </section>
 
     <section>
@@ -347,12 +354,21 @@
     if (text !== undefined && text !== null) n.textContent = String(text);
     return n;
   }
+  const num = (v) => (typeof v === "number" ? v : null);
   function row(opts) {
     const r = el("div", "row" + (opts.dot ? " indent" : ""));
     if (opts.dot) r.append(el("span", "dot " + opts.dot));
     const m = el("div", "main");
     m.append(el("div", "title", opts.title));
     if (opts.detail) m.append(el("div", "detail", opts.detail));
+    if (opts.meters) {
+      const w = el("div", "meters");
+      for (const [name, v] of opts.meters) {
+        const c = el("span", "meter" + (v !== null && v >= 90 ? " hot" : ""), name + " " + (v === null ? "sin dato" : Math.round(v) + "%"));
+        w.append(c);
+      }
+      m.append(w);
+    }
     r.append(m);
     if (opts.value) r.append(el("div", "value", opts.value));
     return r;
@@ -475,6 +491,7 @@
                 : ", " + (n.code_label ? "v" + n.code_label : "versión anterior") +
                   " → v" + (data.node_code_label || "?") + " pendiente") +
               (n.reason && n.mode !== "full" && n.mode !== "offline" ? " · " + n.reason : ""),
+      meters: n.mode === "offline" ? null : [["CPU", num(n.cpu_pct)], ["RAM", num(n.ram_pct)], ["GPU", num(n.gpu_pct)]],
       value: ago(n.last_seen_s_ago)
     })), "Ningún dispositivo todavía.");
 
@@ -517,7 +534,7 @@
   function unlockGuest() {
     if (unlocked) return;
     unlocked = true;
-    $("signin").hidden = true; $("tabs").hidden = true; $("dashboard").hidden = true;
+    $("signin").hidden = true; $("tabs").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
     $("chat").hidden = $("composer").hidden = false; $("guest-signout").hidden = false;
     $("subtitle").classList.remove("locked", "stale");
     $("subtitle-text").textContent = "Hola, " + guestName;
@@ -562,7 +579,7 @@
   function showSignin(error) {
     key = null; role = null;
     try { localStorage.removeItem(KEY); } catch (e) {}
-    for (const id of ["dashboard", "chat", "tabs", "composer", "guest-signout"]) $(id).hidden = true;
+    for (const id of ["dashboard", "settings", "chat", "tabs", "composer", "guest-signout"]) $(id).hidden = true;
     $("thread").replaceChildren(); lastDay = null;
     $("signin").hidden = false;
     historyLoaded = false;
@@ -587,14 +604,17 @@
     try { localStorage.setItem("ashur.tab", t); } catch (e) {}
     $("tab-chat").setAttribute("aria-selected", t === "chat");
     $("tab-status").setAttribute("aria-selected", t === "status");
+    $("tab-settings").setAttribute("aria-selected", t === "settings");
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("dashboard").hidden = t !== "status";
+    $("settings").hidden = t !== "settings";
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "status") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); loadSpace(); }
+    if (t === "settings") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); loadSpace(); }
     if (t === "chat") loadVoices();
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
+  $("tab-settings").addEventListener("click", () => { showTab("settings"); refresh(); });
 
   // --- chat ---------------------------------------------------------------
   const money = new Intl.NumberFormat("es-CO", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
@@ -875,7 +895,7 @@
       if (d.pending) {
         fill("dups", [], "Calculando… vuelve a abrir Estado en un momento.");
         fill("largest", [], "Calculando…");
-        setTimeout(() => { if (tab === "status") loadSpace(); }, 15000);
+        setTimeout(() => { if (tab === "settings") loadSpace(); }, 15000);
         return;
       }
       const wrap = (r) => { r.querySelector(".title").style.whiteSpace = "pre-line"; r.querySelector(".title").style.wordBreak = "break-all"; return r; };
@@ -947,7 +967,7 @@
 
   function loop() {
     clearTimeout(timer);
-    if (document.visibilityState === "visible" && (tab === "status" || !unlocked)) refresh();
+    if (document.visibilityState === "visible" && (tab === "status" || tab === "settings" || !unlocked)) refresh();
     timer = setTimeout(loop, 3000);
   }
 

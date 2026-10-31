@@ -110,7 +110,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.16.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.17.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -253,6 +253,7 @@ def create_app(
         prev = node["mode"]
         reason = (hb.reason or "")[:120] or None
         db.set_node_mode(node["id"], hb.mode.value, last_seen=now, reason=reason)
+        db.set_node_metrics(node["id"], hb.cpu_pct, hb.ram_pct, hb.gpu_pct)
         if hb.modules is not None and sorted(hb.modules) != sorted(node["modules"]):
             db.set_node_modules(node["id"], hb.modules)
             db.log(now, node["id"], "modules_changed", {"from": node["modules"], "to": sorted(hb.modules)})
@@ -715,6 +716,9 @@ def create_app(
                 modules=n["modules"], simulated=n["simulated"], code_version=n.get("code_version"),
                 reason=n.get("mode_reason") if n["mode"] != Mode.OFFLINE.value else None,
                 code_label=db.code_label(n.get("code_version")),
+                cpu_pct=n.get("cpu_pct") if n["mode"] != Mode.OFFLINE.value else None,
+                ram_pct=n.get("ram_pct") if n["mode"] != Mode.OFFLINE.value else None,
+                gpu_pct=n.get("gpu_pct") if n["mode"] != Mode.OFFLINE.value else None,
                 last_seen_s_ago=None if n["last_seen"] is None else round(now - n["last_seen"], 1),
             )
             for n in db.nodes()

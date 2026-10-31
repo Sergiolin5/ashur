@@ -141,6 +141,7 @@ class SignalReader:
         self.windows = platform.system() == "Windows"
         self.mac = platform.system() == "Darwin"
         self._sampled = False
+        self.last_cpu = None
         psutil.cpu_percent(None)
         self._own_cpu()
 
@@ -187,7 +188,9 @@ class SignalReader:
                 idle = _mac_idle_s()           # fullscreen is not detected on macOS yet
             except Exception as e:
                 log.warning("could not read macOS idle time: %s", e)
-        other = max(0.0, self.psutil.cpu_percent(None) - self._own_cpu())
+        total = self.psutil.cpu_percent(None)
+        self.last_cpu = total
+        other = max(0.0, total - self._own_cpu())
         batt = None
         try:
             batt = self.psutil.sensors_battery()

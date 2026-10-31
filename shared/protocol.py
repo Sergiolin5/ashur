@@ -61,6 +61,9 @@ class Heartbeat(BaseModel):
     modules: Optional[list[str]] = None   # sent on the first beat after start, so new modules are known
     code_version: Optional[str] = None    # first beat: which code this agent runs
     fresh_start: Optional[bool] = None    # first beat: whatever the core thinks it was running is gone
+    cpu_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    ram_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    gpu_pct: Optional[float] = Field(default=None, ge=0, le=100)
     load_pct: Optional[float] = None
     free_gpu_mem_gb: Optional[float] = None
     battery_pct: Optional[float] = None
@@ -116,3 +119,6 @@ class NodeStatus(BaseModel):
     code_version: Optional[str] = None
     code_label: Optional[str] = None      # the core version that shipped that code, e.g. "0.11.0"
     reason: Optional[str] = None
+    cpu_pct: Optional[float] = None       # None = no reading (offline, or not readable on that OS)
+    ram_pct: Optional[float] = None
+    gpu_pct: Optional[float] = None

@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.30.4 | 2026-10-31 | Panel: devices that are offline sink to the bottom; the Diario no longer switches to orange (one accent everywhere); checkboxes are real circles with a single check |
 | 0.30.3 | 2026-10-31 | Chat: the writing area gets a blurred fading veil, so messages no longer show through the checkboxes and the box |
 | 0.30.2 | 2026-10-31 | Estado: compact «Actividad reciente» (one line per event, device and time together), readable names for diary, notice, memory and audio events, tasks named by module instead of id |
 | 0.30.1 | 2026-10-31 | Estado: «tareas en espera» now names each task (module and device) instead of only counting them |

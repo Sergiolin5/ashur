@@ -342,13 +342,11 @@
     background: radial-gradient(40% 32% at 22% 20%, rgba(255,160,120,.30), transparent 70%),
                 radial-gradient(38% 30% at 80% 78%, rgba(255,120,170,.22), transparent 72%),
                 radial-gradient(30% 26% at 70% 14%, rgba(255,205,120,.20), transparent 70%); filter: blur(34px); }
-  body[data-tab="diary"]::after { opacity: 1; }
+  body[data-tab="diary"]::after { opacity: 0; }          /* one accent everywhere: no warm Diario */
   @media (prefers-color-scheme: dark) { body::after { background:
                 radial-gradient(40% 32% at 22% 20%, rgba(255,140,100,.20), transparent 70%),
                 radial-gradient(38% 30% at 80% 78%, rgba(255,100,160,.16), transparent 72%),
                 radial-gradient(30% 26% at 70% 14%, rgba(255,190,100,.12), transparent 70%); } }
-  body[data-tab="diary"] { --tint: #E8590C; --tint-2: #FF8A4C; }          /* the diary is warmer than the control room */
-  @media (prefers-color-scheme: dark) { body[data-tab="diary"] { --tint: #FF8A4C; --tint-2: #FFB067; } }
   #diary { padding-top: 14px; }
   .dbar .grow { transition: opacity .3s; }
   .dbar .grow.said { animation: said .7s var(--expo) both; }
@@ -543,6 +541,16 @@
     background: linear-gradient(to top, color-mix(in srgb, var(--bg) 94%, transparent) 62%, color-mix(in srgb, var(--bg) 70%, transparent));
     -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
     -webkit-mask-image: linear-gradient(to bottom, transparent, #000 36px); mask-image: linear-gradient(to bottom, transparent, #000 36px); }
+  /* checkboxes: round, one ring, one dot of tint when on */
+  input[type=checkbox] { -webkit-appearance: none; appearance: none; width: 24px; height: 24px; flex: none; margin: 0; padding: 0;
+    border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--secondary) 55%, transparent); background: var(--field); box-shadow: none;
+    display: inline-grid; place-items: center; cursor: pointer; transition: background-color .25s var(--expo), border-color .25s, transform .5s var(--spring); }
+  input[type=checkbox]::after { content: ""; width: 11px; height: 6px; border-left: 2.2px solid #fff; border-bottom: 2.2px solid #fff;
+    transform: translateY(-1px) rotate(-45deg) scale(0); transition: transform .4s var(--spring); }
+  input[type=checkbox]:checked { background: linear-gradient(180deg, var(--tint-2), var(--tint)); border-color: transparent; }
+  input[type=checkbox]:checked::after { transform: translateY(-1px) rotate(-45deg) scale(1); }
+  input[type=checkbox]:active { transform: scale(.88); }
+  input[type=checkbox]:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--tint) 45%, transparent); }
   /* proposals: text gets the full width, actions sit below it */
   #proposals .row { flex-wrap: wrap; row-gap: 10px; }
   #proposals .main { flex-basis: 100%; }
@@ -948,7 +956,7 @@
 
   function render(data) {
     const now = data.now;
-    const nodes = data.status.nodes;
+    const nodes = [...data.status.nodes].sort((a, b) => (a.mode === "offline") - (b.mode === "offline") || a.device_id.localeCompare(b.device_id));
     const byId = Object.fromEntries(nodes.map((n) => [n.device_id, n]));
 
     // working now

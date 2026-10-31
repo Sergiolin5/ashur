@@ -10,7 +10,10 @@ import tarfile
 from pathlib import Path
 from typing import Iterator
 
-CODE_PATHS = ("shared", "node", "modules", "requirements-node.txt", "requirements-voice.txt")
+# These files decide the version id AND are checked by every node that downloads the bundle. Nodes already out there carry
+# an older copy of this very list, so it must never grow: a longer list makes their check fail and they stop updating
+# (that is what 0.29.0 did by adding requirements-voice.txt). Anything only an installer needs goes in `extra` below.
+CODE_PATHS = ("shared", "node", "modules", "requirements-node.txt")
 
 
 def iter_files(root: Path) -> Iterator[tuple[str, Path]]:
@@ -37,11 +40,13 @@ def has_node_code(root: Path) -> bool:
     return (Path(root) / "node" / "agent.py").is_file()
 
 
-def build_bundle(root: Path) -> bytes:
+def build_bundle(root: Path, extra: tuple = ()) -> bytes:
+    """`extra`: files added to the tarball only, never part of the version id (e.g. what the installers need)."""
     buf = io.BytesIO()
     with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            for rel, path in iter_files(Path(root)):
+            files = list(iter_files(Path(root))) + [(n, Path(root) / n) for n in extra if (Path(root) / n).is_file()]
+            for rel, path in files:
                 data = path.read_bytes()
                 info = tarfile.TarInfo(rel)
                 info.size, info.mtime, info.mode = len(data), 0, 0o644

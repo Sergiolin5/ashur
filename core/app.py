@@ -118,7 +118,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.31.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.31.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -283,10 +283,11 @@ def create_app(
     @app.get("/install/{name}")
     def installer(name: str, request: Request):
         if name == "code.tar.gz":
-            _, bundle = node_code()
-            if not bundle:
+            version, _ = node_code()
+            if not version:
                 raise HTTPException(404, "this core ships no node code")
-            return Response(bundle, media_type="application/gzip")
+            # installers also need the optional voice requirements, which are not part of the version id
+            return Response(build_bundle(code_root, extra=("requirements-voice.txt",)), media_type="application/gzip")
         scripts = {"windows.ps1": "install_windows.ps1", "mac.sh": "install_mac.sh"}
         if name not in scripts:
             raise HTTPException(404, "no")

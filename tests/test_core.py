@@ -494,3 +494,17 @@ def test_diagnostics_lists_problems_and_hints_for_offline_nodes(env):
     assert any("disco lleno" in p["text"] for p in d["problems"])
     node = d["nodes"][0]
     assert node["mode"] == "offline" and node["hint"]
+
+
+def test_code_version_ignores_installer_only_files_so_old_nodes_still_verify(tmp_path):
+    """A node out there checks a downloaded bundle against a fixed, older file list. The list must not grow."""
+    from pathlib import Path
+    from shared.codebundle import CODE_PATHS, build_bundle, code_version, extract_bundle
+    root = Path(__file__).resolve().parents[1]
+    assert CODE_PATHS == ("shared", "node", "modules", "requirements-node.txt")       # frozen: older nodes verify against it
+    out = tmp_path / "x"
+    extract_bundle(build_bundle(root), out)
+    assert code_version(out) == code_version(root)
+    out2 = tmp_path / "y"
+    extract_bundle(build_bundle(root, extra=("requirements-voice.txt",)), out2)
+    assert (out2 / "requirements-voice.txt").exists() and code_version(out2) == code_version(root)

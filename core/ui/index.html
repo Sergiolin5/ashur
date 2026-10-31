@@ -962,10 +962,11 @@
     const qn = $("queued-note");
     if (waiting) {
       const blocked = data.queued.filter((q) => q.weight === "heavy" && q.target && byId[q.target] && byId[q.target].mode !== "full");
-      let text = waiting === 1 ? "1 tarea en espera." : waiting + " tareas en espera.";
+      const MODS = { inventory: "Inventario", docs: "Lectura de documentos", llm: "Respuesta del modelo local", voice: "Transcripción de voz" };
+      const what = data.queued.map((q) => (MODS[q.module] || q.module) + (q.target ? " en " + q.target : " (en cualquier equipo libre)")).join("; ");
+      let text = (waiting === 1 ? "1 tarea en espera: " : waiting + " tareas en espera: ") + what + ".";
       if (blocked.length) {
-        const names = [...new Set(blocked.map((q) => q.target))].join(", ");
-        text += " Las de " + names + " empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.";
+        text += " Las pesadas empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.";
       }
       qn.textContent = text; qn.hidden = false;
     } else { qn.hidden = true; }

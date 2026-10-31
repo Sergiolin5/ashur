@@ -467,3 +467,16 @@ def test_largest_files_list_has_files_only(env):
         {"path": "/small.txt", "kind": "file", "size": 10}]})
     rep = c.app.state.db.inventory_report_readonly()
     assert [r["path"] for r in rep["largest"]] == ["/big.iso", "/small.txt"]
+
+
+def test_sergio_can_ask_for_an_inventory_rescan_now(env):
+    c, _ = env
+    h = register(c, modules=("inventory",), simulated=False)
+    register(c, device_id="sim", modules=("inventory",), simulated=True)          # simulated: untouched
+    assert c.post("/api/inventory/refresh").status_code == 401
+    assert c.post("/api/inventory/refresh", headers=A).json() == {"queued": []}    # the first-join scan is still waiting
+    t = c.get("/nodes/mac/tasks/next?modules=inventory", headers=h).json()
+    c.post(f"/tasks/{t['id']}/result", headers=h, json={"ok": True, "result": {}})
+    first = c.post("/api/inventory/refresh", headers=A).json()
+    assert first == {"queued": ["mac"]}
+    assert c.post("/api/inventory/refresh", headers=A).json() == {"queued": []}     # no pile-up

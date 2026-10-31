@@ -240,6 +240,8 @@
     <section>
       <h2>Archivos duplicados</h2>
       <div class="group" id="dups"></div>
+      <div class="group" style="margin-top:12px"><button class="link" id="inv-refresh" type="button">Repasar inventario ahora</button></div>
+      <div class="note" id="inv-refresh-note" hidden></div>
       <div class="note" id="dups-note">Copias idénticas de 1 MB o más, entre todos tus equipos. Ashur no borra nada: solo te muestra dónde están.</div>
     </section>
 
@@ -938,6 +940,15 @@
       } else box.hidden = true;
     } catch (e) {}
   }
+  $("inv-refresh").addEventListener("click", async () => {
+    const n = $("inv-refresh-note"); n.hidden = false; n.textContent = "Pidiéndolo…";
+    try {
+      const d = await (await api("api/inventory/refresh", { method: "POST" })).json();
+      n.textContent = d.queued.length
+        ? "Pedido para " + d.queued.join(", ") + ". Cada equipo empieza cuando esté libre (10 minutos sin uso y, si es portátil, enchufado). Los duplicados aparecen cuando terminen."
+        : "Nada que pedir: ya tienen un repaso esperando o en curso.";
+    } catch (e) { n.textContent = "No pude pedirlo."; }
+  });
   $("docs-refresh").addEventListener("click", async () => {
     const n = $("docs-refresh-note"); n.hidden = false; n.textContent = "Pidiéndolo…";
     try {

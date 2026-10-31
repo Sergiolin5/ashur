@@ -111,7 +111,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.18.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.18.5", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -375,6 +375,21 @@ def create_app(
                 if getattr(batch, k) is not None:
                     p[k] = getattr(batch, k)
         return {"ok": True, **out}
+
+    @app.post("/api/inventory/refresh", dependencies=[Depends(require_admin)])
+    def inventory_refresh():
+        """Sergio asks for a rescan now. Still heavy: each device starts when it is free."""
+        now, queued = clock(), []
+        for n in db.nodes():
+            if n["simulated"] or "inventory" not in n["modules"]:
+                continue
+            last = db.last_inventory_task(n["id"])
+            if last and last["status"] in ("queued", "running"):
+                continue
+            tid = db.add_task("inventory", {}, Weight.HEAVY.value, now, target=n["id"])
+            db.log(now, n["id"], "task_queued", {"task_id": tid, "module": "inventory", "reason": "asked"})
+            queued.append(n["id"])
+        return {"queued": queued}
 
     @app.post("/api/docs/refresh", dependencies=[Depends(require_admin)])
     def docs_refresh():

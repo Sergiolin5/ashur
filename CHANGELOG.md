@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.18.5 | 2026-10-31 | Ajustes → Archivos duplicados: «Repasar inventario ahora» queues an inventory rescan on every device that has `inventory` (still waits for the device to be free), so duplicates show up without waiting 7 days |
 | 0.18.4 | 2026-10-31 | `docs` reads only document formats (Word, Excel, PowerPoint, PDF, txt, md, csv, tsv, tex, rst, org); code and configuration (json, xml, html, ini, scripts) are no longer read and leave the index on the next pass. The largest-files list shows files only, not system folder summaries |
 | 0.18.3 | 2026-10-31 | A documents pass now reports real progress to the panel ("N documentos encontrados, buscando más", then "X de N documentos leídos") instead of "Empezando" for the whole pass |
 | 0.18.2 | 2026-10-31 | Ajustes → Documentos: «Releer documentos ahora» queues a pass on every device with `docs` (still waits for the device to be free) instead of waiting up to 7 days |

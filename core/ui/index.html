@@ -537,6 +537,12 @@
     header { animation: away linear both; animation-timeline: scroll(root); animation-range: 0 220px; transform-origin: left top; }
     @keyframes away { to { opacity: .15; transform: scale(.9) translateY(-14px); filter: blur(6px); } }
   }
+  /* the writing area: a blurred, fading veil so messages never show through its text */
+  .composer { background: none; isolation: isolate; }
+  .composer::before { content: ""; position: absolute; z-index: -1; inset: -34px 0 0 0; pointer-events: none;
+    background: linear-gradient(to top, color-mix(in srgb, var(--bg) 94%, transparent) 62%, color-mix(in srgb, var(--bg) 70%, transparent));
+    -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 36px); mask-image: linear-gradient(to bottom, transparent, #000 36px); }
   /* proposals: text gets the full width, actions sit below it */
   #proposals .row { flex-wrap: wrap; row-gap: 10px; }
   #proposals .main { flex-basis: 100%; }

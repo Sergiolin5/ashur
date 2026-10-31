@@ -681,7 +681,7 @@ def test_chat_proposals_default_to_claude_and_without_a_local_model_nothing_happ
     r = c.post("/api/proposals/run", headers=A).json()                                   # no node online: retried later
     assert r["added"] == 0 and "modelo local" in r["reason"]                             # and it says why
     th, _ = fake_llm_node(c, reply="- Trabaja en Beazley")
-    assert c.post("/api/proposals/run", headers=A).json() == {"added": 1}; th.join(5)
+    assert c.post("/api/proposals/run", headers=A).json() == {"added": 1, "reason": ""}; th.join(5)
     p = c.get("/api/proposals", headers=A).json()[0]
     assert p["source"] == "chat" and c.post(f"/api/proposals/{p['id']}/approve", headers=A, json={}).json()["tier"] == "claude"
 

@@ -508,7 +508,7 @@
                        60% { opacity: 1; } to { opacity: 1; transform: none; filter: none; } }
   .page { animation: slidepop .7s var(--expo) both; }
   @keyframes slidepop { from { opacity: 0; transform: translateX(60px) scale(.96); filter: blur(10px); } to { opacity: 1; transform: none; filter: none; } }
-  .group .row { animation: rowin .7s var(--expo) both; }
+  .group:not(.seen) .row { animation: rowin .7s var(--expo) both; }
   .group .row:nth-child(2) { animation-delay: .05s; } .group .row:nth-child(3) { animation-delay: .1s; }
   .group .row:nth-child(4) { animation-delay: .15s; } .group .row:nth-child(5) { animation-delay: .2s; }
   .group .row:nth-child(n+6) { animation-delay: .25s; }
@@ -879,20 +879,27 @@
   }
   // long lists show the newest few; "Ver todos" opens the rest and the choice survives refreshes
   const expanded = {};
+  // The panel redraws every few seconds. Rows animate in only the first time a list appears (the "seen" class), never on a
+  // refresh: replaying the entrance on every redraw was the flicker.
+  function put(g, kids) {
+    g.replaceChildren(...kids);
+    if (!g.classList.contains("seen")) { clearTimeout(g._seen); g._seen = setTimeout(() => g.classList.add("seen"), 1200); }
+  }
   function fill(id, nodes, emptyText, show) {
     const g = $(id);
     if (!nodes.length) {
-      g.replaceChildren(row({ title: emptyText }));
-      g.firstChild.querySelector(".title").classList.add("empty");
+      const r = row({ title: emptyText });
+      r.querySelector(".title").classList.add("empty");
+      put(g, [r]);
       return;
     }
-    if (!show || nodes.length <= show) { g.replaceChildren(...nodes); return; }
+    if (!show || nodes.length <= show) { put(g, nodes); return; }
     const open = !!expanded[id];
     const b = el("button", "link", open ? "Ver menos" : "Ver todos (" + nodes.length + ")");
     b.type = "button";
     b.setAttribute("aria-expanded", String(open));
     b.addEventListener("click", () => { expanded[id] = !open; fill(id, nodes, emptyText, show); });
-    g.replaceChildren(...(open ? nodes : nodes.slice(0, show)), b);
+    put(g, [...(open ? nodes : nodes.slice(0, show)), b]);
   }
   const nf = new Intl.NumberFormat("es-CO");
   function ago(seconds) {

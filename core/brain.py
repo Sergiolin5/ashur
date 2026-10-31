@@ -513,18 +513,22 @@ class Brain:
         """Read what Sergio wrote since last time (diary and chat) with a LOCAL model only, and put lasting facts
         in the inbox for him to accept or discard. Nothing is saved as a memory without his say-so, and the
         diary never goes to Claude for this."""
+        self.propose_reason = ""
         if self.local is None or self.s.brain == "claude":
+            self.propose_reason = "Este modo de Ashur no usa modelos locales."
             return 0
         d_cur, m_cur = int(self.db.setting("prop_diary_cursor", "0")), int(self.db.setting("prop_msg_cursor", "0"))
         entries, msgs = self.db.diary_after(d_cur), self.db.user_messages_after(m_cur)
         if not entries and not msgs:
+            self.propose_reason = "No hay entradas del diario ni mensajes nuevos desde la última búsqueda."
             return 0
         material = ("Diario de Sergio:\n" + "\n---\n".join(f"[{e['day']}] {self._clean_diary(e['text'])[:1200]}" for e in entries)
                     if entries else "") + ("\n\nLo que escribió en el chat:\n" + "\n".join("- " + m["content"][:400] for m in msgs)
                                            if msgs else "")
         try:
             text, _device = self.local(PROPOSER, [{"role": "user", "content": material[:6000]}])
-        except LocalUnavailable:
+        except LocalUnavailable as e:
+            self.propose_reason = str(e)
             return 0                                      # cursors stay put: it is retried later
         if entries:
             self.db.set_setting("prop_diary_cursor", str(entries[-1]["id"]))

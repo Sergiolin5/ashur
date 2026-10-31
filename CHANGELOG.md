@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.32.2 | 2026-10-31 | Core: one «se desconectó» per node instead of a dozen (the sweep ran in every concurrent request and each logged the same event); silence is counted from the core's own start, so a restart no longer flags every node offline; «Buscar recuerdos nuevos ahora» now says why it found nothing (no free model, model timed out, or nothing new) |
 | 0.32.1 | 2026-10-31 | Panel: fixed the flicker on every refresh. Rows animate in only the first time a list appears, not each time the panel redraws (0.30.0 replayed the entrance on every redraw) |
 | 0.32.0 | 2026-10-31 | Nodes report their own warnings and errors (update failures, task crashes) in the heartbeat; the core logs them as `node_problem` and Ajustes → Diagnóstico lists them, so nobody has to open agent.log on a device. Connection noise is skipped; the same text is sent at most once an hour. Takes effect on each node once it has updated (needs 0.31.1 first) |
 | 0.31.1 | 2026-10-31 | **Fix: nodes could not update since 0.29.0.** 0.29.0 added requirements-voice.txt to the files that make the node version id; nodes already installed verify a downloaded bundle against their own, older list, so they computed another id and refused every update («bundle content is X, expected Y»). The list is frozen again; the installer tarball adds requirements-voice.txt on the side (not part of the id). Found by reading the Mac's agent.log |

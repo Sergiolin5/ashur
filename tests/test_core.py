@@ -532,3 +532,25 @@ def test_problem_buffer_skips_connection_noise_and_repeats():
     lg.warning("update to %s failed", "abc")
     assert b.take() == []                                           # same text, within the hour
     b.give_back(["x"]); assert b.take() == ["x"]
+
+
+def test_offline_is_logged_once_and_not_right_after_a_restart(tmp_path):
+    import threading
+    clock = VirtualClock()
+    app = create_app(str(tmp_path / "o.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None)
+    c = TestClient(app)
+    h = register(c); beat(c, h)
+    clock.now += 600
+    ts = [threading.Thread(target=lambda: c.get("/api/overview", headers=A)) for _ in range(8)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    ev = [e for e in c.get("/api/overview", headers=A).json()["activity"] if e["event"] == "offline"]
+    assert len(ev) == 1
+    # a core that just started does not call a node silent for the time the core itself was down
+    app2 = create_app(str(tmp_path / "o.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None)
+    c2 = TestClient(app2)
+    beat(c2, h)                                                   # back online, as a node does after a restart
+    clock.now += 600
+    app3 = create_app(str(tmp_path / "o.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None)
+    c3 = TestClient(app3)
+    c3.get("/api/overview", headers=A)
+    assert [n["mode"] for n in c3.get("/api/diagnostics", headers=A).json()["nodes"]] == ["full"]

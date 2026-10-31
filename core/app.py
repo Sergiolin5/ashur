@@ -83,17 +83,27 @@ def create_app(
 
     db = DB(db_path, echo=echo_events)
 
+    sweep_lock = threading.Lock()
+    started_at = clock()
+
     def sweep() -> None:
-        """Mark nodes offline after missed heartbeats and reroute their tasks."""
-        now = clock()
-        for n in db.nodes():
-            if n["mode"] == Mode.OFFLINE.value or n["last_seen"] is None:
-                continue
-            if now - n["last_seen"] > OFFLINE_AFTER_S:
-                db.set_node_mode(n["id"], Mode.OFFLINE.value)
-                requeued = db.requeue_tasks_of(n["id"])
-                db.log(now, n["id"], "offline", {"silent_s": round(now - n["last_seen"], 1),
-                                                 "requeued_tasks": requeued})
+        """Mark nodes offline after missed heartbeats and reroute their tasks.
+        One sweep at a time (concurrent requests used to each log the same «se desconectó»), and the silence is counted
+        from the core's own start: right after a restart every node looks silent, and they need a moment to reconnect."""
+        if not sweep_lock.acquire(blocking=False):
+            return
+        try:
+            now = clock()
+            for n in db.nodes():
+                if n["mode"] == Mode.OFFLINE.value or n["last_seen"] is None:
+                    continue
+                if now - max(n["last_seen"], started_at) > OFFLINE_AFTER_S:
+                    db.set_node_mode(n["id"], Mode.OFFLINE.value)
+                    requeued = db.requeue_tasks_of(n["id"])
+                    db.log(now, n["id"], "offline", {"silent_s": round(now - n["last_seen"], 1),
+                                                     "requeued_tasks": requeued})
+        finally:
+            sweep_lock.release()
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -118,7 +128,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.32.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.32.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -820,7 +830,8 @@ def create_app(
 
     @app.post("/api/proposals/run", dependencies=[Depends(require_admin)])
     def proposals_run():
-        return {"added": brain.propose_memories()}
+        n = brain.propose_memories()
+        return {"added": n, "reason": "" if n else getattr(brain, "propose_reason", "")}
 
     def propose_due() -> int:
         """Every few hours, when enough new writing piled up. Local model only."""

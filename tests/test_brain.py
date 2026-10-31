@@ -536,3 +536,77 @@ def test_guests_never_get_documents_in_the_local_model(tmp_path, monkeypatch):
     r = c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "¿cuánto es el canon en el contrato de arrendamiento?"}).json()
     th.join(5)
     assert "sources" not in r and "dos millones" not in seen["payload"]["system"]
+
+
+# --- the diary: local model reads it freely, Claude only with the checkbox ------------------------
+def _with_diary(c):
+    db = c.app.state.db
+    db.diary_add(1.0, "2026-11-01", "Hoy discutí con mi jefe y me sentí frustrado.\nclave: abc123", "typed")
+    db.diary_add(2.0, "2026-11-02", "Caminé por el parque, día tranquilo.", "typed")
+
+
+def test_claude_sees_only_dates_of_diary_entries_without_permission(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([tool("search_diary", {"words": "jefe"})], stop="tool_use"), resp([text("ok")])])
+    _with_diary(c)
+    c.post("/api/chat", headers=A, json={"message": "¿qué escribí sobre mi jefe?"})
+    result = fake.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "2026-11-01" in result and "frustrado" not in result and "no autorizó" in result
+    assert "diary_shared" not in [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"][-1]["detail"]
+
+
+def test_diary_text_reaches_claude_only_when_sergio_allows_that_message_and_secrets_are_dropped(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([tool("search_diary", {"words": "jefe"})], stop="tool_use"), resp([text("ok")])])
+    _with_diary(c)
+    c.post("/api/chat", headers=A, json={"message": "¿qué escribí sobre mi jefe?", "share_diary": True})
+    result = fake.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "frustrado" in result and "abc123" not in result
+    last = [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"][-1]
+    assert last["detail"]["diary_shared"] is True and "frustrado" not in json.dumps(last)
+
+
+def test_sharing_documents_does_not_share_the_diary(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([tool("search_diary", {"words": "jefe"})], stop="tool_use"), resp([text("ok")])])
+    _with_diary(c)
+    c.post("/api/chat", headers=A, json={"message": "¿qué escribí sobre mi jefe?", "share_docs": True})
+    assert "frustrado" not in fake.calls[1]["messages"][-1]["content"][0]["content"]
+
+
+def test_a_guest_cannot_share_the_diary_and_has_no_such_tool(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([text("hola")])])
+    _with_diary(c)
+    g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()
+    c.post("/api/chat", headers={"X-Admin-Key": g["key"]}, json={"message": "hola", "share_diary": True})
+    assert "tools" not in fake.calls[0]
+
+
+def test_local_model_reads_the_diary_without_any_checkbox(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch); _with_diary(c)
+    th, seen = fake_llm_node(c, reply="Te sentiste frustrado el 1 de noviembre.")
+    r = c.post("/api/chat", headers=A, json={"message": "¿qué escribí en mi diario sobre mi jefe?"}).json()
+    th.join(5)
+    system = seen["payload"]["system"]
+    assert r["provider"] == "local" and r["diary_used"] == 1 and "frustrado" in system and "parque" not in system
+    assert "abc123" not in system
+    log = [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"][-1]
+    assert log["detail"]["diary_used"] == 1 and "frustrado" not in json.dumps(log)
+
+
+def test_a_vague_diary_question_gets_the_newest_entries_and_ordinary_chat_gets_none(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch); _with_diary(c)
+    th, seen = fake_llm_node(c)
+    r = c.post("/api/chat", headers=A, json={"message": "¿cómo me he sentido esta semana según mi diario?"}).json()
+    th.join(5)
+    assert r["diary_used"] == 2 and "parque" in seen["payload"]["system"]
+    th, seen = fake_llm_node(c)
+    r = c.post("/api/chat", headers=A, json={"message": "hola, ¿qué tal?"}).json()
+    th.join(5)
+    assert r["diary_used"] == 0 and "frustrado" not in seen["payload"]["system"]
+
+
+def test_guests_never_get_the_diary_in_the_local_model(tmp_path, monkeypatch):
+    c = _local_app(tmp_path, monkeypatch); _with_diary(c)
+    g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()["key"]
+    th, seen = fake_llm_node(c)
+    r = c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "¿qué dice mi diario?"}).json()
+    th.join(5)
+    assert "diary_used" not in r and "frustrado" not in seen["payload"]["system"]

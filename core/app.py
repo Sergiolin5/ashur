@@ -116,7 +116,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.23.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.24.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -600,6 +600,7 @@ def create_app(
         persona: Optional[str] = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,23}$")
         allow_claude: bool = False           # local-first: Sergio approved Claude for this message
         share_docs: bool = False             # Sergio lets Claude read document fragments for this message
+        share_diary: bool = False            # ...and diary entries
 
     # --- device personas (Sergio only; guests never see them) ---------------
     @app.get("/api/personas")
@@ -642,9 +643,10 @@ def create_app(
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
                              allow_claude=body.allow_claude and guest is None,
-                             share_docs=body.share_docs and guest is None)
+                             share_docs=body.share_docs and guest is None,
+                             share_diary=body.share_diary and guest is None)
             if guest:                     # which device answered and which tools ran stay Sergio's business
-                return {k: v for k, v in out.items() if k not in ("device", "tools", "model", "sources")}
+                return {k: v for k, v in out.items() if k not in ("device", "tools", "model", "sources", "diary_used")}
             summarize_soon()
             return out
         except (BrainUnavailable, LocalUnavailable) as e:

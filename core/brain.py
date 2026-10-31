@@ -76,6 +76,19 @@ TOOLS.append(
          "words": {"type": "string", "description": "Una a tres palabras clave que deben aparecer."}},
          "required": ["words"]}})
 
+DIARY_CUES = re.compile(r"diario|anoche|lo que escrib|mis entradas|c[oó]mo me (he )?sent|c[oó]mo (he )?estado|mi [aá]nimo|"
+                        r"qu[eé] (escrib|pas[oó])|mis [uú]ltimos d[ií]as|esta semana en mi")
+
+TOOLS.append(
+    {"name": "search_diary",
+     "description": "Busca en el diario de Sergio. Sin autorización de Sergio para este mensaje solo devuelve las FECHAS "
+                    "de las entradas que coinciden, sin su contenido; si necesitas leerlas, dile que active "
+                    "«Compartir mi diario con Claude» y vuelva a preguntar. Sin palabras devuelve las más recientes.",
+     "input_schema": {"type": "object", "properties": {
+         "words": {"type": "string", "description": "Cero a tres palabras clave que deben aparecer."}}}})
+
+DIARY_SECRET = re.compile(r"\b(clave|pin|c[oó]digo|cvv)\s*[:=]", re.I)      # a diary is prose: also catch «clave: …»
+
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
 MAX_SUMMARY_CHARS = 4000
@@ -251,7 +264,7 @@ class Brain:
         return tin, tout, tin * self.s.price_in_per_mtok / 1e6 + tout * self.s.price_out_per_mtok / 1e6
 
     # --- tools ------------------------------------------------------------
-    def _tool(self, name: str, args: dict, share_docs: bool = False) -> str:
+    def _tool(self, name: str, args: dict, share_docs: bool = False, share_diary: bool = False) -> str:
         now = self.clock()
         if name == "remember":
             text = str(args.get("text", "")).strip()[:500]
@@ -282,6 +295,16 @@ class Brain:
             if not share_docs:
                 out.append({"aviso": "Sergio no autorizó compartir el contenido en este mensaje."})
             return json.dumps(out, ensure_ascii=False)
+        if name == "search_diary":
+            hits = self.db.diary_search(str(args.get("words", "")).split(), 8)
+            if not hits:
+                return "No encontré entradas del diario con esas palabras."
+            if not share_diary:
+                return json.dumps({"entradas": len(hits), "fechas": sorted({h["day"] for h in hits}),
+                                   "aviso": "Sergio no autorizó compartir el contenido del diario en este mensaje."},
+                                  ensure_ascii=False)
+            return json.dumps([{"fecha": h["day"], "texto": self._clean_diary(h["text"])[:1500]} for h in hits],
+                              ensure_ascii=False)
         if name == "network_status":
             return json.dumps(self.network(), ensure_ascii=False, default=str)
         if name == "inventory_overview":
@@ -305,7 +328,8 @@ class Brain:
         return self._client is not None or bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
     def _chat_claude(self, messages: list[dict], guest: Optional[dict] = None,
-                     voice: Optional[str] = None, share_docs: bool = False) -> tuple[str, float, list[str]]:
+                     voice: Optional[str] = None, share_docs: bool = False,
+                     share_diary: bool = False) -> tuple[str, float, list[str]]:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
         system = GUEST_PERSONA.format(name=guest["name"]) if guest else self._system(voice)
@@ -334,13 +358,35 @@ class Brain:
             for u in uses:
                 tools_used.append(_get(u, "name"))
                 results.append({"type": "tool_result", "tool_use_id": _get(u, "id"),
-                                "content": self._tool(_get(u, "name"), _get(u, "input") or {}, share_docs)})
+                                "content": self._tool(_get(u, "name"), _get(u, "input") or {}, share_docs, share_diary)})
             messages.append({"role": "user", "content": results})
             if self.spent_this_month() >= self.s.monthly_budget_usd:
                 reply_parts = ["(Me detuve a mitad de la respuesta: se alcanzó el tope de gasto del mes.)"]
                 break
         reply = "\n\n".join(p for p in reply_parts if p).strip() or "(Sin respuesta.)"
         return reply, cost_total, tools_used
+
+    @staticmethod
+    def _clean_diary(text: str) -> str:
+        return "\n".join(ln for ln in text.splitlines()
+                         if not looks_like_secret(ln) and not DIARY_SECRET.search(ln))
+
+    def diary_context(self, text: str) -> tuple[str, int]:
+        """Diary entries for the local model, when his message is about his diary. Local only (tailnet), never guests."""
+        low = text.lower()
+        if not DIARY_CUES.search(low):
+            return "", 0
+        words = [w for w in dict.fromkeys(re.findall(r"[a-záéíóúñü0-9]{4,}", low))
+                 if w not in STOPWORDS_ES and w not in ("diario", "anoche", "escribí", "escribi", "entradas", "últimos", "ultimos",
+                                                        "semana", "sentido", "estado", "ánimo", "animo", "pasó", "paso")]
+        hits = self.db.diary_search(words[:3], 4) if words else []
+        if not hits and words:                      # the topic words may not be in any entry: fall back to the newest
+            hits = self.db.diary_search([], 3)
+        if not hits:
+            return ("Sergio preguntó por su diario y todavía no tiene entradas. Dilo y no inventes.", 0)
+        lines = [f"[{h['day']}]\n{self._clean_diary(h['text'])[:1200]}" for h in hits]
+        return ("Entradas del diario de Sergio (privadas; nunca las repitas fuera de esta respuesta). Responde solo con lo "
+                "que dicen, menciona la fecha, y si no alcanzan para responder, dilo.\n\n" + "\n\n".join(lines), len(hits))
 
     def docs_context(self, text: str) -> tuple[str, list[str]]:
         """Fragments of Sergio's documents for the local model, when his message is about them.
@@ -364,7 +410,7 @@ class Brain:
                 + "\n\n".join(lines), [h["path"] for h in hits])
 
     def _local_system(self, guest: Optional[dict] = None, voice: Optional[str] = None,
-                      docs_block: str = "") -> str:
+                      docs_block: str = "", diary_block: str = "") -> str:
         if guest:
             return GUEST_PERSONA.format(name=guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
@@ -373,7 +419,8 @@ class Brain:
                 "No tienes herramientas: no puedes guardar ni borrar recuerdos; si te lo piden, dilo con "
                 "claridad. Responde breve y en español.\n\n"
                 f"Estado actual de tus dispositivos: {net}"
-                + (f"\n\n{docs_block}" if docs_block else ""))
+                + (f"\n\n{docs_block}" if docs_block else "")
+                + (f"\n\n{diary_block}" if diary_block else ""))
 
     # --- conversation memory --------------------------------------------------
     def pending_summary(self) -> list[dict]:
@@ -435,7 +482,7 @@ class Brain:
 
     def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
              voice: Optional[str] = None, allow_claude: bool = False,
-             share_docs: bool = False) -> dict:
+             share_docs: bool = False, share_diary: bool = False) -> dict:
         voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice
         text = text.strip()
         now = self.clock()
@@ -448,10 +495,11 @@ class Brain:
         provider, device, note = None, None, None
         reply, cost, tools = "", 0.0, []
         doc_files: list[str] = []
+        diary_n = 0
 
         if want_claude and not over_budget:
             try:
-                reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice, share_docs)
+                reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice, share_docs, share_diary)
                 provider = "claude"
             except BrainUnavailable:
                 raise
@@ -477,7 +525,8 @@ class Brain:
                         else "Llegué al tope de gasto del mes con Claude. Respondí con un modelo local.")
             try:
                 docs_block, doc_files = ("", []) if guest else self.docs_context(text)
-                reply, device = self.local(self._local_system(guest, voice, docs_block), messages)
+                diary_block, diary_n = ("", 0) if guest else self.diary_context(text)
+                reply, device = self.local(self._local_system(guest, voice, docs_block, diary_block), messages)
                 provider = "local"
             except LocalUnavailable as e:
                 # local-first: Claude only for Sergio, only for this message, only once he says yes
@@ -488,7 +537,7 @@ class Brain:
                                     {"channel": channel, "estimate_usd": est})
                         return {"reply": str(e), "note": None, "provider": "none", "needs_approval": True,
                                 "estimate_usd": est, "cost_usd": 0.0, **self.budget(guest)}
-                    reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice, share_docs)
+                    reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice, share_docs, share_diary)
                     provider, note = "claude", "Respondió Claude con tu autorización."
                 else:
                     self.db.log(self.clock(), None, "chat_unanswered", {"channel": channel, "reason": str(e)[:200]})
@@ -507,6 +556,10 @@ class Brain:
             detail["docs_used"] = len(doc_files)
         if share_docs and provider == "claude" and "search_documents" in tools:
             detail["docs_shared"] = True
+        if diary_n and provider == "local":
+            detail["diary_used"] = diary_n
+        if share_diary and provider == "claude" and "search_diary" in tools:
+            detail["diary_shared"] = True
         if allow_claude and provider == "claude":
             detail["approved"] = True
         if guest:
@@ -516,4 +569,5 @@ class Brain:
         self.db.log(end, device, "chat", detail)
         return {"reply": reply, "note": note, "provider": provider, "device": device,
                 "cost_usd": round(cost, 5), "tools": tools, "sources": doc_files if provider == "local" else [],
+                "diary_used": diary_n if provider == "local" else 0,
                 **self.budget(guest)}

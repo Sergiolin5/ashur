@@ -675,6 +675,9 @@
     <label id="docs-row" hidden style="display:flex;align-items:center;gap:6px;margin:0 4px 6px;font-size:13px;color:var(--secondary)">
       <input type="checkbox" id="share-docs"> Compartir fragmentos de mis documentos con Claude en este mensaje
     </label>
+    <label id="diary-row" hidden style="display:flex;align-items:center;gap:6px;margin:0 4px 6px;font-size:13px;color:var(--secondary)">
+      <input type="checkbox" id="share-diary"> Compartir mi diario con Claude en este mensaje
+    </label>
     <form id="chat-form">
       <textarea id="msg" rows="1" placeholder="Escríbele a Ashur" aria-label="Mensaje para Ashur" maxlength="8000"></textarea>
       <button class="send" id="send" type="submit" aria-label="Enviar" disabled>
@@ -1069,10 +1072,13 @@
       const body = { message: text };
       if (v) body.persona = v;
       if (allowClaude) body.allow_claude = true;
-      if (!$("docs-row").hidden && $("share-docs").checked) { body.share_docs = true; $("share-docs").checked = false; }
+      const sd = !$("docs-row").hidden && $("share-docs").checked, sy = !$("diary-row").hidden && $("share-diary").checked;
+      if (sd) body.share_docs = true;
+      if (sy) body.share_diary = true;
       const r = await api("api/chat", { method: "POST", body: JSON.stringify(body) });
       const data = await r.json();
       wait.remove();
+      if (r.ok && !data.needs_approval) $("share-docs").checked = $("share-diary").checked = false;   // a retry after approval keeps them
       if (!r.ok) {
         bubble("note bad", (data && data.detail) || "No pude responder.");
       } else if (data.needs_approval) {
@@ -1092,6 +1098,7 @@
         const said = [];
         if (data.provider === "local" && role !== "guest") said.push("Respondió el modelo local en " + data.device + ".");
         if ((data.tools || []).includes("remember")) said.push("Ashur guardó un recuerdo.");
+        if (data.diary_used) said.push("Leyó " + data.diary_used + (data.diary_used === 1 ? " entrada" : " entradas") + " de tu diario.");
         if ((data.sources || []).length) said.push("Miró: " + data.sources.map((p) => p.split(/[\\/]/).pop()).join(", ") + ".");
         if (data.note && data.provider !== "local") said.unshift(data.note);
         else if (data.note) said.unshift(data.note.replace(/ Respondí con un modelo local\.$/, ""));
@@ -1419,7 +1426,7 @@
       sel.value = list.some((p) => p.name === saved) ? saved : "";
       $("voice-row").hidden = !list.length;
     } catch (e) {}
-    $("docs-row").hidden = role === "guest";
+    $("docs-row").hidden = $("diary-row").hidden = role === "guest";
   }
   $("voice").addEventListener("change", () => { try { localStorage.setItem("ashur.voice", $("voice").value); } catch (e) {} });
 

@@ -2,6 +2,7 @@
 
 session_log is append-only: it is the raw data for both papers.
 """
+import unicodedata
 import hashlib
 import json
 import secrets
@@ -441,6 +442,19 @@ class DB:
         with self.lock:
             rows = self.conn.execute(q + " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()
         return [dict(r) for r in rows]
+
+    def diary_search(self, words: list[str], limit: int = 6, window: int = 600) -> list[dict]:
+        """Newest entries (of the last `window`) containing every word; accents and case ignored. No words: the newest."""
+        def norm(t: str) -> str:
+            return "".join(c for c in unicodedata.normalize("NFD", t.lower()) if unicodedata.category(c) != "Mn")
+        ws = [norm(w) for w in words if w.strip()]
+        out = []
+        for r in self.diary_list(window):
+            if all(w in norm(r["text"]) for w in ws):
+                out.append(r)
+                if len(out) >= limit:
+                    break
+        return out
 
     def diary_delete(self, entry_id: int) -> bool:
         with self.lock:

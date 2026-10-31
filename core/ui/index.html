@@ -67,7 +67,7 @@
   .subtitle { margin-top: 4px; color: var(--secondary); font-size: 15px; }
   .subtitle .live { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
                     background: var(--green); margin-right: 6px; vertical-align: 1px; }
-  .subtitle.stale .live { background: var(--red); }
+  .subtitle.stale .live { background: var(--amber); }      /* a lost connection is not an emergency */
   .subtitle.locked .live { background: var(--gray); }
 
   section { margin-top: 26px; }
@@ -332,6 +332,26 @@
   .bubble.note { background: none; border: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .composer { background: linear-gradient(to top, color-mix(in srgb, var(--bg) 70%, transparent), transparent);
               -webkit-backdrop-filter: none; backdrop-filter: none; border-top: 0; }
+  /* emotional design: warmth, calm failures, a little ceremony when something is saved */
+  .greet { color: var(--secondary); font-size: clamp(15px, 2.2vw, 18px); margin: 2px 2px 0; animation: hero .9s .06s var(--expo) both; }
+  header .greet + .subtitle { margin-top: 6px; }
+  body::after { content: ""; position: fixed; inset: -25%; z-index: -1; pointer-events: none; opacity: 0; transition: opacity 1.4s var(--expo);
+    background: radial-gradient(40% 32% at 22% 20%, rgba(255,160,120,.30), transparent 70%),
+                radial-gradient(38% 30% at 80% 78%, rgba(255,120,170,.22), transparent 72%),
+                radial-gradient(30% 26% at 70% 14%, rgba(255,205,120,.20), transparent 70%); filter: blur(34px); }
+  body[data-tab="diary"]::after { opacity: 1; }
+  @media (prefers-color-scheme: dark) { body::after { background:
+                radial-gradient(40% 32% at 22% 20%, rgba(255,140,100,.20), transparent 70%),
+                radial-gradient(38% 30% at 80% 78%, rgba(255,100,160,.16), transparent 72%),
+                radial-gradient(30% 26% at 70% 14%, rgba(255,190,100,.12), transparent 70%); } }
+  body[data-tab="diary"] { --tint: #E8590C; --tint-2: #FF8A4C; }          /* the diary is warmer than the control room */
+  @media (prefers-color-scheme: dark) { body[data-tab="diary"] { --tint: #FF8A4C; --tint-2: #FFB067; } }
+  #diary { padding-top: 14px; }
+  .dbar .grow { transition: opacity .3s; }
+  .dbar .grow.said { animation: said .7s var(--expo) both; }
+  @keyframes said { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .entry .del.sure { color: var(--red); }
+  .error { color: color-mix(in srgb, var(--red) 82%, var(--amber)); line-height: 1.35; }
   /* commands */
   .cmd { padding: 12px 16px; }
   .cmd .why { font-size: 15px; font-weight: 500; }
@@ -470,12 +490,13 @@
 <main>
   <header>
     <h1>Ashur</h1>
+    <div class="greet" id="greet" hidden></div>
     <div class="subtitle" id="subtitle"><span class="live"></span><span id="subtitle-text">Conectando…</span></div>
   </header>
 
   <section id="signin" hidden>
     <div class="group signin">
-      <p>Introduce tu clave. Se guarda solo en este navegador.</p>
+      <p>Bienvenido. Escribe tu clave; se queda solo en este navegador.</p>
       <form id="signin-form">
         <input id="key" type="password" autocomplete="current-password" placeholder="Clave" aria-label="Clave">
         <button type="submit">Conectar</button>
@@ -496,8 +517,8 @@
   </div>
 
   <div id="diary" hidden>
-    <div class="qcard" id="d-question"><small>Pregunta de hoy</small><span id="d-question-text"></span></div>
-    <textarea id="d-text" placeholder="Escribe aquí. Lo que no guardes queda como borrador en este dispositivo." aria-label="Entrada del diario"></textarea>
+    <div class="qcard" id="d-question"><small>Para hoy, si te apetece</small><span id="d-question-text"></span></div>
+    <textarea id="d-text" placeholder="Una línea basta. Lo que no guardes queda como borrador en este dispositivo." aria-label="Entrada del diario"></textarea>
     <div class="dbar">
       <span class="grow" id="d-state"></span>
       <button type="button" id="d-save">Guardar</button>
@@ -695,7 +716,7 @@
       <input type="checkbox" id="share-diary"> Compartir mi diario con Claude en este mensaje
     </label>
     <form id="chat-form">
-      <textarea id="msg" rows="1" placeholder="Escríbele a Ashur" aria-label="Mensaje para Ashur" maxlength="8000"></textarea>
+      <textarea id="msg" rows="1" placeholder="Cuéntame o pregúntame algo" aria-label="Mensaje para Ashur" maxlength="8000"></textarea>
       <button class="send" id="send" type="submit" aria-label="Enviar" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>
       </button>
@@ -850,7 +871,7 @@
       const bar = el("div", "bar"); bar.append(el("i")); w.append(bar);
       return w;
     });
-    fill("working", working, "Nada en curso.");
+    fill("working", working, "Todo tranquilo. Nada en curso.");
 
     const waiting = data.queued.length;
     const qn = $("queued-note");
@@ -876,7 +897,7 @@
               (n.reason && n.mode !== "full" && n.mode !== "offline" ? " · " + n.reason : ""),
       meters: n.mode === "offline" ? null : [["CPU", num(n.cpu_pct)], ["RAM", num(n.ram_pct)], ["GPU", num(n.gpu_pct)]],
       value: ago(n.last_seen_s_ago)
-    })), "Ningún dispositivo todavía.");
+    })), "Aún no hay dispositivos. Se irán sumando cuando los conectes.");
 
     // inventory
     if (data.inventory === null) {
@@ -886,25 +907,34 @@
       detail: nf.format(i.entries) + (i.entries === 1 ? " elemento, " : " elementos, ") +
               nf.format(i.runnable || 0) + ((i.runnable || 0) === 1 ? " ejecutable" : " ejecutables"),
       value: bytes(i.bytes)
-    })), "Aún no hay inventarios.");
+    })), "Todavía no hay inventario. Aparecerá cuando un equipo termine su primer repaso.");
 
     // activity
     fill("activity", data.activity.map((ev) => row({
       title: describe(ev),
       detail: ev.node_id || "Núcleo",
       value: clock(ev.ts)
-    })), "Sin actividad.", 5);
+    })), "Todo en calma por ahora.", 5);
 
     const online = data.status.online;
     $("subtitle").classList.remove("stale", "locked");
     // "v" and a separator keep the version from running into the count (0.11.1, 4 read as 0.11.4)
+    greet();
     $("subtitle-text").textContent = "Núcleo v" + data.version + "\u00a0\u00a0·\u00a0\u00a0" +
       (online === 1 ? "1 dispositivo conectado" : online + " dispositivos conectados");
   }
 
+  // a greeting that knows the hour; shown once we know who is here
+  function greet() {
+    const h = new Date().getHours();
+    const g = h < 6 ? "Buena madrugada" : h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches";
+    const g2 = $("greet");
+    g2.textContent = g + (role === "self" || role === "guest" ? ", " + guestName : "");
+    g2.hidden = false;
+  }
   async function whoami() {
     const r = await fetch("api/whoami", { headers: { "X-Admin-Key": key }, cache: "no-store" });
-    if (r.status === 401) return showSignin("La clave no es correcta. Cópiala de nuevo, sin comillas.");
+    if (r.status === 401) return showSignin("Esa clave no coincide. Prueba pegándola otra vez, sin comillas.");
     if (r.status === 429) {
       let msg = "Demasiados intentos con una clave incorrecta.";
       try { msg = (await r.json()).detail || msg; } catch (e) {}
@@ -920,7 +950,8 @@
     $("signin").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
     $("guest-signout").hidden = false;
     $("subtitle").classList.remove("locked", "stale");
-    $("subtitle-text").textContent = "Hola, " + guestName;
+    greet();
+    $("subtitle-text").textContent = role === "self" ? "Aquí estoy" : "Ashur, el asistente de Sergio";
     if (role === "self") {            // the home-screen app: chat and diary, nothing administrative
       $("tabs").hidden = false;
       if (tab !== "diary") tab = "chat";
@@ -943,7 +974,7 @@
       const timer = setTimeout(() => ctl.abort(), 10000);
       const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store",
                                               signal: ctl.signal }).finally(() => clearTimeout(timer));
-      if (r.status === 401) return showSignin("La clave no es correcta. Copia de nuevo el valor de admin_key en keys.json, sin comillas.");
+      if (r.status === 401) return showSignin("Esa clave no coincide. Copia otra vez el valor de admin_key en keys.json, sin comillas.");
       if (r.status === 429) {
         let msg = "Demasiados intentos con una clave incorrecta.";
         try { msg = (await r.json()).detail || msg; } catch (e) {}
@@ -957,20 +988,20 @@
     } catch (e) {
       $("subtitle").classList.add("stale");
       const slow = e && e.name === "AbortError";
-      $("subtitle-text").textContent = slow ? "El núcleo no respondió en 10 s. Reintentando…"
-                                            : "Sin conexión con el núcleo. Reintentando…";
+      $("subtitle-text").textContent = slow ? "El núcleo está tardando en contestar. Sigo intentándolo…"
+                                            : "Perdí la conexión un momento. Sigo intentándolo…";
       if (!unlocked) {
         const er = $("signin-error");
         er.hidden = false;
-        er.textContent = slow ? "El núcleo tarda más de 10 s en responder. En su terminal: ashur probar"
-                              : "No pude contactar al núcleo. Revisa tu conexión; reintento cada pocos segundos.";
+        er.textContent = slow ? "El núcleo está tardando más de lo normal. Si sigue así, en su terminal: ashur probar"
+                              : "No logro llegar al núcleo todavía. Revisa tu conexión; lo intento de nuevo cada pocos segundos.";
       }
     }
   }
   function showSignin(error) {
     key = null; role = null;
     try { localStorage.removeItem(KEY); } catch (e) {}
-    for (const id of ["dashboard", "settings", "chat", "diary", "tabs", "composer", "guest-signout"]) $(id).hidden = true;
+    for (const id of ["dashboard", "settings", "chat", "diary", "tabs", "composer", "guest-signout", "greet"]) $(id).hidden = true;
     $("thread").replaceChildren(); lastDay = null;
     $("signin").hidden = false;
     historyLoaded = false;
@@ -993,6 +1024,7 @@
   }
   function showTab(t) {
     tab = t;
+    document.body.dataset.tab = t;
     try { localStorage.setItem("ashur.tab", t); } catch (e) {}
     const order = role === "self" ? ["chat", "diary"] : ["chat", "diary", "status", "settings"];
     if (!order.includes(t)) t = tab = "chat";
@@ -1063,7 +1095,7 @@
       const data = await r.json();
       $("thread").replaceChildren(); lastDay = null;
       if (!data.messages.length) bubble("note intro", role === "guest"
-        ? "Escríbele a Ashur, el asistente de Sergio."
+        ? "Escríbele a Ashur, el asistente de Sergio. Te responderá con gusto."
         : "Escríbele a Ashur. Recuerda lo importante entre conversaciones y puede consultar tus dispositivos.");
       for (const m of data.messages) bubble(m.role === "user" ? "me" : "ashur", m.content, m.ts);
       showBudget(data.budget);
@@ -1545,6 +1577,7 @@
   const draftGet = () => { try { return localStorage.getItem(DRAFT) || ""; } catch (e) { return ""; } };
   const draftSet = (v) => { try { v ? localStorage.setItem(DRAFT, v) : localStorage.removeItem(DRAFT); } catch (e) {} };
   const dtxt = $("d-text");
+  const said = (t) => { const n = $("d-state"); n.textContent = t; n.classList.remove("said"); void n.offsetWidth; n.classList.add("said"); };
   dtxt.addEventListener("input", () => { draftSet(dtxt.value); $("d-state").textContent = dtxt.value ? "Borrador guardado en este dispositivo" : ""; });
   function diaryDay(day) {
     const d = new Date(day + "T12:00:00");
@@ -1565,7 +1598,11 @@
       const item = el("div", "entry");
       const del = el("button", "link del", "Borrar"); del.type = "button";
       del.addEventListener("click", async () => {
-        if (!confirm("¿Borrar esta entrada? No se puede deshacer.")) return;
+        if (!del.classList.contains("sure")) {           // no alarming dialog: ask once, inline, then let it go
+          del.classList.add("sure"); del.textContent = "Toca otra vez para borrar";
+          setTimeout(() => { del.classList.remove("sure"); del.textContent = "Borrar"; }, 3500);
+          return;
+        }
         await api("api/diary/" + e.id, { method: "DELETE" }); loadDiary();
       });
       const hhmm = new Date(e.ts * 1000).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
@@ -1573,7 +1610,7 @@
       item.append(w, el("div", "txt", e.text));
       grp.append(item);
     }
-    if (!nodes.length) { const g = el("div", "group"); g.append(row({ title: "Todavía no hay entradas" })); g.firstChild.querySelector(".title").classList.add("empty"); nodes.push(g); }
+    if (!nodes.length) { const g = el("div", "group"); g.append(row({ title: "Aquí aparecerá lo que escribas. Una línea ya cuenta." })); g.firstChild.querySelector(".title").classList.add("empty"); nodes.push(g); }
     box.replaceChildren(...nodes);
     renderNotify(d);
   }
@@ -1591,7 +1628,8 @@
     try {
       const r = await api("api/diary", { method: "POST", body: JSON.stringify({ text, source: "typed" }) });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      dtxt.value = ""; draftSet(""); $("d-state").textContent = "Guardado ✓";
+      dtxt.value = ""; draftSet("");
+      said(text.length < 60 ? "Guardado. Una línea también cuenta." : "Guardado. Gracias por parar un momento.");
       loadDiary();
     } catch (e) {
       er.hidden = false;

@@ -125,3 +125,4 @@ def test_service_worker_is_served_on_the_public_door_and_the_diary_needs_the_key
     assert "fetch" not in r.text.replace("// ", "")                                # it never touches the network
     assert pub.get("/api/diary").status_code == 401
     assert pub.post("/api/push/test").status_code == 401
+

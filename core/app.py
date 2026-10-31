@@ -108,7 +108,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.13.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.14.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -439,6 +439,33 @@ def create_app(
     class ChatIn(BaseModel):
         message: str = Field(min_length=1, max_length=8000)
         channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
+        persona: Optional[str] = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,23}$")
+
+    # --- device personas (Sergio only; guests never see them) ---------------
+    @app.get("/api/personas")
+    def personas_list(guest: Optional[dict] = Depends(require_chat)):
+        if guest:
+            raise HTTPException(401, "admin key required")
+        return brain.voices()
+
+    class PersonaIn(BaseModel):
+        text: str = Field(min_length=1, max_length=4000)
+
+    @app.put("/api/personas/{name}", dependencies=[Depends(require_admin)])
+    def persona_save(name: str, body: PersonaIn):
+        try:
+            brain.save_voice(name, body.text)
+        except ValueError:
+            raise HTTPException(422, "Nombre: minúsculas, números y guiones; hasta 24 caracteres.")
+        db.log(clock(), None, "persona_saved", {"persona": name, "chars": len(body.text)})
+        return {"ok": True}
+
+    @app.delete("/api/personas/{name}", dependencies=[Depends(require_admin)])
+    def persona_delete(name: str):
+        if not brain.delete_voice(name):
+            raise HTTPException(404, "No existe esa persona.")
+        db.log(clock(), None, "persona_deleted", {"persona": name})
+        return {"ok": True}
 
     @app.get("/api/whoami")
     def whoami(x_admin_key: str = Header(default=""), guest: Optional[dict] = Depends(require_chat)):
@@ -453,7 +480,7 @@ def create_app(
         if guest and db.count_messages_since(f"g{guest['id']}", clock() - 3600) >= GUEST_MESSAGES_PER_HOUR:
             raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
         try:
-            out = brain.chat(body.message, body.channel, guest)
+            out = brain.chat(body.message, body.channel, guest, body.persona)
             if guest:                     # which device answered and which tools ran stay Sergio's business
                 return {k: v for k, v in out.items() if k not in ("device", "tools", "model")}
             summarize_soon()

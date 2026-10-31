@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.14.0 | 2026-10-30 | Device personas: one Ashur and one memory, a different voice per device. Written in Estado → Personas por dispositivo (stored as `personas/<name>.md` on the server), picked in the chat under "Hablando desde" (remembered per browser). Guests never get them; the log records which persona answered |
 | 0.13.1 | 2026-10-30 | The panel installs as an iPhone home-screen app: icon, name, full screen (manifest and apple-touch-icon, served on both doors) |
 | 0.13.0 | 2026-10-30 | Chat-only keys for Sergio himself (Estado → Invitados → "Es para mí"), for the iPhone Shortcut: they chat as Sergio, with his memories and thread, but reach nothing else and can be revoked on their own; in the browser they open the chat view |
 | 0.12.3 | 2026-10-30 | Estado → Actualización also says which version of node code the core ships and which nodes are behind; nodes need no button (they update themselves; zima-server goes with the core) |

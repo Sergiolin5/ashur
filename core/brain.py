@@ -61,7 +61,8 @@ TOOLS = [
 
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
-MAX_SUMMARY_CHARS = 4000        # conversation summaries in every prompt, newest first
+MAX_SUMMARY_CHARS = 4000
+VOICE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")        # conversation summaries in every prompt, newest first
 SUMMARY_CHUNK = 20              # messages per summary, taken once they leave the recent window
 
 SUMMARIZER = """Resume esta parte de una conversación entre Sergio y Ashur, su asistente.
@@ -138,6 +139,7 @@ class Brain:
                  client: Any = None, local: Optional[Callable[[str, list], tuple[str, str]]] = None):
         self.db = db
         self.persona_path = Path(data_dir) / "persona.md"
+        self.voices_dir = Path(data_dir) / "personas"     # one .md per device persona; edited from the panel
         self.clock = clock
         self.network = network
         self.s = settings or BrainSettings.from_env()
@@ -170,7 +172,33 @@ class Brain:
         return {"spent_usd": spent, "budget_usd": cap,
                 "left_usd": round(max(0.0, cap - spent), 4), "model": self.s.model}
 
-    def _system(self) -> str:
+    # --- device personas: one Ashur, one memory, a different voice per device ----
+    def voices(self) -> list[dict]:
+        if not self.voices_dir.exists():
+            return []
+        return [{"name": f.stem, "text": f.read_text(encoding="utf-8-sig")}
+                for f in sorted(self.voices_dir.glob("*.md"))]
+
+    def voice(self, name: Optional[str]) -> Optional[str]:
+        if not name or not VOICE_NAME.match(name):
+            return None
+        f = self.voices_dir / f"{name}.md"
+        return f.read_text(encoding="utf-8-sig").strip() if f.exists() else None
+
+    def save_voice(self, name: str, text: str) -> None:
+        if not VOICE_NAME.match(name):
+            raise ValueError("nombre inválido")
+        self.voices_dir.mkdir(parents=True, exist_ok=True)
+        (self.voices_dir / f"{name}.md").write_text(text.strip() + "\n", encoding="utf-8")
+
+    def delete_voice(self, name: str) -> bool:
+        f = self.voices_dir / f"{name}.md"
+        if VOICE_NAME.match(name) and f.exists():
+            f.unlink()
+            return True
+        return False
+
+    def _system(self, voice: Optional[str] = None) -> str:
         notes = self.db.memories()
         lines, size = [], 0
         for m in reversed(notes):                      # newest first until the cap, then restore order
@@ -190,7 +218,10 @@ class Brain:
             size += len(block)
         talks = "\n".join(reversed(past)) or "(todavía no hay conversaciones resumidas)"
         now = dt.datetime.fromtimestamp(self.clock(), BOGOTA)
-        return (f"{self.persona().strip()}\n\n"
+        text = self.voice(voice)
+        layer = (f"\n\nAhora Sergio te habla desde su dispositivo «{voice}». Sigues siendo Ashur, con la misma "
+                 f"memoria; en este dispositivo tu voz es así:\n{text}") if text else ""
+        return (f"{self.persona().strip()}{layer}\n\n"
                 f"Fecha y hora en Bogotá: {now:%Y-%m-%d %H:%M}.\n\n"
                 f"Tus recuerdos (número entre corchetes):\n{memory}\n\n"
                 f"Resumen de conversaciones anteriores con Sergio:\n{talks}")
@@ -246,10 +277,11 @@ class Brain:
     def _has_claude(self) -> bool:
         return self._client is not None or bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
-    def _chat_claude(self, messages: list[dict], guest: Optional[dict] = None) -> tuple[str, float, list[str]]:
+    def _chat_claude(self, messages: list[dict], guest: Optional[dict] = None,
+                     voice: Optional[str] = None) -> tuple[str, float, list[str]]:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
-        system = GUEST_PERSONA.format(name=guest["name"]) if guest else self._system()
+        system = GUEST_PERSONA.format(name=guest["name"]) if guest else self._system(voice)
         extra = {} if guest else {"tools": TOOLS}
         cost_total, reply_parts, tools_used = 0.0, [], []
         for _ in range(MAX_TOOL_ROUNDS + 1):
@@ -283,11 +315,11 @@ class Brain:
         reply = "\n\n".join(p for p in reply_parts if p).strip() or "(Sin respuesta.)"
         return reply, cost_total, tools_used
 
-    def _local_system(self, guest: Optional[dict] = None) -> str:
+    def _local_system(self, guest: Optional[dict] = None, voice: Optional[str] = None) -> str:
         if guest:
             return GUEST_PERSONA.format(name=guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
-        return (f"{self._system()}\n\n"
+        return (f"{self._system(voice)}\n\n"
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
                 "No tienes herramientas: no puedes guardar ni borrar recuerdos; si te lo piden, dilo con "
                 "claridad. Responde breve y en español.\n\n"
@@ -345,7 +377,9 @@ class Brain:
                     {"summary_id": sid, "messages": len(chunk), "provider": provider})
         return sid
 
-    def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None) -> dict:
+    def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
+             voice: Optional[str] = None) -> dict:
+        voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice
         text = text.strip()
         now = self.clock()
         user = guest_user(guest)
@@ -358,7 +392,7 @@ class Brain:
 
         if want_claude and not over_budget:
             try:
-                reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest)
+                reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice)
                 provider = "claude"
             except BrainUnavailable:
                 raise
@@ -383,7 +417,7 @@ class Brain:
                 note = ("Respondí con un modelo local." if guest
                         else "Llegué al tope de gasto del mes con Claude. Respondí con un modelo local.")
             try:
-                reply, device = self.local(self._local_system(guest), messages)
+                reply, device = self.local(self._local_system(guest, voice), messages)
                 provider = "local"
             except LocalUnavailable as e:
                 self.db.log(self.clock(), None, "chat_unanswered", {"channel": channel, "reason": str(e)[:200]})
@@ -400,6 +434,8 @@ class Brain:
                   "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools}
         if guest:
             detail["guest"] = guest["id"]
+        if voice:
+            detail["persona"] = voice
         self.db.log(end, device, "chat", detail)
         return {"reply": reply, "note": note, "provider": provider, "device": device,
                 "cost_usd": round(cost, 5), "tools": tools, **self.budget(guest)}

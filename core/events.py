@@ -28,6 +28,7 @@ def describe(event: str, d: dict) -> str:
         "task_yielded": f"pausó tarea {t} ({m}) para liberar el equipo",
         "revoked": "acceso revocado",
         "chat": ("invitado " + str(d["guest"]) + ": " if d.get("guest") else "") +
+                (f"[{d['persona']}] " if d.get("persona") else "") +
                 f"conversación por {d.get('provider', '?')} ({d.get('chars_in', 0)}→{d.get('chars_out', 0)} car., "
                 f"US${d.get('cost_usd', 0)})",
         "chat_error": f"ERROR al hablar con Claude: {d.get('reason') or d.get('error')}",
@@ -40,6 +41,8 @@ def describe(event: str, d: dict) -> str:
         "summary_failed": f"no pude resumir la conversación: {d.get('error')}",
         "update_started": f"actualización pedida: {d.get('from')} → {d.get('to')}",
         "chat_key_created": f"creaste una clave de chat para ti ({d.get('guest_id')})",
+        "persona_saved": f"guardó la persona {d.get('persona')}",
+        "persona_deleted": f"borró la persona {d.get('persona')}",
         "guest_created": f"creaste el invitado {d.get('guest_id')}",
         "guest_revoked": f"revocaste el invitado {d.get('guest_id')}",
         "memory_imported": f"importó {d.get('count')} recuerdos ({d.get('source')})",

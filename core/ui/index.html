@@ -248,6 +248,21 @@
     </section>
 
     <section>
+      <h2>Personas por dispositivo</h2>
+      <div class="group signin">
+        <p>Un solo Ashur, con la misma memoria; cada dispositivo cambia su voz. Elige el dispositivo en el chat, debajo de "Hablando desde".</p>
+        <select id="persona-pick" aria-label="Persona a editar" style="width:100%;font:inherit;font-size:15px;padding:10px;border-radius:10px;border:0;background:var(--field);color:var(--label);margin-bottom:8px"></select>
+        <input id="persona-name" maxlength="24" placeholder="Nombre del dispositivo (ej. iphone, portatil)" aria-label="Nombre de la persona" autocomplete="off">
+        <textarea id="persona-text" rows="7" maxlength="4000" aria-label="Cómo habla Ashur en ese dispositivo"
+          placeholder="Cómo habla Ashur aquí: tono, largo de las respuestas, en qué se enfoca, qué evita…"
+          style="width:100%;font:inherit;font-size:15px;color:var(--label);background:var(--field);border:0;border-radius:10px;padding:11px 12px;resize:vertical"></textarea>
+        <button type="button" id="persona-save">Guardar</button>
+        <button type="button" id="persona-delete" class="link" style="text-align:center" hidden>Borrar esta persona</button>
+        <div id="persona-result" class="note" style="margin:10px 0 0" hidden></div>
+      </div>
+    </section>
+
+    <section>
       <h2>Invitados</h2>
       <div class="group" id="guests"></div>
       <div class="group signin" style="margin-top:12px">
@@ -284,6 +299,10 @@
 
 <div class="composer" id="composer" hidden>
   <div class="inner">
+    <div id="voice-row" hidden style="display:flex;align-items:center;gap:6px;margin:0 4px 6px;font-size:13px;color:var(--secondary)">
+      Hablando desde
+      <select id="voice" aria-label="Dispositivo desde el que hablas" style="font:inherit;color:var(--tint);background:none;border:0;padding:2px"></select>
+    </div>
     <form id="chat-form">
       <textarea id="msg" rows="1" placeholder="Escríbele a Ashur" aria-label="Mensaje para Ashur" maxlength="8000"></textarea>
       <button class="send" id="send" type="submit" aria-label="Enviar" disabled>
@@ -492,6 +511,7 @@
     $("subtitle-text").textContent = "Hola, " + guestName;
     tab = "chat";
     if (!historyLoaded) loadHistory();
+    loadVoices();
   }
 
   async function refresh() {
@@ -558,7 +578,8 @@
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("dashboard").hidden = t !== "status";
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "status") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); }
+    if (t === "status") { loadMemories(); loadSummaries(); loadGuests(); loadUpdate(); loadPersonas(); }
+    if (t === "chat") loadVoices();
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
@@ -629,7 +650,8 @@
     const wait = bubble("ashur", "");
     const dots = el("span", "typing"); dots.append(el("i"), el("i"), el("i")); wait.append(dots);
     try {
-      const r = await api("api/chat", { method: "POST", body: JSON.stringify({ message: text }) });
+      const v = $("voice-row").hidden ? "" : $("voice").value;
+      const r = await api("api/chat", { method: "POST", body: JSON.stringify(v ? { message: text, persona: v } : { message: text }) });
       const data = await r.json();
       wait.remove();
       if (!r.ok) {
@@ -818,6 +840,61 @@
       $("guest-name").value = ""; $("guest-self").checked = false;
       loadGuests();
     } catch (err) { out.textContent = "No pude crear el invitado."; out.hidden = false; }
+  });
+
+  // --- device personas ---------------------------------------------------------
+  let personas = [];
+  async function fetchPersonas() {
+    const r = await api("api/personas");
+    personas = r.ok ? await r.json() : [];
+    return personas;
+  }
+  async function loadVoices() {
+    if (role === "guest") return;
+    try {
+      const list = await fetchPersonas();
+      const sel = $("voice");
+      sel.replaceChildren(el("option", null, "Ashur"), ...list.map((p) => el("option", null, p.name)));
+      sel.options[0].value = "";
+      let saved = ""; try { saved = localStorage.getItem("ashur.voice") || ""; } catch (e) {}
+      sel.value = list.some((p) => p.name === saved) ? saved : "";
+      $("voice-row").hidden = !list.length;
+    } catch (e) {}
+  }
+  $("voice").addEventListener("change", () => { try { localStorage.setItem("ashur.voice", $("voice").value); } catch (e) {} });
+
+  async function loadPersonas(select) {
+    try {
+      const list = await fetchPersonas();
+      const pick = $("persona-pick");
+      pick.replaceChildren(el("option", null, "Nueva persona…"), ...list.map((p) => el("option", null, p.name)));
+      pick.options[0].value = "";
+      pick.value = select && list.some((p) => p.name === select) ? select : "";
+      showPersona();
+    } catch (e) {}
+  }
+  function showPersona() {
+    const name = $("persona-pick").value, p = personas.find((x) => x.name === name);
+    $("persona-name").value = p ? p.name : ""; $("persona-name").disabled = !!p;
+    $("persona-text").value = p ? p.text.trim() : "";
+    $("persona-delete").hidden = !p;
+  }
+  $("persona-pick").addEventListener("change", showPersona);
+  $("persona-save").addEventListener("click", async () => {
+    const out = $("persona-result");
+    const name = $("persona-name").value.trim().toLowerCase(), text = $("persona-text").value.trim();
+    if (!name || !text) { out.textContent = "Falta el nombre o la descripción."; out.hidden = false; return; }
+    const r = await api("api/personas/" + encodeURIComponent(name), { method: "PUT", body: JSON.stringify({ text }) });
+    if (!r.ok) { let d = {}; try { d = await r.json(); } catch (e) {} out.textContent = typeof d.detail === "string" ? d.detail : "No pude guardar. Nombre: minúsculas, números y guiones."; out.hidden = false; return; }
+    out.textContent = "Guardada «" + name + "»."; out.hidden = false;
+    loadPersonas(name);
+  });
+  $("persona-delete").addEventListener("click", async () => {
+    const name = $("persona-pick").value;
+    if (!name) return;
+    await api("api/personas/" + encodeURIComponent(name), { method: "DELETE" });
+    $("persona-result").textContent = "Borrada «" + name + "»."; $("persona-result").hidden = false;
+    loadPersonas();
   });
 
   function loop() {

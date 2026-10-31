@@ -417,3 +417,24 @@ def test_sergios_chat_key_talks_as_him_but_only_chats(tmp_path):
     assert c.get("/api/chat/history", headers=A).json()["messages"][0]["content"] == "hola"     # his own thread
     for path in ("/api/overview", "/api/memory", "/api/guests", "/api/update"):
         assert c.get(path, headers=K).status_code == 401, path
+
+
+def test_device_persona_changes_the_voice_not_the_memory(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([text("Corto.")]), resp([text("Hola.")]), resp([text("Hola, invitado.")])])
+    c.app.state.db.add_memory(1.0, "Sergio vive en Bogotá")
+    assert c.put("/api/personas/iphone", headers=A, json={"text": "Respuestas de una línea."}).status_code == 200
+    assert c.put("/api/personas/Bad Name", headers=A, json={"text": "x"}).status_code == 422
+    assert [p["name"] for p in c.get("/api/personas", headers=A).json()] == ["iphone"]
+    r = c.post("/api/chat", headers=A, json={"message": "hola", "persona": "iphone"}).json()
+    sys0 = fake.calls[0]["system"]
+    assert "«iphone»" in sys0 and "Respuestas de una línea." in sys0 and "Bogotá" in sys0
+    c.post("/api/chat", headers=A, json={"message": "otra vez"})                     # no persona: plain Ashur
+    assert "«iphone»" not in fake.calls[1]["system"]
+    assert [m["content"] for m in fake.calls[1]["messages"]][:2] == ["hola", "Corto."]  # same conversation
+    g = c.post("/api/guests", headers=A, json={"name": "Ana"}).json()["key"]
+    c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "hola", "persona": "iphone"})
+    assert "iphone" not in fake.calls[2]["system"]                                      # guests never get it
+    assert c.get("/api/personas", headers={"X-Admin-Key": g}).status_code == 401
+    ev = [e for e in c.get("/log", headers=A).json() if e["event"] == "chat"]
+    assert [e["detail"].get("persona") for e in ev].count("iphone") == 1
+    assert c.delete("/api/personas/iphone", headers=A).status_code == 200

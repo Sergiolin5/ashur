@@ -89,8 +89,9 @@ def extract(path: str) -> str:
             return ""
     except Exception:
         return ""
-    text = re.sub(r"[ \t\r\f\v]+", " ", text)
-    text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
+    text = text.replace("\r\n", "\n").replace("\r", "\n")      # Windows line endings
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"[ ]*\n\s*\n+[ ]*", "\n\n", text).strip()
     return text[:MAX_CHARS]
 
 

@@ -14,6 +14,18 @@ from modules.docs.extract import SUPPORTED, chunks, extract
 from modules.inventory.action import default_roots, scan
 
 STATE = "docs_state.json"
+# Files that exist only in the cloud (OneDrive Files On-Demand, iCloud): reading one would download it.
+WIN_CLOUD_ONLY = 0x400000 | 0x40000 | 0x1000      # RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN | OFFLINE
+MAC_DATALESS = 0x40000000                         # SF_DATALESS
+
+
+def cloud_only(path: str) -> bool:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return True
+    return bool(getattr(st, "st_file_attributes", 0) & WIN_CLOUD_ONLY
+                or getattr(st, "st_flags", 0) & MAC_DATALESS)
 BATCH_FILES = 100
 BATCH_CHARS = 1_500_000
 
@@ -67,6 +79,9 @@ def run(payload: dict, ctx) -> dict:
             return stats
         if seen.get(path) == mtime:
             stats["unchanged"] += 1
+            continue
+        if cloud_only(path):                       # never trigger a download just to read it
+            stats["cloud_only"] = stats.get("cloud_only", 0) + 1
             continue
         text = extract(path)
         parts = chunks(text) if text else []

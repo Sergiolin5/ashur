@@ -77,3 +77,30 @@ def test_a_stopped_pass_resumes_without_rereading(tmp_path):
     s = action.run({"roots": [str(docs)]}, ctx2)
     done = {u["path"] for b in ctx.sent + ctx2.sent for u in b["upserts"]}
     assert done == {str(docs / f"{i}.txt") for i in range(3)}
+
+
+def test_cloud_only_files_are_never_opened(tmp_path, monkeypatch):
+    docs, state = tmp_path / "docs", tmp_path / "state"
+    docs.mkdir(); state.mkdir()
+    (docs / "local.txt").write_text("aquí", encoding="utf-8")
+    (docs / "nube.txt").write_text("solo en la nube", encoding="utf-8")
+    monkeypatch.setattr(action, "cloud_only", lambda p: p.endswith("nube.txt"))
+    opened = []
+    real = action.extract
+    monkeypatch.setattr(action, "extract", lambda p: (opened.append(p), real(p))[1])
+    ctx = Ctx(state)
+    s = action.run({"roots": [str(docs)]}, ctx)
+    assert s["cloud_only"] == 1 and opened == [str(docs / "local.txt")]
+
+
+def test_cloud_only_detects_the_flags():
+    import types
+    for attrs, flags, want in ((0x400000, 0, True), (0x1000, 0, True), (0x20, 0, False), (0, 0x40000000, True), (0, 0, False)):
+        st = types.SimpleNamespace(st_file_attributes=attrs, st_flags=flags)
+        import os as _os
+        orig = _os.stat
+        _os.stat = lambda p, st=st: st
+        try:
+            assert action.cloud_only("x") is want
+        finally:
+            _os.stat = orig

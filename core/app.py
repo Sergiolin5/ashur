@@ -111,7 +111,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.18.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.18.3", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -362,7 +362,18 @@ def create_app(
         ups = [{"path": d.path, "modified": d.modified,
                 "chunks": [c for c in d.chunks if not SECRET_WORDS.search(c)]} for d in batch.upserts]
         out = db.docs_apply(node["id"], ups, batch.deletes)
-        db.log(clock(), node["id"], "docs_indexed", out)
+        if out["documents"] or out["removed"]:
+            db.log(clock(), node["id"], "docs_indexed", out)
+        if batch.phase:
+            running = [t["id"] for t in db.running_tasks() if t["node_id"] == node["id"] and t["module"] == "docs"]
+            key = f"{node['id']}:docs"
+            if progress.get(key, {}).get("task") != (running[0] if running else None):
+                progress[key] = {}                          # a new pass: forget the last one's counters
+            p = progress.setdefault(key, {})
+            p.update(task=running[0] if running else None, phase=batch.phase, updated=clock())
+            for k in ("found", "read", "folder"):
+                if getattr(batch, k) is not None:
+                    p[k] = getattr(batch, k)
         return {"ok": True, **out}
 
     @app.post("/api/docs/refresh", dependencies=[Depends(require_admin)])
@@ -416,6 +427,12 @@ def create_app(
         now = clock()
         running = []
         for t in db.running_tasks():
+            if t["module"] == "docs":
+                p = progress.get(f"{t['node_id']}:docs", {})
+                running.append({**t, "elapsed_s": round(now - t["started"], 1) if t["started"] else None,
+                                "entries": None, "folder": p.get("folder"), "phase": p.get("phase"),
+                                "found": p.get("found"), "read": p.get("read")})
+                continue
             p = progress.get(t["node_id"], {})
             running.append({**t, "elapsed_s": round(now - t["started"], 1) if t["started"] else None,
                             "entries": p.get("entries"), "folder": p.get("folder")})

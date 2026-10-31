@@ -13,11 +13,11 @@ def make_docx(path, paragraphs):
 
 class Ctx:
     def __init__(self, tmp):
-        self.state_dir, self.config, self.task_id, self.sent, self.stop = str(tmp), {}, 1, [], False
+        self.state_dir, self.config, self.task_id, self.sent, self.stop, self.progress = str(tmp), {}, 1, [], False, []
 
     def post(self, kind, body):
         assert kind == "docs"
-        self.sent.append(body)
+        (self.progress if "phase" in body else self.sent).append(body)
 
     def should_stop(self):
         return self.stop
@@ -104,3 +104,14 @@ def test_cloud_only_detects_the_flags():
             assert action.cloud_only("x") is want
         finally:
             _os.stat = orig
+
+
+def test_progress_is_reported_while_scanning_and_reading(tmp_path):
+    docs, state = tmp_path / "docs", tmp_path / "state"
+    docs.mkdir(); state.mkdir()
+    for i in range(3):
+        (docs / f"{i}.txt").write_text(f"doc {i}", encoding="utf-8")
+    ctx = Ctx(state)
+    action.run({"roots": [str(docs)]}, ctx)
+    assert ctx.progress and ctx.progress[0]["phase"] == "scan" and ctx.progress[0]["found"] >= 1
+    assert all(set(b) <= {"phase", "found", "read", "folder"} for b in ctx.progress)    # no document text in progress

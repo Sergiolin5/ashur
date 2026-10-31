@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.18.3 | 2026-10-31 | A documents pass now reports real progress to the panel ("N documentos encontrados, buscando más", then "X de N documentos leídos") instead of "Empezando" for the whole pass |
 | 0.18.2 | 2026-10-31 | Ajustes → Documentos: «Releer documentos ahora» queues a pass on every device with `docs` (still waits for the device to be free) instead of waiting up to 7 days |
 | 0.18.1 | 2026-10-31 | `docs` skips files that exist only in the cloud (OneDrive Files On-Demand, iCloud) so reading never triggers a download |
 | 0.18.0 | 2026-10-30 | Ashur reads documents: the `docs` module (txt/md/csv/code, Word, Excel, PowerPoint, PDF) sends text fragments to an FTS5 index on the server, incrementally, after a device's inventory finishes and then weekly, only while the device is free. Sensitive folders/files are never read and passages that look like passwords/keys are dropped. Ajustes → Documentos searches locally. Claude's `search_documents` tool returns only file locations unless Sergio ticks «Compartir fragmentos» for that message (logged as `docs_shared`, never the text). Installers now list `modules: [inventory, docs]`; existing devices add `docs` to their config |

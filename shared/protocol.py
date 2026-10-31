@@ -93,6 +93,10 @@ class DocUpsert(BaseModel):
 
 
 class DocsBatch(BaseModel):
+    phase: Optional[str] = Field(default=None, pattern=r"^(scan|read)$")   # what the pass is doing now
+    found: Optional[int] = Field(default=None, ge=0)     # documents found so far / in total
+    read: Optional[int] = Field(default=None, ge=0)      # documents dealt with so far
+    folder: Optional[str] = Field(default=None, max_length=4096)
     upserts: list[DocUpsert] = Field(default=[], max_length=500)
     deletes: list[str] = Field(default=[], max_length=2000)
 

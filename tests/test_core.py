@@ -440,3 +440,19 @@ def test_sergio_can_ask_for_a_documents_pass_now(env):
     assert c.post("/api/docs/refresh", headers=A).json() == {"queued": []}        # already waiting: no pile-up
     t = c.get("/nodes/mac/tasks/next?modules=docs", headers=h).json()
     assert t["module"] == "docs"
+
+
+def test_documents_pass_shows_real_progress_not_a_stuck_start(env):
+    c, _ = env
+    h = register(c, modules=("inventory", "docs"), simulated=False)
+    inv = c.get("/nodes/mac/tasks/next?modules=inventory", headers=h).json()
+    c.post(f"/tasks/{inv['id']}/result", headers=h, json={"ok": True, "result": {}})
+    c.post("/api/docs/refresh", headers=A)
+    c.get("/nodes/mac/tasks/next?modules=docs", headers=h)
+    run = lambda: [t for t in c.get("/api/overview", headers=A).json()["running"] if t["module"] == "docs"][0]
+    assert run()["phase"] is None                              # nothing reported yet: the panel says "Empezando"
+    c.post("/nodes/mac/docs", headers=h, json={"phase": "scan", "found": 120, "folder": "/d/x"})
+    assert (run()["phase"], run()["found"], run()["folder"]) == ("scan", 120, "/d/x")
+    c.post("/nodes/mac/docs", headers=h, json={"phase": "read", "found": 120, "read": 30})
+    assert (run()["phase"], run()["read"]) == ("read", 30)
+    assert c.post("/nodes/mac/docs", headers=h, json={"phase": "hack"}).status_code == 422

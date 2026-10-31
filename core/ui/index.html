@@ -474,9 +474,19 @@
     const working = data.running.map((t) => {
       const w = el("div", "work");
       w.append(el("div", "who", (MODULE[t.module] || t.module) + " en " + t.node_id + ", " + duration(t.elapsed_s)));
-      const c = el("div", "count", t.entries !== null && t.entries !== undefined ? nf.format(t.entries) : "Empezando");
-      if (t.entries !== null && t.entries !== undefined) {
-        c.append(" ", el("small", null, t.entries === 1 ? "elemento" : "elementos"));
+      let c;
+      if (t.module === "docs") {
+        // searching the disk for documents, then reading them
+        if (t.phase === "read" && t.found) {
+          c = el("div", "count", nf.format(t.read || 0)); c.append(" ", el("small", null, "de " + nf.format(t.found) + " documentos leídos"));
+        } else if (t.phase === "scan") {
+          c = el("div", "count", nf.format(t.found || 0)); c.append(" ", el("small", null, "documentos encontrados, buscando más"));
+        } else c = el("div", "count", "Empezando");
+      } else {
+        c = el("div", "count", t.entries !== null && t.entries !== undefined ? nf.format(t.entries) : "Empezando");
+        if (t.entries !== null && t.entries !== undefined) {
+          c.append(" ", el("small", null, t.entries === 1 ? "elemento" : "elementos"));
+        }
       }
       w.append(c);
       if (t.folder) w.append(el("div", "folder", "‎" + t.folder));

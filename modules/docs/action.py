@@ -44,11 +44,23 @@ def run(payload: dict, ctx) -> dict:
     started = time.time()
 
     candidates: dict[str, float] = {}
+    last_report = [0.0]
+
+    def report(phase: str, **fields) -> None:
+        """Tell the core where the pass is (at most every 8 s) so the panel shows real progress."""
+        if time.time() - last_report[0] < 8:
+            return
+        last_report[0] = time.time()
+        try:
+            ctx.post("docs", {"phase": phase, **fields})
+        except Exception:
+            pass                                            # progress is a courtesy, never a reason to stop
 
     def emit(row: dict) -> None:
         p = row["path"]
         if row["kind"] == "file" and os.path.splitext(p.lower())[1] in SUPPORTED and (row.get("size") or 0) > 0:
             candidates[p] = row.get("modified") or 0
+            report("scan", found=len(candidates), folder=os.path.dirname(p))
 
     walk = scan(roots, emit, stop=ctx.should_stop)
     stats = {"documents": len(candidates), "read": 0, "unchanged": 0, "empty": 0, "removed": 0, "chars": 0}
@@ -77,6 +89,8 @@ def run(payload: dict, ctx) -> dict:
             flush()
             stats["stopped"] = True
             return stats
+        report("read", found=len(candidates), read=stats["read"] + stats["unchanged"] + stats.get("cloud_only", 0),
+               folder=os.path.dirname(path))
         if seen.get(path) == mtime:
             stats["unchanged"] += 1
             continue

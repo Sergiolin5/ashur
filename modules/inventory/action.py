@@ -103,11 +103,50 @@ def _hash(path: str, limit: int) -> Optional[str]:
 FINGERPRINT_MIN = 1 << 20      # duplicates under 1 MB are not worth reporting
 
 
+POLITE_PAUSE_MAX_S = 0.25
+
+
+def _polite_pause(spent: float) -> None:
+    """After reading a file, rest as long as the read took (at most a quarter second): the scan uses about half of a disk,
+    so the machine's other jobs (the core's database lives on the same disk on the Zima) keep their turn."""
+    if spent > 0.0005:
+        time.sleep(min(spent, POLITE_PAUSE_MAX_S))
+
+
+def lower_priority() -> Optional[callable]:
+    """Scan at the back of the queue for CPU and disk. Returns a function that restores what it changed."""
+    try:
+        import psutil
+        proc = psutil.Process()
+        old_nice = proc.nice()
+        old_io = proc.ionice() if hasattr(proc, "ionice") else None
+        if platform.system() == "Windows":
+            proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            if hasattr(psutil, "IOPRIO_LOW"):
+                proc.ionice(psutil.IOPRIO_LOW)
+        else:
+            proc.nice(min(19, old_nice + 10))
+            if hasattr(psutil, "IOPRIO_CLASS_IDLE"):
+                proc.ionice(psutil.IOPRIO_CLASS_IDLE)
+
+        def restore():
+            try:
+                proc.nice(old_nice)
+                if old_io is not None:
+                    proc.ionice(*old_io) if platform.system() != "Windows" else proc.ionice(old_io)
+            except Exception:
+                pass
+        return restore
+    except Exception:
+        return None
+
+
 def fingerprint(path: str, size: int) -> Optional[str]:
     """Cheap identity for files of 1 MB or more: size plus the first and last MB.
     Reads at most 2 MB per file, so a weekly rescan stays light; enough to spot copies."""
     if size < FINGERPRINT_MIN:
         return None
+    t0 = time.monotonic()
     try:
         h = hashlib.sha256(str(size).encode())
         with open(path, "rb") as f:
@@ -115,7 +154,9 @@ def fingerprint(path: str, size: int) -> Optional[str]:
             if size > 2 << 20:
                 f.seek(-(1 << 20), os.SEEK_END)
                 h.update(f.read(1 << 20))
-        return "fp:" + h.hexdigest()[:32]
+        out = "fp:" + h.hexdigest()[:32]
+        _polite_pause(time.monotonic() - t0)
+        return out
     except OSError:
         return None
 
@@ -286,9 +327,14 @@ def run(payload: dict, ctx) -> dict:
         if len(batch) >= 2000:
             flush()
 
-    stats = scan(roots, emit, stop=ctx.should_stop, hash_files=bool(payload.get("hash")),
-                 max_entries=payload.get("max_entries"), skip=done | {_norm(x) for x in payload.get("exclude") or []},
-                 on_done=lambda folder: pending_done.append(_norm(folder)))
+    restore = lower_priority()
+    try:
+        stats = scan(roots, emit, stop=ctx.should_stop, hash_files=bool(payload.get("hash")),
+                     max_entries=payload.get("max_entries"), skip=done | {_norm(x) for x in payload.get("exclude") or []},
+                     on_done=lambda folder: pending_done.append(_norm(folder)))
+    finally:
+        if restore:
+            restore()
     flush()
     if not stats.get("stopped") and ck_path and ck_path.exists():
         ck_path.unlink()

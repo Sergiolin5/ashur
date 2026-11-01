@@ -605,6 +605,17 @@
   .dhead.closed + .group { display: none; }
   .dhead .pen { margin: 0 0 0 auto; padding: 2px 10px; width: auto; font-size: 13px; background: var(--field); color: var(--secondary); box-shadow: none; border-radius: 999px; }
   #signout-row { margin-top: 48px; }
+  /* touch: the desktop effects hang on the mouse (hover, pointer light), so a finger gets its own */
+  @media (hover: none) {
+    .row, .menu-item, .qcard, .bubble, .seg button { transition: transform .55s var(--spring), background-color .3s, box-shadow .4s var(--expo); }
+    .menu-item:active { transform: scale(.965) translateY(2px); box-shadow: var(--glass-shadow), 0 14px 30px -14px color-mix(in srgb, var(--tint) 70%, transparent); }
+    .row:active, .qcard:active { transform: scale(.985); background-color: color-mix(in srgb, var(--tint) 12%, transparent); }
+    button:not(.seg button):active { transform: scale(.93); }
+    .tap::after { opacity: 1 !important; transition: opacity .12s !important; }
+    .fadeaway::after { transition: opacity .9s var(--expo) !important; }
+    .reveal { opacity: 0; transform: translateY(24px) scale(.975); filter: blur(5px); }
+    .reveal.in { opacity: 1; transform: none; filter: none; transition: opacity .7s var(--expo), transform .8s var(--spring), filter .7s var(--expo); }
+  }
 </style>
 
 </head>
@@ -2062,6 +2073,10 @@
       document.body.append(probe); const cs = getComputedStyle(probe); const safe = [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].join("/"); probe.remove();
       lines.push("Pantalla de ESTE dispositivo: " + innerWidth + "×" + innerHeight + " px CSS (pantalla " + screen.width + "×" + screen.height + "), escala " + devicePixelRatio +
                  ", app de inicio: " + ((navigator.standalone || matchMedia("(display-mode: standalone)").matches) ? "sí" : "no") + ", márgenes seguros arriba/der/abajo/izq: " + safe);
+      const mq = (q) => matchMedia(q).matches ? "sí" : "no";
+      lines.push("Efectos en ESTE dispositivo: reducir movimiento=" + mq("(prefers-reduced-motion: reduce)") + ", reducir transparencia=" + mq("(prefers-reduced-transparency: reduce)") +
+                 ", puntero fino=" + mq("(pointer: fine)") + ", hover=" + mq("(hover: hover)") + ", desenfoque=" + (CSS.supports("backdrop-filter", "blur(1px)") || CSS.supports("-webkit-backdrop-filter", "blur(1px)") ? "sí" : "no") +
+                 ", animación ligada al scroll=" + (CSS.supports("animation-timeline", "scroll()") ? "sí" : "no") + ", ahorro de batería: no se puede leer desde la web");
       fill("diag-errors", d.problems.map((p) => {
         lines.push(clock(p.ts) + " " + (p.node_id || "núcleo") + " " + p.text);
         return row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + clock(p.ts) });
@@ -2411,6 +2426,22 @@
         document.body.style.setProperty("--py", ((last.clientY / innerHeight) - .5) * -20);
       });
     }, { passive: true });
+  }
+  // finger: light blooms where it lands and fades; sections rise into view when scrolled to (for browsers without scroll-driven animation)
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches && matchMedia("(hover: none)").matches) {
+    document.addEventListener("pointerdown", (e) => {
+      const t = e.target.closest && e.target.closest(".group, .menu-item, .qcard, .seg"); if (!t) return;
+      const r = t.getBoundingClientRect();
+      t.style.setProperty("--mx", (e.clientX - r.left) + "px"); t.style.setProperty("--my", (e.clientY - r.top) + "px");
+      t.classList.remove("fadeaway"); t.classList.add("tap");
+      const off = () => { t.classList.remove("tap"); t.classList.add("fadeaway"); setTimeout(() => t.classList.remove("fadeaway"), 1000); };
+      addEventListener("pointerup", off, { once: true }); addEventListener("pointercancel", off, { once: true });
+    }, { passive: true });
+    if (!CSS.supports("animation-timeline", "view()") && "IntersectionObserver" in window) {
+      const io = new IntersectionObserver((es) => { for (const x of es) if (x.isIntersecting) { x.target.classList.add("in"); io.unobserve(x.target); } }, { threshold: 0.08 });
+      const scan = () => { for (const t of document.querySelectorAll("section .group:not(#devices):not(.reveal), .dayhead:not(.reveal), .qcard:not(.reveal)")) { t.classList.add("reveal"); io.observe(t); } };
+      scan(); setInterval(scan, 2500);
+    }
   }
   $("guest-signout").addEventListener("click", () => showSignin());
   document.addEventListener("visibilitychange", loop);

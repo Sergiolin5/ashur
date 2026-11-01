@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from modules.docs.extract import SUPPORTED, chunks, extract
-from modules.inventory.action import default_roots, scan
+from modules.inventory.action import default_roots, lower_priority, scan
 
 STATE = "docs_state.json"
 # Files that exist only in the cloud (OneDrive Files On-Demand, iCloud): reading one would download it.
@@ -31,6 +31,15 @@ BATCH_CHARS = 1_500_000
 
 
 def run(payload: dict, ctx) -> dict:
+    restore = lower_priority()                  # reading documents must not starve the machine's other jobs
+    try:
+        return _run(payload, ctx)
+    finally:
+        if restore:
+            restore()
+
+
+def _run(payload: dict, ctx) -> dict:
     cfg = getattr(ctx, "config", {}) or {}
     roots = payload.get("roots") or cfg.get("inventory_roots") or default_roots()
     state_dir = getattr(ctx, "state_dir", None)

@@ -62,6 +62,39 @@ def _same(a: str, b: str) -> bool:
 
 
 
+
+def merge_disks(known, reported, now: float) -> list:
+    """Remember every disk a node has ever shown. One missing from this report is kept as absent (with when it was last
+    there), so a disk that comes and goes is told apart from one that is always connected."""
+    out = {d["key"]: dict(d, present_before=d.get("present", False), present=False) for d in known or []}
+    for d in reported:
+        if not isinstance(d, dict) or not d.get("mount"):
+            continue
+        key = str(d.get("device") or d["mount"]) + "|" + str(d.get("total"))
+        old = out.get(key) or {"first_seen": now, "seen": 0, "reports": 0}
+        was_here = key in out and out[key].get("present_before")
+        gap = now - old["last_seen"] if "last_seen" in old else 0.0
+        # time connected: only the gap between two reports that both saw the disk (≤ 30 min, or a long outage would count)
+        add_s = gap if (was_here and gap <= 1800) else 0.0
+        out[key] = {"key": key, "mount": str(d["mount"])[:200], "fstype": str(d.get("fstype") or "")[:20],
+                    "total": d.get("total"), "used": d.get("used"), "scanned": bool(d.get("scanned")),
+                    "first_seen": old["first_seen"], "last_seen": now, "present": True,
+                    "seen": old["seen"] + 1, "reports": old["reports"],
+                    "connected_s": round(old.get("connected_s", 0.0) + add_s), "sessions": old.get("sessions", 0) + (0 if was_here else 1),
+                    "present_before": True}
+    for d in out.values():
+        d["reports"] = d.get("reports", 0) + 1
+        d["present_before"] = d["present"]
+    return sorted(out.values(), key=lambda d: (not d["present"], -(d.get("total") or 0)))[:32]
+
+
+def disk_kind(d: dict, now: float) -> str:
+    """fijo (nearly always there), intermitente (comes and goes) or nuevo (seen for less than a day)."""
+    if now - d.get("first_seen", now) < 86400 or d.get("reports", 0) < 3:
+        return "nuevo"
+    return "fijo" if d["seen"] / d["reports"] >= 0.9 else "intermitente"
+
+
 def create_app(
     db_path: str,
     enroll_key: str,
@@ -128,7 +161,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.33.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.34.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -257,10 +290,55 @@ def create_app(
                 "simulated": req.simulated})
         if not existed and not req.simulated and "inventory" in req.modules:
             # Read tier: a first scan needs no approval. Heavy, so it waits for Full mode.
-            tid = db.add_task("inventory", {}, Weight.HEAVY.value, now, target=req.device_id)
+            tid = db.add_task("inventory", inventory_payload(req.device_id), Weight.HEAVY.value, now, target=req.device_id)
             db.log(now, req.device_id, "task_queued",
                    {"task_id": tid, "module": "inventory", "reason": "first join"})
         return RegisterResponse(device_id=req.device_id, token=token)
+
+    def disk_policy(node_id: str) -> dict:
+        try:
+            return json.loads(db.setting(f"disk_scan:{node_id}", "{}") or "{}")
+        except ValueError:
+            return {}
+
+    def inventory_payload(node_id: str) -> dict:
+        """Which disks to scan: Sergio's choices, when he made any; otherwise the node decides (every real disk)."""
+        pol = disk_policy(node_id)
+        node = next((n for n in db.nodes() if n["id"] == node_id), None)
+        if not pol or not node or not node.get("disks"):
+            return {}
+        roots = [d["mount"] for d in node["disks"] if d.get("present") and pol.get(d["key"], d["scanned"])]
+        return {"roots": roots} if roots else {}
+
+    @app.get("/api/disks", dependencies=[Depends(require_admin)])
+    def disks_view():
+        now = clock()
+        out = []
+        for n in db.nodes():
+            if n["simulated"] or n.get("disks") is None:
+                continue
+            pol = disk_policy(n["id"])
+            out.append({"node_id": n["id"], "online": n["mode"] != Mode.OFFLINE.value, "disks": [
+                dict(d, kind=disk_kind(d, now), scan=bool(pol.get(d["key"], d["scanned"]))) for d in n["disks"]]})
+        return {"nodes": out, "now": now}
+
+    class DiskChoice(BaseModel):
+        node_id: str
+        key: str
+        scan: bool
+
+    @app.post("/api/disks/scan", dependencies=[Depends(require_admin)])
+    def disks_scan(c: DiskChoice):
+        node = next((n for n in db.nodes() if n["id"] == c.node_id), None)
+        if not node or not any(d["key"] == c.key for d in node.get("disks") or []):
+            raise HTTPException(404, "disco desconocido")
+        pol = disk_policy(c.node_id)
+        for d in node["disks"]:                       # the first choice freezes the current state of the others
+            pol.setdefault(d["key"], d["scanned"])
+        pol[c.key] = c.scan
+        db.set_setting(f"disk_scan:{c.node_id}", json.dumps(pol))
+        db.log(clock(), c.node_id, "disk_choice", {"disk": next(d["mount"] for d in node["disks"] if d["key"] == c.key), "scan": c.scan})
+        return {"ok": True}
 
     @app.post("/nodes/{node_id}/heartbeat")
     def heartbeat(hb: Heartbeat, node: dict = Depends(require_node)):
@@ -279,6 +357,8 @@ def create_app(
             db.set_node_code_version(node["id"], hb.code_version)
             if node.get("code_version"):
                 db.log(now, node["id"], "code_updated", {"from": node["code_version"], "to": hb.code_version})
+        if hb.disks is not None:
+            db.set_node_disks(node["id"], merge_disks(node.get("disks"), hb.disks, now))
         for text in (hb.problems or [])[:5]:
             db.log(now, node["id"], "node_problem", {"text": str(text)[:200]})
         if hb.fresh_start:
@@ -408,7 +488,7 @@ def create_app(
             last = db.last_inventory_task(n["id"])
             if last and last["status"] in ("queued", "running"):
                 continue
-            tid = db.add_task("inventory", {}, Weight.HEAVY.value, now, target=n["id"])
+            tid = db.add_task("inventory", inventory_payload(n["id"]), Weight.HEAVY.value, now, target=n["id"])
             db.log(now, n["id"], "task_queued", {"task_id": tid, "module": "inventory", "reason": "asked"})
             queued.append(n["id"])
         return {"queued": queued}
@@ -532,6 +612,25 @@ def create_app(
             add("OK", "Diario y avisos", f"{count('SELECT COUNT(*) FROM diary')} entradas, {count('SELECT COUNT(*) FROM push_subs')} dispositivos con avisos")
             add("OK" if (count("SELECT COUNT(*) FROM docs") or 0) else "AVISO", "Documentos", f"{count('SELECT COUNT(*) FROM docs')} archivos, {count('SELECT COUNT(*) FROM doc_chunks')} fragmentos")
             add("OK", "Inventario", f"{count('SELECT COUNT(*) FROM inventory')} filas")
+            gb = lambda b: f"{b / 1e9:.0f} GB"
+            hours = lambda d: f"{d.get('connected_s', 0) / 3600:.1f} h"
+            for n in db.nodes():
+                if n["simulated"] or "inventory" not in n["modules"]:
+                    continue
+                ds = n.get("disks")
+                if ds is None:
+                    add("AVISO", f"Discos de {n['id']}", "aún no los ha informado (hace falta el código v0.34.0 y unos 10 min)")
+                    continue
+                pol = disk_policy(n["id"])
+                ds = [dict(d, scanned=bool(pol.get(d["key"], d["scanned"]))) for d in ds]
+                here = [d for d in ds if d["present"]]
+                away = [d for d in ds if not d["present"]]
+                miss = [d for d in here if not d["scanned"]]
+                txt = "; ".join(f"{d['mount']} {gb(d['total'])} ({gb(d['used'])} usados, {disk_kind(d, clock())}, {hours(d)} conectado en {d.get('sessions', 1)} veces) "
+                                + ("escaneado" if d["scanned"] else "SIN ESCANEAR") for d in here) or "ninguno visible"
+                if away:
+                    txt += "; ausentes ahora: " + ", ".join(f"{d['mount']} {gb(d['total'])}" for d in away)
+                add("AVISO" if miss else "OK", f"Discos de {n['id']}", txt)
             add("OK", "Audio", f"{count('SELECT COUNT(*) FROM audio_jobs')} trabajos; con módulo de voz: "
                 + (", ".join(n["id"] for n in db.nodes() if "voice" in n["modules"]) or "ningún equipo"))
             # a real question to every local model, in parallel
@@ -592,6 +691,7 @@ def create_app(
         st = status()
         core_v = node_code()[0]
         core_label = db.code_label(core_v)
+        disks_of = {n["id"]: n.get("disks") for n in db.nodes()}
         nodes = []
         for n in st["nodes"]:
             behind = bool(core_v and n.code_version and n.code_version != core_v)
@@ -606,7 +706,7 @@ def create_app(
             elif core_v and not n.code_version:
                 hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
-                          "code_label": n.code_label, "behind": behind, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint})
+                          "code_label": n.code_label, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], x["scanned"]))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint})
         problems = []
         for ev in db.log_rows(600):
             if ev["event"] in DIAG_EVENTS:
@@ -712,7 +812,7 @@ def create_app(
             last = db.last_inventory_task(n["id"])
             if last and (last["status"] in ("queued", "running") or now - last["created"] < INVENTORY_EVERY_S):
                 continue
-            tid = db.add_task("inventory", {}, Weight.HEAVY.value, now, target=n["id"])
+            tid = db.add_task("inventory", inventory_payload(n["id"]), Weight.HEAVY.value, now, target=n["id"])
             db.log(now, n["id"], "task_queued", {"task_id": tid, "module": "inventory", "reason": "periodic"})
             queued.append(tid)
         return queued

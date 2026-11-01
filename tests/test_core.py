@@ -605,3 +605,70 @@ def test_docs_replace_deletes_only_that_documents_chunks_and_never_scans_for_new
     db.conn.execute("INSERT INTO docs (node_id,path,modified,chunks,first_rowid) VALUES ('n','c',1,1,NULL)")
     db.docs_apply("n", [{"path": "c", "modified": 2, "chunks": ["nuevo"]}], [])
     assert [r[0] for r in db.conn.execute("SELECT content FROM doc_chunks WHERE path='c'")] == ["nuevo"]
+
+
+
+def test_disks_reach_diagnostics_and_unscanned_ones_are_visible(env):
+    from node import disks
+    got = disks.read(["/"])
+    assert got and all({"mount", "total", "used", "scanned"} <= set(d) for d in got)
+    assert len({d["mount"] for d in got}) == len(got)
+    assert disks.cached(["/"], now=1e9) is not None and disks.cached(["/"], now=1e9 + 5) is None     # at most every 10 min
+    c, clock = env
+    h = register(c)
+    assert c.get("/api/diagnostics", headers=A).json()["nodes"][0]["disks"] is None
+    beat = {"mode": "full", "disks": [{"mount": "C:\\", "fstype": "NTFS", "total": 500, "used": 200, "scanned": True},
+                                      {"mount": "D:\\", "fstype": "NTFS", "total": 900, "used": 100, "scanned": False, "x": 1}]}
+    assert c.post("/nodes/mac/heartbeat", headers=h, json=beat).status_code == 200
+    ds = c.get("/api/diagnostics", headers=A).json()["nodes"][0]["disks"]
+    assert sorted(d["scanned"] for d in ds) == [False, True] and all("x" not in d for d in ds)
+
+
+def test_a_disk_that_comes_and_goes_is_told_apart_from_a_fixed_one():
+    from core.app import disk_kind, merge_disks
+    fixed = {"device": "/dev/a", "mount": "/", "fstype": "ext4", "total": 500, "used": 1, "scanned": True}
+    usb = {"device": "/dev/b", "mount": "/Volumes/X", "fstype": "exfat", "total": 900, "used": 1, "scanned": False}
+    known, t = None, 0.0
+    for i in range(30):                                   # 30 reports, a day and a half apart in total
+        t += 3000
+        known = merge_disks(known, [fixed] + ([usb] if i % 3 == 0 else []), t)
+    by = {d["mount"]: d for d in known}
+    assert disk_kind(by["/"], t) == "fijo" and disk_kind(by["/Volumes/X"], t) == "intermitente"
+    assert by["/Volumes/X"]["present"] is False           # kept, shown as absent, not forgotten
+    known = merge_disks(known, [fixed, usb], t + 600)
+    assert [d["mount"] for d in known][:2] == ["/Volumes/X", "/"] or all(d["present"] for d in known)
+    assert disk_kind({"first_seen": t, "seen": 1, "reports": 1}, t + 60) == "nuevo"
+
+
+def test_disk_connected_time_and_sessions_are_counted():
+    from core.app import merge_disks
+    usb = {"device": "/dev/b", "mount": "/Volumes/X", "fstype": "exfat", "total": 900, "used": 1, "scanned": False}
+    k = None
+    for t in (0, 600, 1200):                      # connected 20 min
+        k = merge_disks(k, [usb], float(t))
+    k = merge_disks(k, [], 1800.0)                # unplugged
+    k = merge_disks(k, [], 2400.0)
+    k = merge_disks(k, [usb], 3000.0)             # plugged again: a new session, the gap in between is not counted
+    k = merge_disks(k, [usb], 3600.0)             # +10 min
+    d = k[0]
+    assert d["connected_s"] == 1800 and d["sessions"] == 2 and d["present"]
+
+
+def test_disk_choices_decide_which_roots_the_next_inventory_scans(env):
+    c, clock = env
+    h = register(c, simulated=False)
+    beat(c, h)
+    first = c.get("/nodes/mac/tasks/next", headers=h).json()          # the first-join inventory
+    c.post(f"/tasks/{first['id']}/result", headers=h, json={"ok": True})
+    hb = {"mode": "full", "disks": [{"device": "a", "mount": "/", "fstype": "ext4", "total": 500, "used": 1, "scanned": True},
+                                      {"device": "b", "mount": "/Volumes/X", "fstype": "exfat", "total": 900, "used": 1, "scanned": False}]}
+    assert c.post("/nodes/mac/heartbeat", headers=h, json=hb).status_code == 200
+    v = c.get("/api/disks", headers=A).json()["nodes"][0]
+    assert [d["scan"] for d in v["disks"]] == [False, True]               # biggest first: the USB (off) then the main disk (on)
+    usb = v["disks"][0]
+    assert c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": "nope", "scan": True}).status_code == 404
+    assert c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": usb["key"], "scan": True}).status_code == 200
+    assert all(d["scan"] for d in c.get("/api/disks", headers=A).json()["nodes"][0]["disks"])
+    assert c.post("/api/inventory/refresh", headers=A).json()["queued"] == ["mac"]
+    task = c.get("/nodes/mac/tasks/next", headers=h).json()
+    assert sorted(task["payload"]["roots"]) == ["/", "/Volumes/X"]

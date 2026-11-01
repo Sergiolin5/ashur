@@ -651,6 +651,12 @@
     </section>
 
     <section>
+      <h2>Discos</h2>
+      <div id="disks"></div>
+      <div class="note">Cada disco que ve cada equipo, cuánto tiempo ha estado conectado y si Ashur lo escanea. Los externos que van y vienen se recuerdan aunque estén desconectados; si vuelven y están activados, entran en el siguiente repaso.</div>
+    </section>
+
+    <section>
       <h2>Actividad reciente</h2>
       <div class="group" id="activity"></div>
     </section>
@@ -965,6 +971,7 @@
       case "conversation_summarized": return "Resumió " + d.messages + " mensajes de conversación";
       case "summary_deleted": return "Borraste un resumen de conversación";
       case "summary_failed": return "No pudo resumir la conversación";
+      case "disk_choice": return (d.scan ? "Activaste" : "Quitaste") + " el escaneo del disco " + d.disk;
       case "node_problem": return "Avisó: " + (d.text || "un problema");
       case "diary_saved": return "Nueva entrada en el diario";
       case "push_sent": case "notified": return "Te mandó un aviso";
@@ -1101,6 +1108,34 @@
     }
   }
 
+  async function loadDisks() {
+    try {
+      const d = await (await api("api/disks")).json();
+      const gb = (b) => b >= 1e12 ? (b / 1e12).toFixed(1) + " TB" : Math.round(b / 1e9) + " GB";
+      const hrs = (s) => s >= 36000 ? Math.round(s / 3600) + " h" : (Math.round(s / 360) / 10) + " h";
+      const box = $("disks");
+      const secs = d.nodes.map((n) => {
+        const g = el("div", "group"); g.id = "disks-" + n.node_id;
+        const h = el("h3", null, n.node_id + (n.online ? "" : " · desconectado")); h.style.cssText = "margin:14px 4px 6px;font-size:13px;opacity:.7";
+        const rows = n.disks.map((x) => {
+          const r = row({ dot: x.present ? "full" : "offline", title: x.mount + " · " + gb(x.total),
+            detail: (x.present ? gb(x.used) + " usados · " : "ausente ahora · ") + x.kind + " · " + hrs(x.connected_s || 0) + " conectado en " + (x.sessions || 1) + (x.sessions === 1 ? " vez" : " veces") });
+          const b = el("button", "pill", x.scan ? "Escanear: sí" : "Escanear: no");
+          b.addEventListener("click", async () => {
+            b.disabled = true;
+            try { await api("api/disks/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: n.node_id, key: x.key, scan: !x.scan }) }); } catch (e) {}
+            loadDisks();
+          });
+          b.style.cssText = "padding:6px 12px;font-size:13px;flex:none;margin-left:10px";
+          r.append(b);
+          return r;
+        });
+        put(g, rows);
+        return [h, g];
+      }).flat();
+      box.replaceChildren(...(secs.length ? secs : [el("div", "note", "Ningún equipo ha informado sus discos todavía (tarda unos 10 minutos después de actualizar).")]));
+    } catch (e) {}
+  }
   async function refresh() {
     if (!key) return showSignin();
     try {
@@ -1119,6 +1154,7 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
       render(data);
+      if (tab === "status") loadDisks();
       showBudget(data.budget);
       unlock();
     } catch (e) {
@@ -1748,7 +1784,11 @@
         lines.push(n.device_id + ": " + state + (n.hint ? ". " + n.hint : ""));
         const mods = (n.modules || []).join(", ") || "ninguno";
         lines.push("  módulos: " + mods);
-        return row({ dot: n.mode, title: n.device_id, detail: state + " · módulos: " + mods + (n.hint ? " · " + n.hint : ""),
+        const gb = (b) => Math.round(b / 1e9) + " GB";
+        const dh = (x) => (Math.round((x.connected_s || 0) / 360) / 10) + " h conectado en " + (x.sessions || 1) + " veces";
+        const disks = n.disks ? n.disks.map((x) => x.mount + " " + gb(x.total) + " (" + (x.present ? gb(x.used) + " usados, " + x.kind + ", " + (x.scanned ? "escaneado" : "SIN ESCANEAR") : x.kind + ", ausente ahora") + ", " + dh(x) + ")") : null;
+        lines.push("  discos: " + (disks ? disks.join("; ") || "ninguno visible" : "sin informar"));
+        return row({ dot: n.mode, title: n.device_id, detail: state + " · módulos: " + mods + (disks ? " · discos: " + disks.join(" · ") : "") + (n.hint ? " · " + n.hint : ""),
                      value: ago(n.last_seen_s_ago) });
       }), "Sin equipos.");
       for (const x of $("diag-nodes").querySelectorAll(".detail")) x.style.whiteSpace = "normal";

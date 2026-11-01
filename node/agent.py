@@ -21,6 +21,7 @@ from typing import Optional
 import httpx
 import yaml
 
+from node import disks as disks_mod
 from node import metrics
 from node.modules import Module, load, this_os
 from node.policy import Policy, Thresholds
@@ -303,6 +304,9 @@ class Agent:
             beat.update(modules=sorted(self.modules), code_version=self.code_version, fresh_start=True)
         elif self.retry_missing_modules():
             beat["modules"] = sorted(self.modules)
+        disks = disks_mod.cached(self.cfg.get("inventory_roots"))
+        if disks is not None:
+            beat["disks"] = disks
         problems = PROBLEMS.take()
         if problems:
             beat["problems"] = problems

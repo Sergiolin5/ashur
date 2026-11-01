@@ -121,6 +121,9 @@
   .work .count small { font-size: 17px; font-weight: 400; color: var(--secondary); letter-spacing: 0; }
   .work .folder { margin-top: 6px; color: var(--secondary); font-size: 13px;
                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  #map-list .detail { white-space: normal; }
+  .mapbar { margin-top: 8px; height: 4px; border-radius: 2px; background: var(--field); overflow: hidden; }
+  .mapbar i { display: block; height: 100%; border-radius: 2px; background: var(--tint); }
   .bar { margin-top: 12px; height: 3px; border-radius: 2px; background: var(--field); overflow: hidden; }
   .bar i { display: block; height: 100%; width: 30%; border-radius: 2px; background: var(--tint);
            animation: sweep 1.8s ease-in-out infinite; }
@@ -718,6 +721,7 @@
   <div id="settings" hidden>
     <nav class="menu" id="menu" aria-label="Ajustes">
       <button type="button" class="menu-item" data-page="space"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="mi-text"><b>Archivos y espacio</b><small>Duplicados y los archivos más grandes</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="map"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6.5v13L9 17l6 2.5 6-2.5v-13L15 7z"/><path d="M9 4v13M15 7v12.5"/></svg></span><span class="mi-text"><b>Mapa de archivos</b><small>Dónde se va el espacio, carpeta por carpeta</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="docs"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span><span class="mi-text"><b>Documentos</b><small>Buscar y releer lo que Ashur ha leído</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="memory"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7 4 4 0 0 0 5 5 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 5"/></svg></span><span class="mi-text"><b>Memoria</b><small>Recuerdos, resúmenes e importar</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="update"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="mi-text"><b>Actualización y seguridad</b><small>Versiones y autenticador</small></span><span class="mi-go" aria-hidden="true">›</span></button>
@@ -743,6 +747,16 @@
       <div class="group" id="largest"></div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="map" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Mapa de archivos</div></div>
+    <section>
+      <div id="map-nodes" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
+      <div id="map-path" class="note" style="margin:0 0 8px;word-break:break-all"></div>
+      <div class="group" id="map-list"></div>
+      <div class="note" id="map-note">Tamaño por carpeta, según el último inventario. Toca una carpeta para entrar. Ashur no mueve ni borra nada desde aquí.</div>
+    </section>
     </div>
 
     <div class="page" data-page="docs" hidden>
@@ -825,6 +839,7 @@
           placeholder="Cómo habla Ashur aquí: tono, largo de las respuestas, en qué se enfoca, qué evita…"
           style="width:100%;font:inherit;font-size:15px;color:var(--label);background:var(--field);border:0;border-radius:10px;padding:11px 12px;resize:vertical"></textarea>
         <button type="button" id="persona-save">Guardar</button>
+        <button type="button" id="persona-rename" class="link" style="text-align:center" hidden>Cambiar nombre</button>
         <button type="button" id="persona-delete" class="link" style="text-align:center" hidden>Borrar esta persona</button>
         <div id="persona-result" class="note" style="margin:10px 0 0" hidden></div>
       </div>
@@ -866,7 +881,13 @@
       <h2>Invitados</h2>
       <div class="group" id="guests"></div>
       <div class="group signin" style="margin-top:12px">
-        <p>Un invitado solo puede chatear con Ashur, en su propia conversación. No ve tus recuerdos, tus conversaciones ni tus dispositivos. Tiene un tope de gasto propio y hasta 30 mensajes por hora.</p>
+        <p>Un invitado solo puede chatear con Ashur, en su propia conversación. No ve tus recuerdos, tus conversaciones ni tus dispositivos. Tiene un tope de gasto propio y un máximo de mensajes por hora; ambos los cambias aquí abajo.</p>
+        <div style="display:flex;gap:8px;align-items:center;margin:0 0 6px;font-size:15px;color:var(--label)">
+          <input id="lim-msgs" type="number" min="1" max="1000" step="1" aria-label="Mensajes por hora por invitado" style="flex:1" placeholder="Mensajes/hora">
+          <input id="lim-cap" type="number" min="0" max="100" step="0.5" aria-label="Tope de gasto al mes por defecto en dólares" style="flex:1" placeholder="Tope US$ por defecto">
+          <button type="button" id="lim-save" style="flex:none">Guardar</button>
+        </div>
+        <div id="lim-result" class="note" style="margin:0 0 10px" hidden></div>
         <form id="guest-form">
           <input id="guest-name" maxlength="40" placeholder="Nombre" aria-label="Nombre del invitado" autocomplete="off">
           <input id="guest-cap" type="number" min="0" max="100" step="0.5" value="1" aria-label="Tope de gasto al mes en dólares" placeholder="Tope US$ al mes">
@@ -1486,7 +1507,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
+    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -1854,6 +1875,22 @@
       }), "Nadie más puede chatear con Ashur.");
     } catch (e) {}
   }
+  async function loadLimits() {
+    try {
+      const l = await (await api("api/guests/limits")).json();
+      $("lim-msgs").value = l.messages_per_hour; $("lim-cap").value = l.default_cap_usd;
+      $("guest-cap").value = l.default_cap_usd;                       // new guests start with the default
+    } catch (e) {}
+  }
+  $("lim-save").addEventListener("click", async () => {
+    const out = $("lim-result");
+    const r = await api("api/guests/limits", { method: "PUT", body: JSON.stringify({
+      messages_per_hour: parseInt($("lim-msgs").value, 10) || 0, default_cap_usd: parseFloat($("lim-cap").value) || 0 }) });
+    out.textContent = r.ok ? "Límites guardados. Aplican desde el próximo mensaje; el tope de gasto por defecto solo a invitados nuevos."
+                           : "Valores no válidos: mensajes entre 1 y 1000, tope entre 0 y 100.";
+    out.hidden = false;
+    if (r.ok) loadLimits();
+  });
   $("guest-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = $("guest-name").value.trim(), out = $("guest-result");
@@ -1937,6 +1974,50 @@
     } catch (e) {}
   }
 
+  // --- file map ---------------------------------------------------------------
+  const mapState = { node: null };
+  async function mapLoad(node, path) {
+    mapState.node = node;
+    try {
+      if (!node) {
+        const d = await (await api("api/map")).json();
+        const have = d.nodes.filter((n) => n.entries);
+        $("map-nodes").replaceChildren(...have.map((n) => {
+          const b = el("button", "tog", nm(n.node_id) + " · " + bytes(n.bytes)); b.type = "button";
+          b.addEventListener("click", () => mapLoad(n.node_id, ""));
+          return b;
+        }));
+        $("map-path").textContent = have.length ? "" : "Todavía no hay inventarios.";
+        fill("map-list", [], "Elige un equipo.");
+        return;
+      }
+      for (const b of $("map-nodes").children) b.classList.toggle("on", b.textContent.startsWith(nm(node) + " ·"));
+      const d = await (await api("api/map?node=" + encodeURIComponent(node) + "&path=" + encodeURIComponent(path || ""))).json();
+      $("map-path").textContent = nm(node) + "  " + (d.path || "") + " · " + bytes(d.total_bytes) +
+        (d.protected ? " · " + d.protected + (d.protected === 1 ? " elemento protegido" : " elementos protegidos") + " (no se miden)" : "");
+      const rows = [];
+      if (d.path) {
+        const up = el("button", "link", "‹ Subir"); up.type = "button";
+        up.addEventListener("click", () => mapLoad(node, d.parent));
+        rows.push(up);
+      }
+      const max = d.children.length ? d.children[0].bytes || 1 : 1;
+      for (const k of d.children) {
+        const kinds = Object.entries(k.kinds).map(([c, v]) => c + " " + bytes(v)).join(" · ");
+        const r = row({ title: k.name, value: bytes(k.bytes),
+                        detail: (k.summary ? "resumida · " : nf.format(k.files) + (k.files === 1 ? " archivo · " : " archivos · ")) + kinds });
+        const bar = el("div", "mapbar"); const i = el("i"); i.style.width = Math.max(2, Math.round(100 * k.bytes / max)) + "%";
+        bar.append(i); r.querySelector(".main").append(bar);
+        if (!k.summary) { r.style.cursor = "pointer"; r.addEventListener("click", () => mapLoad(node, k.path)); }
+        rows.push(r);
+      }
+      if (d.files_here) rows.push(row({ title: "Archivos sueltos aquí", detail: nf.format(d.files_here) + " archivos", value: bytes(d.bytes_here) }));
+      if (d.more) rows.push(row({ title: "y " + d.more + " carpetas más pequeñas" }));
+      fill("map-list", rows.length ? rows : [], "Carpeta vacía.");
+    } catch (e) {}
+  }
+  document.querySelector('.menu-item[data-page="map"]').addEventListener("click", () => mapLoad(mapState.node, ""));
+
   // --- device personas ---------------------------------------------------------
   let personas = [];
   async function fetchPersonas() {
@@ -1973,13 +2054,24 @@
     const name = $("persona-pick").value, p = personas.find((x) => x.name === name);
     $("persona-name").value = p ? p.name : ""; $("persona-name").disabled = !!p;
     $("persona-text").value = p ? p.text.trim() : "";
-    $("persona-delete").hidden = !p;
+    $("persona-delete").hidden = $("persona-rename").hidden = !p;
+    $("persona-rename").textContent = "Cambiar nombre";
   }
   $("persona-pick").addEventListener("change", showPersona);
+  $("persona-rename").addEventListener("click", () => {
+    const n = $("persona-name");
+    n.disabled = false; n.focus(); n.select();
+    $("persona-rename").textContent = "Escribe el nombre nuevo y toca Guardar";
+  });
   $("persona-save").addEventListener("click", async () => {
     const out = $("persona-result");
     const name = $("persona-name").value.trim().toLowerCase(), text = $("persona-text").value.trim();
     if (!name || !text) { out.textContent = "Falta el nombre o la descripción."; out.hidden = false; return; }
+    const old = $("persona-pick").value;
+    if (old && old !== name) {                                   // renaming: the voice keeps its text, only the name changes
+      const rn = await api("api/personas/" + encodeURIComponent(old) + "/rename", { method: "POST", body: JSON.stringify({ to: name }) });
+      if (!rn.ok) { let d = {}; try { d = await rn.json(); } catch (e) {} out.textContent = typeof d.detail === "string" ? d.detail : "No pude cambiar el nombre. Minúsculas, números y guiones."; out.hidden = false; return; }
+    }
     const r = await api("api/personas/" + encodeURIComponent(name), { method: "PUT", body: JSON.stringify({ text }) });
     if (!r.ok) { let d = {}; try { d = await r.json(); } catch (e) {} out.textContent = typeof d.detail === "string" ? d.detail : "No pude guardar. Nombre: minúsculas, números y guiones."; out.hidden = false; return; }
     out.textContent = "Guardada «" + name + "»."; out.hidden = false;

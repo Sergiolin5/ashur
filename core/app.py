@@ -18,7 +18,7 @@ from typing import Callable, Optional
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from shared.codebundle import build_bundle, code_version, has_node_code
@@ -169,7 +169,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.37.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.38.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -922,6 +922,24 @@ def create_app(
     def inventory_report():
         return space_report() or {"pending": True}
 
+    # the file map: one folder level per request, cached a few minutes (a rescan rewrites the rows)
+    _fmap: dict = {}
+
+    @app.get("/api/map", dependencies=[Depends(require_admin)])
+    def file_map(node: str = "", path: str = Query(default="", max_length=1024)):
+        if not node:
+            return {"nodes": [{"node_id": r["node_id"], "bytes": r["bytes"], "entries": r["entries"]}
+                              for r in db.inventory_summary_readonly()]}
+        key, now = (node, path), clock()
+        hit = _fmap.get(key)
+        if hit and now - hit[0] < 300:
+            return hit[1]
+        out = db.file_map_readonly(node, path)
+        if len(_fmap) > 200:
+            _fmap.clear()
+        _fmap[key] = (now, out)
+        return out
+
     class ChatIn(BaseModel):
         message: str = Field(min_length=1, max_length=8000)
         channel: str = Field(default="app", pattern=r"^[a-z0-9_-]{1,24}$")
@@ -949,6 +967,23 @@ def create_app(
         db.log(clock(), None, "persona_saved", {"persona": name, "chars": len(body.text)})
         return {"ok": True}
 
+    class PersonaRename(BaseModel):
+        to: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,23}$")
+
+    @app.post("/api/personas/{name}/rename", dependencies=[Depends(require_admin)])
+    def persona_rename(name: str, body: PersonaRename):
+        if name == body.to:
+            return {"ok": True}
+        if brain.voice(body.to) is not None:
+            raise HTTPException(409, "Ya existe una persona con ese nombre.")
+        text = brain.voice(name)
+        if text is None:
+            raise HTTPException(404, "No existe esa persona.")
+        brain.save_voice(body.to, text)          # write first, delete after: a crash never loses the persona
+        brain.delete_voice(name)
+        db.log(clock(), None, "persona_renamed", {"from": name, "to": body.to})
+        return {"ok": True}
+
     @app.delete("/api/personas/{name}", dependencies=[Depends(require_admin)])
     def persona_delete(name: str):
         if not brain.delete_voice(name):
@@ -966,7 +1001,7 @@ def create_app(
 
     @app.post("/api/chat")
     def chat(body: ChatIn, guest: Optional[dict] = Depends(require_chat)):
-        if guest and db.count_messages_since(f"g{guest['id']}", clock() - 3600) >= GUEST_MESSAGES_PER_HOUR:
+        if guest and db.count_messages_since(f"g{guest['id']}", clock() - 3600) >= guest_limits()["messages_per_hour"]:
             raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
@@ -994,8 +1029,32 @@ def create_app(
     # --- guests: people Sergio lets chat with Ashur (chat only) -----------------
     class GuestIn(BaseModel):
         name: str = Field(min_length=1, max_length=40)
-        monthly_cap_usd: float = Field(default=GUEST_DEFAULT_CAP_USD, ge=0, le=100)
+        monthly_cap_usd: Optional[float] = Field(default=None, ge=0, le=100)   # None = the default cap
         is_self: bool = False                  # a chat-only key for Sergio, e.g. the iPhone Shortcut
+
+    def guest_limits() -> dict:
+        def num(key, default, cast):
+            try:
+                return cast(db.setting(key, None))
+            except (TypeError, ValueError):
+                return default
+        return {"messages_per_hour": num("guest_messages_per_hour", GUEST_MESSAGES_PER_HOUR, int),
+                "default_cap_usd": num("guest_default_cap_usd", GUEST_DEFAULT_CAP_USD, float)}
+
+    class GuestLimitsIn(BaseModel):
+        messages_per_hour: int = Field(ge=1, le=1000)
+        default_cap_usd: float = Field(ge=0, le=100)
+
+    @app.get("/api/guests/limits", dependencies=[Depends(require_admin)])
+    def guest_limits_get():
+        return guest_limits()
+
+    @app.put("/api/guests/limits", dependencies=[Depends(require_admin)])
+    def guest_limits_put(body: GuestLimitsIn):
+        db.set_setting("guest_messages_per_hour", str(body.messages_per_hour))
+        db.set_setting("guest_default_cap_usd", str(body.default_cap_usd))
+        db.log(clock(), None, "guest_limits_changed", body.model_dump())
+        return guest_limits()
 
     @app.get("/api/guests", dependencies=[Depends(require_admin)])
     def guests_list():
@@ -1007,7 +1066,8 @@ def create_app(
     @app.post("/api/guests", dependencies=[Depends(require_admin)])
     def guest_create(body: GuestIn):
         key = secrets.token_urlsafe(24)
-        gid = db.add_guest(clock(), body.name.strip(), key, body.monthly_cap_usd, body.is_self)
+        cap = guest_limits()["default_cap_usd"] if body.monthly_cap_usd is None else body.monthly_cap_usd
+        gid = db.add_guest(clock(), body.name.strip(), key, cap, body.is_self)
         db.log(clock(), None, "chat_key_created" if body.is_self else "guest_created",
                {"guest_id": gid})                                         # no name: third parties stay anonymous
         return {"id": gid, "name": body.name.strip(), "key": key}             # the key is shown only this once

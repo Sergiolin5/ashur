@@ -6,6 +6,7 @@ import unicodedata
 import hashlib
 import json
 import secrets
+import os
 import sqlite3
 import sys
 import threading
@@ -505,6 +506,85 @@ class DB:
                     "largest": largest}
         finally:
             c.close()
+
+    # --- file map: where the space goes, one folder level at a time ---------------------------
+    MAP_CATEGORIES = {
+        "documentos": {".pdf", ".doc", ".docx", ".odt", ".txt", ".md", ".rtf", ".xls", ".xlsx", ".csv", ".ppt", ".pptx", ".epub"},
+        "imágenes": {".jpg", ".jpeg", ".png", ".heic", ".gif", ".webp", ".bmp", ".tiff", ".raw", ".cr2", ".nef", ".dng", ".svg", ".psd"},
+        "video": {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".m4v", ".flv"},
+        "audio": {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma"},
+        "código": {".py", ".js", ".ts", ".html", ".css", ".json", ".c", ".cpp", ".h", ".java", ".go", ".rs", ".sql", ".yml", ".yaml"},
+        "paquetes": {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".iso", ".dmg", ".img", ".bak"},
+        "programas": {".exe", ".msi", ".bat", ".cmd", ".ps1", ".lnk", ".sh", ".jar", ".app", ".dll"},
+    }
+    MAP_EXT = {e: cat for cat, exts in MAP_CATEGORIES.items() for e in exts}
+
+    def file_map_readonly(self, node_id: str, path: str = "", limit: int = 60) -> dict:
+        """Size of every direct child of `path` (a folder of the inventory), split by kind of file.
+        A folder with a single subfolder and no files of its own is skipped through, so the first
+        screen is where the data actually starts. Sensitive entries are only counted, never named."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            for _ in range(12):
+                res = self._map_level(c, node_id, path, limit)
+                if res["files_here"] or len(res["children"]) != 1 or res["folders_total"] != 1:
+                    return res
+                path = res["children"][0]["path"]
+            return res
+        finally:
+            c.close()
+
+    def _map_level(self, c, node_id: str, path: str, limit: int) -> dict:
+        sep = "\\" if ("\\" in path or (len(path) >= 2 and path[1] == ":")) else "/"
+        if not path:
+            first = c.execute("SELECT path FROM inventory WHERE node_id = ? LIMIT 1", (node_id,)).fetchone()
+            sep = "\\" if first and "\\" in first[0] else "/"
+        prefix = path if (not path or path.endswith(sep)) else path + sep
+        if not prefix and sep == "/":
+            prefix = "/"                                              # posix paths start with the root slash
+        if prefix:
+            cur = c.execute("SELECT path, size, kind FROM inventory WHERE node_id = ? AND path >= ? AND path < ?",
+                            (node_id, prefix, prefix + "\uffff"))
+        else:
+            cur = c.execute("SELECT path, size, kind FROM inventory WHERE node_id = ?", (node_id,))
+        kids: dict[str, dict] = {}
+        here = {"bytes": 0, "count": 0}
+        protected = 0
+        n = len(prefix)
+        for p, size, kind in cur:
+            rel = p[n:]
+            if not rel:
+                continue
+            if kind == "sensitive":
+                protected += 1
+                continue
+            name, _, rest = rel.partition(sep)
+            size = size or 0
+            if rest or kind == "folder_summary":                      # inside a subfolder, or a folder summarised whole
+                k = kids.setdefault(name, {"name": name, "bytes": 0, "files": 0, "kinds": {}, "summary": False})
+                k["bytes"] += size
+                k["files"] += 1 if kind == "file" else 0
+                if kind == "folder_summary" and not rest:
+                    k["summary"] = True
+                cat = "resumen" if kind == "folder_summary" else self.MAP_EXT.get(os.path.splitext(rel)[1].lower(), "otros")
+                k["kinds"][cat] = k["kinds"].get(cat, 0) + size
+            else:
+                here["bytes"] += size
+                here["count"] += 1
+        ordered = sorted(kids.values(), key=lambda k: -k["bytes"])
+        children = []
+        for k in ordered[:limit]:
+            children.append({**k, "path": prefix + k["name"] + sep,
+                             "kinds": dict(sorted(k["kinds"].items(), key=lambda kv: -kv[1])[:4])})
+        total = sum(k["bytes"] for k in kids.values()) + here["bytes"]
+        parent = ""
+        if prefix and prefix != "/":
+            trimmed = prefix[:-1]
+            cut = trimmed.rfind(sep)
+            parent = trimmed[:cut + 1] if cut >= 0 else ""
+        return {"node_id": node_id, "path": prefix, "parent": parent, "total_bytes": total,
+                "files_here": here["count"], "bytes_here": here["bytes"], "folders_total": len(kids),
+                "children": children, "more": max(0, len(ordered) - limit), "protected": protected}
 
     # --- settings, diary, push -------------------------------------------------------------
     def setting(self, key: str, default: Optional[str] = None) -> Optional[str]:

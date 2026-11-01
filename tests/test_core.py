@@ -726,3 +726,56 @@ def test_guests_can_leave_an_opinion_only_sergio_reads_it(env):
     assert n["author"] == "Camila" and n["text"] == "No encontré dónde escribir"
     assert c.post("/api/feedback", headers={"X-Admin-Key": key}, json={"text": "x" * 1600}).status_code == 422
     assert c.post("/api/feedback", json={"text": "hola"}).status_code == 401
+
+
+def test_persona_rename_keeps_text_and_refuses_clashes(env):
+    c, _ = env
+    assert c.put("/api/personas/iphone", headers=A, json={"text": "Corto y directo"}).status_code == 200
+    assert c.put("/api/personas/laptop", headers=A, json={"text": "Largo"}).status_code == 200
+    assert c.post("/api/personas/iphone/rename", headers=A, json={"to": "laptop"}).status_code == 409
+    assert c.post("/api/personas/nadie/rename", headers=A, json={"to": "otro"}).status_code == 404
+    assert c.post("/api/personas/iphone/rename", headers=A, json={"to": "Mal Nombre"}).status_code == 422
+    assert c.post("/api/personas/iphone/rename", headers=A, json={"to": "bolsillo"}).status_code == 200
+    got = {p["name"]: p["text"].strip() for p in c.get("/api/personas", headers=A).json()}
+    assert got == {"bolsillo": "Corto y directo", "laptop": "Largo"}
+    assert c.post("/api/personas/bolsillo/rename", headers={}, json={"to": "x"}).status_code == 401
+
+
+def test_guest_limits_are_editable_and_apply(env):
+    c, _ = env
+    assert c.get("/api/guests/limits", headers=A).json() == {"messages_per_hour": 30, "default_cap_usd": 1.0}
+    assert c.put("/api/guests/limits", headers=A, json={"messages_per_hour": 0, "default_cap_usd": 1}).status_code == 422
+    r = c.put("/api/guests/limits", headers=A, json={"messages_per_hour": 5, "default_cap_usd": 2.5})
+    assert r.json() == {"messages_per_hour": 5, "default_cap_usd": 2.5}
+    c.post("/api/guests", headers=A, json={"name": "Camila"})                      # no cap given: takes the default
+    assert c.get("/api/guests", headers=A).json()[0]["monthly_cap_usd"] == 2.5
+    assert c.put("/api/guests/limits", headers={}, json={"messages_per_hour": 5, "default_cap_usd": 1}).status_code == 401
+
+
+def test_file_map_levels_categories_and_protected(env):
+    c, _ = env
+    db = c.app.state.db
+    rows = [{"path": "/host/DATA/Fotos/2024/a.jpg", "kind": "file", "size": 300},
+            {"path": "/host/DATA/Fotos/2024/b.heic", "kind": "file", "size": 200},
+            {"path": "/host/DATA/Fotos/notas.txt", "kind": "file", "size": 10},
+            {"path": "/host/DATA/Video/peli.mkv", "kind": "file", "size": 5000},
+            {"path": "/host/DATA/Bancos", "kind": "sensitive"},
+            {"path": "/host/DATA/Cache", "kind": "folder_summary", "size": 700}]
+    db.inventory_add("zima", rows)
+    db.inventory_add("pc", [{"path": "C:\\Users\\s\\a.pdf", "kind": "file", "size": 40},
+                            {"path": "D:\\Juegos\\g.exe", "kind": "file", "size": 900}])
+    assert {n["node_id"] for n in c.get("/api/map", headers=A).json()["nodes"]} == {"zima", "pc"}
+    top = c.get("/api/map?node=zima", headers=A).json()          # /host/DATA is skipped through: nothing lives above it
+    assert top["path"] == "/host/DATA/" and top["protected"] == 1
+    names = [k["name"] for k in top["children"]]
+    assert names == ["Video", "Cache", "Fotos"]                  # biggest first; the sensitive folder is never named
+    fotos = top["children"][2]
+    assert fotos["bytes"] == 510 and fotos["kinds"] == {"imágenes": 500, "documentos": 10}
+    assert top["children"][1]["summary"] is True
+    sub = c.get("/api/map", params={"node": "zima", "path": fotos["path"]}, headers=A).json()
+    assert sub["parent"] == "/host/DATA/" and sub["files_here"] == 1 and sub["children"][0]["name"] == "2024"
+    win = c.get("/api/map?node=pc", headers=A).json()
+    assert [k["name"] for k in win["children"]] == ["D:", "C:"] and win["children"][0]["path"] == "D:\\"
+    inner = c.get("/api/map", params={"node": "pc", "path": "C:\\"}, headers=A).json()
+    assert inner["path"] == "C:\\Users\\s\\" and inner["files_here"] == 1       # single-child chain skipped
+    assert c.get("/api/map?node=zima").status_code == 401

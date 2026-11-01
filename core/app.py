@@ -169,7 +169,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.38.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.39.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -921,6 +921,68 @@ def create_app(
     @app.get("/api/inventory/report", dependencies=[Depends(require_admin)])
     def inventory_report():
         return space_report() or {"pending": True}
+
+    # --- my time: start/stop what Sergio is doing, then see where the week went -------------
+    DEFAULT_TIME_CATEGORIES = ["Trabajo", "Ashur", "Casa", "Estudio", "Ocio", "Otro"]
+
+    class TimeStart(BaseModel):
+        task: str = Field(min_length=1, max_length=120)
+        category: str = Field(min_length=1, max_length=30)
+        est_min: Optional[int] = Field(default=None, ge=1, le=1440)
+
+    def time_view() -> dict:
+        now = clock()
+        entries = db.time_entries(now - 14 * 86400)
+        for e in entries:
+            e["running"] = e["end_ts"] is None
+            e["minutes"] = round(((e["end_ts"] or now) - e["start_ts"]) / 60, 1)
+        week_from = now - 7 * 86400
+        by_cat: dict[str, float] = {}
+        prev: dict[str, float] = {}
+        over = []                                                          # estimate vs reality, finished tasks only
+        for e in entries:
+            if e["running"]:
+                continue
+            bucket = by_cat if e["start_ts"] >= week_from else prev
+            bucket[e["category"]] = bucket.get(e["category"], 0.0) + e["minutes"]
+            if e["start_ts"] >= week_from and e["est_min"]:
+                over.append({"task": e["task"], "est_min": e["est_min"], "minutes": e["minutes"]})
+        running = next((e for e in entries if e["running"]), None)
+        if running and running["start_ts"] >= week_from:
+            by_cat[running["category"]] = by_cat.get(running["category"], 0.0) + running["minutes"]
+        week = sorted(({"category": k, "minutes": round(v, 1), "before": round(prev.get(k, 0.0), 1)}
+                       for k, v in by_cat.items()), key=lambda r: -r["minutes"])
+        cats = list(dict.fromkeys(db.time_categories() + DEFAULT_TIME_CATEGORIES))
+        return {"now": now, "running": running, "recent": entries[:40], "week": week,
+                "week_minutes": round(sum(by_cat.values()), 1), "estimates": over[:20], "categories": cats}
+
+    @app.get("/api/time", dependencies=[Depends(require_admin)])
+    def time_get():
+        return time_view()
+
+    @app.post("/api/time/start", dependencies=[Depends(require_admin)])
+    def time_start(body: TimeStart):
+        db.time_start(clock(), body.task.strip(), body.category.strip(), body.est_min)
+        return time_view()
+
+    @app.post("/api/time/stop", dependencies=[Depends(require_admin)])
+    def time_stop():
+        db.time_stop(clock())
+        return time_view()
+
+    @app.delete("/api/time/{entry_id}", dependencies=[Depends(require_admin)])
+    def time_delete(entry_id: int):
+        if not db.time_delete(entry_id):
+            raise HTTPException(404, "No existe esa entrada.")
+        return time_view()
+
+    @app.get("/api/time/export", dependencies=[Depends(require_admin)])
+    def time_export():
+        """Everything, as plain rows, so it can be analysed later (Ashur, a spreadsheet, anything)."""
+        rows = db.time_entries(0.0, 100000)
+        return [{"id": e["id"], "task": e["task"], "category": e["category"], "est_min": e["est_min"],
+                 "start": e["start_ts"], "end": e["end_ts"],
+                 "minutes": None if e["end_ts"] is None else round((e["end_ts"] - e["start_ts"]) / 60, 2)} for e in rows]
 
     # the file map: one folder level per request, cached a few minutes (a rescan rewrites the rows)
     _fmap: dict = {}

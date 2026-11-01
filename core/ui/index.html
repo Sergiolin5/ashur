@@ -574,7 +574,8 @@
   button.tog { width: auto; flex: none; margin: 0; padding: 7px 14px; font-size: 14px; border-radius: 999px; }
   button.tog:not(.on) { background: var(--field); color: var(--secondary); box-shadow: none; }
   header { position: relative; }
-  .notefab { position: absolute; top: 22px; right: 4px; width: 40px; height: 40px; margin: 0; padding: 0; border-radius: 50%;
+  .notefab { position: fixed; z-index: 40; top: 22px; right: 10px; width: 46px; height: 46px; margin: 0; padding: 0; border-radius: 50%;
+             touch-action: none; user-select: none; -webkit-user-select: none; box-shadow: 0 6px 18px rgba(0,0,0,.28); cursor: grab;
              display: flex; align-items: center; justify-content: center; background: var(--field); box-shadow: none; color: var(--tint); }
   .notefab svg { width: 20px; height: 20px; }
   .notefab .badge { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--tint); color: #fff;
@@ -721,6 +722,7 @@
   <div id="settings" hidden>
     <nav class="menu" id="menu" aria-label="Ajustes">
       <button type="button" class="menu-item" data-page="space"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="mi-text"><b>Archivos y espacio</b><small>Duplicados y los archivos más grandes</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="time"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M9.5 3h5"/></svg></span><span class="mi-text"><b>Mi tiempo</b><small id="time-sub">Empiezo, termino y en qué se va la semana</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="map"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6.5v13L9 17l6 2.5 6-2.5v-13L15 7z"/><path d="M9 4v13M15 7v12.5"/></svg></span><span class="mi-text"><b>Mapa de archivos</b><small>Dónde se va el espacio, carpeta por carpeta</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="docs"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span><span class="mi-text"><b>Documentos</b><small>Buscar y releer lo que Ashur ha leído</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="memory"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7 4 4 0 0 0 5 5 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 5"/></svg></span><span class="mi-text"><b>Memoria</b><small>Recuerdos, resúmenes e importar</small></span><span class="mi-go" aria-hidden="true">›</span></button>
@@ -747,6 +749,38 @@
       <div class="group" id="largest"></div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="time" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Mi tiempo</div></div>
+    <section>
+      <div class="group" id="time-now"></div>
+      <div class="group signin" style="margin-top:12px">
+        <form id="time-form">
+          <input id="time-task" maxlength="120" placeholder="¿Qué vas a hacer?" aria-label="Tarea" autocomplete="off">
+          <input id="time-cat" maxlength="30" list="time-cats" placeholder="Categoría" aria-label="Categoría" autocomplete="off">
+          <datalist id="time-cats"></datalist>
+          <input id="time-est" type="number" min="1" max="1440" step="1" placeholder="Estimado en minutos (opcional)" aria-label="Estimado en minutos">
+          <button type="submit">Empiezo</button>
+        </form>
+        <div id="time-msg" class="note" style="margin:10px 0 0" hidden></div>
+      </div>
+    </section>
+    <section>
+      <h2>Últimos 7 días</h2>
+      <div class="group" id="time-week"></div>
+      <div class="note" id="time-week-note"></div>
+    </section>
+    <section>
+      <h2>Estimado contra real</h2>
+      <div class="group" id="time-est-list"></div>
+    </section>
+    <section>
+      <h2>Registro</h2>
+      <div class="group" id="time-recent"></div>
+      <div class="group" style="margin-top:12px"><button class="link" id="time-export" type="button">Copiar todos los datos (JSON)</button></div>
+      <div class="note">Los datos quedan guardados tal cual (tarea, categoría, inicio, fin, estimado) para que Ashur los analice después.</div>
+    </section>
     </div>
 
     <div class="page" data-page="map" hidden>
@@ -1252,7 +1286,44 @@
     const g = role === "guest";
     $("note-title").textContent = g ? "Tu opinión" : "Anotar para después";
     $("note-help").textContent = g ? "Cuéntale a Sergio qué te gustó, qué falló o qué cambiarías. Solo él lo lee." : "Escribe qué pasó. Se guarda con la pestaña, la hora y el tamaño de pantalla. Luego lo juntas todo en un solo mensaje para Claude."; noteImgs = []; $("note-text").value = ""; $("note-err").textContent = ""; drawNoteThumbs(); $("note-sheet").hidden = false; setTimeout(() => $("note-text").focus(), 50); }
-  $("note-fab").addEventListener("click", openNote);
+  $("note-fab").addEventListener("click", () => { if (!fabMoved) openNote(); });
+  // the flag floats: drag it anywhere, it remembers where (as a share of the screen, so it survives rotating or unfolding)
+  let fabMoved = false;
+  (function () {
+    const fab = $("note-fab"), KEYPOS = "ashur.fab";
+    document.body.append(fab);                                   // out of the header, so nothing clips or shifts it
+    const clamp = (x, y) => [Math.min(Math.max(x, 6), window.innerWidth - fab.offsetWidth - 6),
+                             Math.min(Math.max(y, 6), window.innerHeight - fab.offsetHeight - 6)];
+    const place = (x, y) => { [x, y] = clamp(x, y); fab.style.left = x + "px"; fab.style.top = y + "px"; fab.style.right = "auto"; };
+    const restore = () => {
+      let p = null; try { p = JSON.parse(localStorage.getItem(KEYPOS) || "null"); } catch (e) {}
+      if (p && typeof p.fx === "number" && typeof p.fy === "number") place(p.fx * window.innerWidth, p.fy * window.innerHeight);
+      else if (fab.style.left) place(parseFloat(fab.style.left), parseFloat(fab.style.top));
+    };
+    let sx, sy, ox, oy, down = false;
+    fab.addEventListener("pointerdown", (e) => {
+      down = true; fabMoved = false; sx = e.clientX; sy = e.clientY;
+      const r = fab.getBoundingClientRect(); ox = r.left; oy = r.top;
+      try { fab.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    fab.addEventListener("pointermove", (e) => {
+      if (!down) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (!fabMoved && Math.hypot(dx, dy) < 8) return;
+      fabMoved = true; fab.style.cursor = "grabbing"; place(ox + dx, oy + dy);
+    });
+    const end = () => {
+      if (!down) return; down = false; fab.style.cursor = "";
+      if (fabMoved) {
+        const r = fab.getBoundingClientRect();
+        try { localStorage.setItem(KEYPOS, JSON.stringify({ fx: r.left / window.innerWidth, fy: r.top / window.innerHeight })); } catch (e) {}
+        setTimeout(() => { fabMoved = false; }, 60);               // swallow the click that follows a drag
+      }
+    };
+    fab.addEventListener("pointerup", end); fab.addEventListener("pointercancel", end);
+    window.addEventListener("resize", restore);
+    restore();
+  })();
   $("note-cancel").addEventListener("click", () => { $("note-sheet").hidden = true; });
   $("note-add-img").addEventListener("click", () => $("note-file").click());
   $("note-file").addEventListener("change", async () => {
@@ -1973,6 +2044,66 @@
            "Aún no hay inventarios.", 5);
     } catch (e) {}
   }
+
+  // --- my time ----------------------------------------------------------------
+  let timeData = null, timeTick = null;
+  const mins = (m) => m >= 60 ? Math.floor(m / 60) + " h " + String(Math.round(m % 60)).padStart(2, "0") + " min" : Math.round(m) + " min";
+  const clockText = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+    return (h ? h + ":" : "") + String(m).padStart(h ? 2 : 1, "0") + ":" + String(s % 60).padStart(2, "0"); };
+  function drawTime(d) {
+    timeData = d; d.skew = Date.now() / 1000 - d.now;           // the core's clock, not this device's, decides when a task began
+    const r = d.running;
+    const now = [];
+    if (r) {
+      const w = row({ title: r.task, detail: r.category + (r.est_min ? " · estimado " + mins(r.est_min) : ""), value: "0:00" });
+      w.querySelector(".value").id = "time-clock";
+      const stop = el("button", null, "Termino"); stop.type = "button";
+      stop.addEventListener("click", async () => drawTime(await (await api("api/time/stop", { method: "POST" })).json()));
+      now.push(w, stop);
+    } else now.push(row({ title: "Nada en marcha" }));
+    put($("time-now"), now);
+    $("time-sub").textContent = r ? "En marcha: " + r.task : "Empiezo, termino y en qué se va la semana";
+    $("time-cats").replaceChildren(...d.categories.map((c) => { const o = el("option"); o.value = c; return o; }));
+    const max = d.week.length ? d.week[0].minutes || 1 : 1;
+    fill("time-week", d.week.map((c) => {
+      const delta = c.before ? (c.minutes >= c.before ? "▲ " : "▼ ") + mins(Math.abs(c.minutes - c.before)) + " vs. semana anterior" : "sin semana anterior";
+      const x = row({ title: c.category, detail: delta, value: mins(c.minutes) });
+      const bar = el("div", "mapbar"); const i = el("i"); i.style.width = Math.max(2, Math.round(100 * c.minutes / max)) + "%"; bar.append(i);
+      x.querySelector(".main").append(bar);
+      return x;
+    }), "Aún no hay tiempo registrado.");
+    $("time-week-note").textContent = d.week.length ? "Total: " + mins(d.week_minutes) + ". Pasar de una tarea a otra detiene la anterior." : "";
+    fill("time-est-list", d.estimates.map((e) => row({ title: e.task, detail: "estimado " + mins(e.est_min),
+      value: mins(e.minutes) + (e.minutes > e.est_min * 1.2 ? " ▲" : "") })), "Pon un estimado al empezar y aquí verás cuánto te desvías.");
+    fill("time-recent", d.recent.filter((e) => !e.running).map((e) => {
+      const x = row({ title: e.task, detail: e.category + " · " + new Date(e.start_ts * 1000).toLocaleString("es-CO", { weekday: "short", hour: "numeric", minute: "2-digit" }), value: mins(e.minutes) });
+      const del = el("button", "forget", "Borrar"); del.type = "button";
+      del.addEventListener("click", async () => { if (del.dataset.sure) drawTime(await (await api("api/time/" + e.id, { method: "DELETE" })).json());
+                                                  else { del.dataset.sure = "1"; del.textContent = "¿Seguro?"; } });
+      x.append(del); return x;
+    }), "Sin registros todavía.", 8);
+    clearInterval(timeTick);
+    if (r) { const tick = () => { const c = $("time-clock"); if (c) c.textContent = clockText(Date.now() / 1000 - r.start_ts - (timeData.skew || 0)); };
+             tick(); timeTick = setInterval(tick, 1000); }
+  }
+  async function loadTime() { try { const r = await api("api/time"); if (r.ok) drawTime(await r.json()); } catch (e) {} }
+  $("time-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const task = $("time-task").value.trim(), category = $("time-cat").value.trim() || "Otro", est = parseInt($("time-est").value, 10);
+    const out = $("time-msg");
+    if (!task) return;
+    const r = await api("api/time/start", { method: "POST", body: JSON.stringify({ task, category, est_min: est > 0 ? est : null }) });
+    if (!r.ok) { out.textContent = "No pude empezar. Revisa la tarea y el estimado."; out.hidden = false; return; }
+    out.hidden = true; $("time-task").value = ""; $("time-est").value = "";
+    drawTime(await r.json());
+  });
+  $("time-export").addEventListener("click", async () => {
+    const b = $("time-export");
+    try { const t = JSON.stringify(await (await api("api/time/export")).json());
+          await navigator.clipboard.writeText(t); b.textContent = "Copiado"; } catch (e) { b.textContent = "No pude copiar"; }
+    setTimeout(() => { b.textContent = "Copiar todos los datos (JSON)"; }, 2000);
+  });
+  document.querySelector('.menu-item[data-page="time"]').addEventListener("click", loadTime);
 
   // --- file map ---------------------------------------------------------------
   const mapState = { node: null };

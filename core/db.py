@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS notes (            -- Sergio's own bug/idea notes abo
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, text TEXT NOT NULL, ctx TEXT,
     status TEXT NOT NULL DEFAULT 'open', author TEXT, done_ts REAL
 );
+CREATE TABLE IF NOT EXISTS time_log (         -- Sergio's own time tracking: what he did, for how long, against what he expected
+    id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, category TEXT NOT NULL,
+    est_min INTEGER, start_ts REAL NOT NULL, end_ts REAL
+);
+CREATE INDEX IF NOT EXISTS time_log_start ON time_log (start_ts);
 CREATE TABLE IF NOT EXISTS note_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL
 );
@@ -585,6 +590,41 @@ class DB:
         return {"node_id": node_id, "path": prefix, "parent": parent, "total_bytes": total,
                 "files_here": here["count"], "bytes_here": here["bytes"], "folders_total": len(kids),
                 "children": children, "more": max(0, len(ordered) - limit), "protected": protected}
+
+    # --- time tracking ---------------------------------------------------------------------
+    def time_start(self, ts: float, task: str, category: str, est_min: Optional[int]) -> int:
+        """Starts a task; one runs at a time, so the previous one stops at this very moment."""
+        with self.lock:
+            self.conn.execute("UPDATE time_log SET end_ts = ? WHERE end_ts IS NULL", (ts,))
+            cur = self.conn.execute("INSERT INTO time_log (task, category, est_min, start_ts) VALUES (?, ?, ?, ?)",
+                                    (task, category, est_min, ts))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def time_stop(self, ts: float) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM time_log WHERE end_ts IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+            if not r:
+                return None
+            self.conn.execute("UPDATE time_log SET end_ts = ? WHERE id = ?", (ts, r["id"]))
+            self.conn.commit()
+            return dict(r, end_ts=ts)
+
+    def time_delete(self, entry_id: int) -> bool:
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM time_log WHERE id = ?", (entry_id,))
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def time_entries(self, since: float = 0.0, limit: int = 5000) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT * FROM time_log WHERE start_ts >= ? ORDER BY start_ts DESC LIMIT ?", (since, limit)).fetchall()]
+
+    def time_categories(self) -> list[str]:
+        with self.lock:
+            return [r[0] for r in self.conn.execute(
+                "SELECT category FROM time_log GROUP BY category ORDER BY MAX(start_ts) DESC LIMIT 12").fetchall()]
 
     # --- settings, diary, push -------------------------------------------------------------
     def setting(self, key: str, default: Optional[str] = None) -> Optional[str]:

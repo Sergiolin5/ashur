@@ -779,3 +779,26 @@ def test_file_map_levels_categories_and_protected(env):
     inner = c.get("/api/map", params={"node": "pc", "path": "C:\\"}, headers=A).json()
     assert inner["path"] == "C:\\Users\\s\\" and inner["files_here"] == 1       # single-child chain skipped
     assert c.get("/api/map?node=zima").status_code == 401
+
+
+def test_time_tracking_start_stop_week_and_export(env):
+    c, clock = env
+    assert c.post("/api/time/start", json={"task": "x", "category": "Trabajo"}).status_code == 401
+    clock.now += 1000
+    v = c.post("/api/time/start", headers=A, json={"task": "Informe", "category": "Trabajo", "est_min": 30}).json()
+    assert v["running"]["task"] == "Informe" and "Ashur" in v["categories"]
+    clock.now += 45 * 60
+    v = c.post("/api/time/start", headers=A, json={"task": "Redes", "category": "Ocio"}).json()    # starting stops the previous
+    assert v["running"]["task"] == "Redes"
+    assert v["estimates"] == [{"task": "Informe", "est_min": 30, "minutes": 45.0}]
+    clock.now += 10 * 60
+    v = c.post("/api/time/stop", headers=A).json()
+    assert v["running"] is None
+    assert {w["category"]: w["minutes"] for w in v["week"]} == {"Trabajo": 45.0, "Ocio": 10.0} and v["week_minutes"] == 55.0
+    assert c.post("/api/time/stop", headers=A).json()["running"] is None                          # stopping twice is harmless
+    exp = c.get("/api/time/export", headers=A).json()
+    assert {e["task"]: e["minutes"] for e in exp} == {"Informe": 45.0, "Redes": 10.0}
+    assert c.post("/api/time/start", headers=A, json={"task": "", "category": "x"}).status_code == 422
+    first = exp[-1]["id"]
+    assert c.delete(f"/api/time/{first}", headers=A).status_code == 200
+    assert c.delete(f"/api/time/{first}", headers=A).status_code == 404

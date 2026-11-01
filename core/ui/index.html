@@ -151,7 +151,7 @@
                 box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 0 0 0.5px rgba(0,0,0,.04); }
 
   /* chat */
-  #chat { padding-bottom: 120px; }
+  #chat { padding-bottom: calc(var(--composer-h, 120px) + 28px); }      /* the writing area is measured, not guessed */
   .thread { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; }
   .bubble { max-width: 82%; padding: 9px 14px; border-radius: 19px; white-space: pre-wrap;
             overflow-wrap: anywhere; line-height: 1.32; }
@@ -434,7 +434,9 @@
   h2 { letter-spacing: .08em; }
 
   /* the material: a rim of light, a soft bloom under the pointer */
-  .group, .seg, .menu-item, #devices .row, .qcard { position: relative; -webkit-backdrop-filter: blur(26px) saturate(190%); backdrop-filter: blur(26px) saturate(190%); }
+  .group, .menu-item, #devices .row, .qcard { position: relative; }
+  .seg { position: sticky; }                      /* it was «relative» from 0.23.0 to 0.33.0 and the tabs scrolled away */
+  .group, .seg, .menu-item, #devices .row, .qcard { -webkit-backdrop-filter: blur(26px) saturate(190%); backdrop-filter: blur(26px) saturate(190%); }
   #devices.group { -webkit-backdrop-filter: none; backdrop-filter: none; }
   .group::after, .menu-item::after, #devices .row::after, .qcard::after, .seg::after {
     content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .5s var(--expo);
@@ -551,6 +553,7 @@
   input[type=checkbox]:checked::after { transform: translateY(-1px) rotate(-45deg) scale(1); }
   input[type=checkbox]:active { transform: scale(.88); }
   input[type=checkbox]:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--tint) 45%, transparent); }
+  .composer input[type=checkbox] { width: 20px; height: 20px; }
   /* proposals: text gets the full width, actions sit below it */
   #proposals .row { flex-wrap: wrap; row-gap: 10px; }
   #proposals .main { flex-basis: 100%; }
@@ -822,10 +825,10 @@
       Hablando desde
       <select id="voice" aria-label="Dispositivo desde el que hablas" style="font:inherit;color:var(--tint);background:none;border:0;padding:2px"></select>
     </div>
-    <label id="docs-row" hidden style="display:flex;align-items:center;gap:6px;margin:0 4px 6px;font-size:13px;color:var(--secondary)">
+    <label id="docs-row" hidden style="display:flex;align-items:center;gap:8px;margin:0 4px 4px;font-size:12.5px;line-height:1.25;color:var(--secondary)">
       <input type="checkbox" id="share-docs"> Compartir fragmentos de mis documentos con Claude en este mensaje
     </label>
-    <label id="diary-row" hidden style="display:flex;align-items:center;gap:6px;margin:0 4px 6px;font-size:13px;color:var(--secondary)">
+    <label id="diary-row" hidden style="display:flex;align-items:center;gap:8px;margin:0 4px 4px;font-size:12.5px;line-height:1.25;color:var(--secondary)">
       <input type="checkbox" id="share-diary"> Compartir mi diario con Claude en este mensaje
     </label>
     <form id="chat-form">
@@ -1188,6 +1191,9 @@
   }
   $("menu").addEventListener("click", (e) => { const b = e.target.closest(".menu-item"); if (b) showPage(b.dataset.page); });
   for (const b of document.querySelectorAll("#settings .back")) b.addEventListener("click", () => showPage(null));
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => document.documentElement.style.setProperty("--composer-h", $("composer").offsetHeight + "px")).observe($("composer"));
+  }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
   $("tab-diary").addEventListener("click", () => showTab("diary"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });

@@ -169,7 +169,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.36.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.37.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -184,6 +184,19 @@ def create_app(
     def on_public_port(scope) -> bool:
         server = scope.get("server") or (None, None)
         return public_port is not None and server[1] == public_port
+
+    slow_requests: list = []
+
+    @app.middleware("http")
+    async def time_requests(request, call_next):
+        t0 = time.monotonic()
+        try:
+            return await call_next(request)
+        finally:
+            took = time.monotonic() - t0
+            if took >= 5.0 and not request.url.path.startswith("/nodes/") or took >= 20.0:
+                slow_requests.append({"at": time.time(), "path": request.url.path, "s": round(took, 1)})
+                del slow_requests[:-30]
 
     @app.middleware("http")
     async def public_door(request, call_next):
@@ -755,7 +768,11 @@ def create_app(
                                  "text": describe(ev["event"], ev["detail"])})
                 if len(problems) >= 40:
                     break
-        return {"version": app.version, "now": clock(), "core_code_label": core_label, "nodes": nodes, "problems": problems,
+        slow = [{"ts": x["at"], "text": f"el candado de la base estuvo tomado {x['held_s']} s por «{x['who']}»"
+                 + (f" (otra petición esperó {x['waited_s']} s)" if x["waited_s"] >= 0.5 else "")} for x in db.slow[-10:]]
+        slow += [{"ts": x["at"], "text": f"{x['path']} tardó {x['s']} s en responder"} for x in slow_requests[-10:]]
+        slow.sort(key=lambda x: x["ts"])
+        return {"version": app.version, "now": clock(), "core_code_label": core_label, "nodes": nodes, "problems": problems, "slow": slow[-12:],
                 "brain": brain.budget()}
 
     @app.get("/api/overview", dependencies=[Depends(require_admin)])
@@ -1276,7 +1293,7 @@ def create_app(
 
     @app.post("/api/notes/{note_id}/status", dependencies=[Depends(require_admin)])
     def note_status(note_id: int, body: NoteStatus):
-        if not db.note_set_status(note_id, body.status):
+        if not db.note_set_status(note_id, body.status, clock()):
             raise HTTPException(404, "No existe.")
         return {"ok": True}
 
@@ -1511,14 +1528,17 @@ def create_app(
             return []
         if _in_quiet(now, cfg["quiet"]):
             return []
-        lines: list[str] = []
+        items: list[tuple] = []                                    # (title, text, where it opens)
+        lines = items
         events = db.log_since(int(cur))
         for ev in events:
             d, node = ev["detail"], ev["node_id"] or "un equipo"
             if ev["event"] == "task_failed" and cfg["cats"]["tasks"]:
-                lines.append(f"Falló {d.get('module') or 'una tarea'} en {node}.")
+                items.append(("Una tarea falló", f"Falló {d.get('module') or 'una tarea'} en {node}.", "/#diagnostico"))
+            elif ev["event"] == "feedback_received":
+                items.append(("Nueva opinión", f"{d.get('from') or 'Alguien'} dejó una opinión.", "/#pendientes"))
             elif ev["event"] == "task_done" and cfg["cats"]["tasks"] and d.get("module") in NOTIFY_WATCHED:
-                lines.append(f"Terminó {d['module']} en {node}.")
+                items.append((f"Terminó: {d['module']}", f"Terminó {d['module']} en {node}.", "/#estado"))
         if events:
             db.set_setting("notify_cursor", str(events[-1]["rid"]))
         if cfg["cats"]["devices"]:
@@ -1528,35 +1548,39 @@ def create_app(
                     continue
                 gone = n["mode"] == Mode.OFFLINE.value and n["last_seen"] is not None and now - n["last_seen"] > OFFLINE_AFTER_S + 600
                 if gone and n["id"] not in told:
-                    told.add(n["id"]); lines.append(f"{n['id']} lleva un rato desconectado.")
+                    told.add(n["id"]); items.append((f"{n['id']} sin señal", f"{n['id']} lleva un rato desconectado.", "/#diagnostico"))
                 elif n["mode"] != Mode.OFFLINE.value and n["id"] in told:
-                    told.discard(n["id"]); lines.append(f"{n['id']} volvió.")
+                    told.discard(n["id"]); items.append((f"{n['id']} volvió", f"{n['id']} volvió.", "/#estado"))
             db.set_setting("notify_offline", ",".join(sorted(told)))
         if cfg["cats"]["update"]:
             latest = latest_version()
             if latest and vtuple(latest) > vtuple(app.version) and db.setting("notify_update_seen", "") != latest:
-                db.set_setting("notify_update_seen", latest); lines.append(f"Hay una versión nueva de Ashur: {latest}.")
+                db.set_setting("notify_update_seen", latest); items.append(("Versión nueva", f"Hay una versión nueva de Ashur: {latest}.", "/#actualizacion"))
         if cfg["cats"]["budget"] and brain.s.monthly_budget_usd > 0:
             month = dt.datetime.fromtimestamp(now, BOGOTA).strftime("%Y-%m")
             if brain.spent_this_month() >= 0.8 * brain.s.monthly_budget_usd and db.setting("notify_budget_month", "") != month:
                 db.set_setting("notify_budget_month", month)
-                lines.append("El gasto con Claude llegó al 80% del tope de este mes.")
+                items.append(("Gasto con Claude al 80 %", "El gasto con Claude llegó al 80% del tope de este mes.", "/#estado"))
         if cfg["cats"]["proposals"]:
             top = max((p["id"] for p in db.proposals()), default=0)
             if top > int(db.setting("notify_prop_seen", "0")):
                 db.set_setting("notify_prop_seen", str(top))
                 n_p = len(db.proposals())
-                lines.append(f"Tengo {n_p} recuerdo{'s' if n_p != 1 else ''} nuevo{'s' if n_p != 1 else ''} por revisar.")
-        if not lines:
+                items.append(("Recuerdos por revisar", f"Tengo {n_p} recuerdo{'s' if n_p != 1 else ''} nuevo{'s' if n_p != 1 else ''} por revisar.", "/#memoria"))
+        if not items:
             return []
-        body = lines[0] if len(lines) == 1 else f"{len(lines)} novedades: " + " ".join(lines[:3]) + (" …" if len(lines) > 3 else "")
-        payload = {"title": "Ashur", "body": body, "url": "/#estado", "tag": "system"}
+        if len(items) == 1:
+            title, body, where = items[0]
+        else:                                                      # several: the title counts them, the tap opens the first one's page
+            title, where = f"Ashur: {len(items)} novedades", items[0][2]
+            body = " ".join(t for _, t, _ in items[:3]) + (" …" if len(items) > 3 else "")
+        payload = {"title": title, "body": body, "url": where, "tag": "system"}
         if sync:
             _push_all(payload)
         else:
             threading.Thread(target=_push_all, args=(payload,), daemon=True, name="notify-push").start()
         db.log(now, None, "notified", {"items": len(lines)})
-        return lines
+        return [t for _, t, _ in items]
 
     app.state.notify_due = notify_due
 

@@ -44,7 +44,7 @@ def test_a_failed_background_task_is_announced_once(tmp_path):
     app.state.notify_due(sync=True)
     app.state.db.log(clock(), "mac-m1", "task_failed", {"module": "docs", "error": "x"})
     assert app.state.notify_due(sync=True) == ["Falló docs en mac-m1."]
-    assert sent[-1]["url"] == "/#estado" and app.state.notify_due(sync=True) == []
+    assert sent[-1]["url"] == "/#diagnostico" and sent[-1]["title"] == "Una tarea falló" and app.state.notify_due(sync=True) == []
 
 
 def test_finished_inventory_and_docs_are_announced_but_chatter_is_not(tmp_path):
@@ -64,7 +64,7 @@ def test_several_things_become_one_message(tmp_path):
     for n in ("a", "b", "c", "d"):
         db.log(clock(), n, "task_failed", {"module": "inventory"})
     app.state.notify_due(sync=True)
-    assert len(sent) == 1 and sent[0]["body"].startswith("4 novedades") and sent[0]["body"].endswith("…")
+    assert len(sent) == 1 and sent[0]["title"] == "Ashur: 4 novedades" and sent[0]["body"].endswith("…")
 
 
 def test_while_he_sleeps_nothing_is_sent_and_the_news_arrives_at_dawn(tmp_path):

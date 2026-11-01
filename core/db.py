@@ -7,7 +7,9 @@ import hashlib
 import json
 import secrets
 import sqlite3
+import sys
 import threading
+import time
 from typing import Any, Optional
 
 SCHEMA = """
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS diary (            -- Sergio's own words; never leave
 CREATE INDEX IF NOT EXISTS diary_day ON diary (day);
 CREATE TABLE IF NOT EXISTS notes (            -- Sergio's own bug/idea notes about the panel, collected to hand to Claude in one go
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, text TEXT NOT NULL, ctx TEXT,
-    status TEXT NOT NULL DEFAULT 'open', author TEXT
+    status TEXT NOT NULL DEFAULT 'open', author TEXT, done_ts REAL
 );
 CREATE TABLE IF NOT EXISTS note_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL
@@ -155,6 +157,33 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+class TimedLock:
+    """The one lock every database call takes, which also remembers who held it too long or waited for it too long.
+    Slow moments land in SLOW (newest last) and show up in Diagnóstico, so a stall is measured instead of guessed."""
+    HOLD_S, WAIT_S = 1.0, 2.0
+
+    def __init__(self, slow: list):
+        self._lock = threading.Lock()
+        self._slow = slow
+        self._t = self._who = None
+        self._waited = 0.0
+
+    def __enter__(self):
+        t0 = time.monotonic()
+        self._lock.acquire()
+        self._t, self._waited = time.monotonic(), time.monotonic() - t0
+        self._who = sys._getframe(1).f_code.co_name
+        return self
+
+    def __exit__(self, *exc):
+        held, who, waited = time.monotonic() - self._t, self._who, self._waited
+        self._lock.release()
+        if held >= self.HOLD_S or waited >= self.WAIT_S:
+            self._slow.append({"at": time.time(), "held_s": round(held, 2), "waited_s": round(waited, 2), "who": who})
+            del self._slow[:-30]
+        return False
+
+
 class DB:
     def __init__(self, path: str = "ashur.db", echo: bool = False):
         self.echo = echo
@@ -165,9 +194,11 @@ class DB:
         try:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA busy_timeout=5000")
+            self.conn.execute("PRAGMA synchronous=NORMAL")      # in WAL this is safe against a crash of the program and about 10x cheaper per commit
         except sqlite3.DatabaseError:
             pass
-        self.lock = threading.Lock()
+        self.slow: list = []
+        self.lock = TimedLock(self.slow)
         with self.lock:
             self.conn.executescript(SCHEMA)
             self._migrate()
@@ -205,6 +236,8 @@ class DB:
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
         ncols2 = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
+        if "done_ts" not in ncols2:
+            self.conn.execute("ALTER TABLE notes ADD COLUMN done_ts REAL")
         if "author" not in ncols2:
             self.conn.execute("ALTER TABLE notes ADD COLUMN author TEXT")
         dcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(docs)")}
@@ -500,7 +533,7 @@ class DB:
 
     def notes_list(self) -> list[dict]:
         with self.lock:
-            rows = self.conn.execute("SELECT id, ts, text, ctx, status, author FROM notes ORDER BY id DESC").fetchall()
+            rows = self.conn.execute("SELECT id, ts, text, ctx, status, author, done_ts FROM notes ORDER BY id DESC").fetchall()
             imgs = self.conn.execute("SELECT id, note_id, mime FROM note_images ORDER BY id").fetchall()
         out = [dict(r, images=[]) for r in rows]
         by = {n["id"]: n for n in out}
@@ -514,9 +547,10 @@ class DB:
             r = self.conn.execute("SELECT mime, data FROM note_images WHERE id = ? AND note_id = ?", (image_id, note_id)).fetchone()
         return (r["mime"], bytes(r["data"])) if r else None
 
-    def note_set_status(self, note_id: int, status: str) -> bool:
+    def note_set_status(self, note_id: int, status: str, now: Optional[float] = None) -> bool:
         with self.lock:
-            cur = self.conn.execute("UPDATE notes SET status = ? WHERE id = ?", (status, note_id))
+            cur = self.conn.execute("UPDATE notes SET status = ?, done_ts = ? WHERE id = ?",
+                                    (status, now if status == "done" else None, note_id))
             self.conn.commit()
             return cur.rowcount > 0
 

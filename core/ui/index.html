@@ -595,6 +595,16 @@
   .nrow .acts button { margin: 0; width: auto; padding: 6px 12px; font-size: 13px; background: var(--field); color: var(--label); box-shadow: none; }
   .nrow.done .title { opacity: .5; text-decoration: line-through; }
   .nrow .title { white-space: normal; }
+  .fold > h2 { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+  .fold > h2::after { content: "›"; font-size: 20px; transform: rotate(90deg); transition: transform .3s var(--spring); opacity: .6; }
+  .fold.closed > :not(h2) { display: none; }
+  .fold.closed > h2::after { transform: rotate(0deg); }
+  .dhead { display: flex; align-items: center; justify-content: space-between; text-transform: none; font-size: 15px; letter-spacing: 0; }
+  .dhead::after { content: "›"; font-size: 20px; transform: rotate(90deg); transition: transform .3s var(--spring); opacity: .6; margin-left: 8px; }
+  .dhead.closed::after { transform: rotate(0deg); }
+  .dhead.closed + .group { display: none; }
+  .dhead .pen { margin: 0 0 0 auto; padding: 2px 10px; width: auto; font-size: 13px; background: var(--field); color: var(--secondary); box-shadow: none; border-radius: 999px; }
+  #signout-row { margin-top: 48px; }
 </style>
 
 </head>
@@ -684,7 +694,7 @@
     <section>
       <h2>Discos</h2>
       <div id="disks"></div>
-      <div class="note"><b>Incluido</b>: el inventario recorre ese disco y anota el nombre y el tamaño de sus archivos (no cambia ni borra nada). <b>Fuera</b>: lo salta. Un disco montado dentro de otro incluido se recorre junto con él. Toca un nombre para cambiarlo. Los externos que van y vienen se recuerdan aunque estén desconectados.</div>
+      <div class="note"><b>Incluido</b>: el inventario recorre ese disco y anota el nombre y el tamaño de sus archivos (no cambia ni borra nada). <b>Fuera</b>: lo salta. Un disco montado dentro de otro incluido se recorre junto con él. «Renombrar» cambia el nombre del equipo; toca el nombre de un disco para cambiar el suyo. Los externos que van y vienen se recuerdan aunque estén desconectados.</div>
     </section>
 
     <section>
@@ -815,7 +825,7 @@
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Pendientes</div></div>
       <section><h2>Por llevarle a Claude</h2><div class="group" id="notes-open"></div>
         <div class="row"><button type="button" id="notes-copy">Copiar texto para Claude</button></div>
-        <div class="row"><button type="button" id="notes-share" class="forget">Compartir con las imágenes</button></div>
+        <div class="row"><button type="button" id="notes-share" class="forget" style="color:var(--tint);padding:10px 16px;font-size:15px">Compartir con las imágenes</button></div>
         <div class="note" id="notes-note">Toca la banderita arriba a la derecha desde cualquier pestaña para anotar algo en el momento.</div></section>
       <section><h2>Resueltos</h2><div class="group" id="notes-done"></div></section>
     </div>
@@ -1168,6 +1178,21 @@
     }
   }
 
+  // a section whose title folds it away; the choice is remembered on this device
+  function foldable(sec, key, openByDefault) {
+    const h = sec.querySelector(":scope > h2"); if (!h || sec.classList.contains("fold")) return;
+    const k = "ashur.fold." + key; let open = openByDefault;
+    try { const v = localStorage.getItem(k); if (v !== null) open = v === "1"; } catch (e) {}
+    sec.classList.add("fold"); sec.classList.toggle("closed", !open);
+    h.addEventListener("click", () => { const c = sec.classList.toggle("closed"); try { localStorage.setItem(k, c ? "0" : "1"); } catch (e) {} });
+  }
+  function foldPages() {
+    for (const pg of document.querySelectorAll("#settings .page")) {
+      const name = pg.dataset.page;
+      if (!["update", "memory", "access", "voices", "docs", "space"].includes(name)) continue;
+      [...pg.querySelectorAll(":scope > section")].forEach((sec, i) => foldable(sec, name + "." + (sec.querySelector("h2")?.textContent || i), i === 0));
+    }
+  }
   // ---- notes: bugs and ideas jotted down on the spot, handed to Claude as one request -------------------
   let noteImgs = [], notesCache = [], panelVersion = "", notesLoaded = false;
   const noteCtx = () => ({ tab, page: document.querySelector(".page:not([hidden])")?.dataset.page || "", w: innerWidth, h: innerHeight, v: panelVersion, at: new Date().toLocaleString("es-CO") });
@@ -1205,13 +1230,38 @@
   $("note-save").addEventListener("click", async () => {
     const text = $("note-text").value.trim(); if (!text) { $("note-err").textContent = "Escribe algo primero."; return; }
     const b = $("note-save"); b.disabled = true;
+    const body = { text, ctx: JSON.stringify(noteCtx()), images: noteImgs };
     try {
-      const r = await api(role === "admin" ? "api/notes" : "api/feedback", { method: "POST", body: JSON.stringify({ text, ctx: JSON.stringify(noteCtx()), images: noteImgs }) });
-      if (!r.ok) throw new Error((await r.json()).detail || "No se guardó");
+      await sendNote(body);
       $("note-sheet").hidden = true; loadNotes();
-    } catch (e) { $("note-err").textContent = "No se guardó: " + e.message; }
+    } catch (e) {
+      if (e.offline) {                                   // no connection: keep it on this device and send it when the core answers again
+        if (queueNote(body)) { $("note-sheet").hidden = true; toastNote("Sin conexión: guardada en este dispositivo, se envía sola al volver."); }
+        else $("note-err").textContent = "Sin conexión y no cabe en este dispositivo: quita las imágenes o intenta de nuevo.";
+      } else $("note-err").textContent = "No se guardó: " + e.message;
+    }
     b.disabled = false;
   });
+  function spanText(s) { return s < 90 ? Math.round(s) + " s" : s < 5400 ? Math.round(s / 60) + " min" : s < 129600 ? (Math.round(s / 360) / 10) + " h" : (Math.round(s / 8640) / 10) + " días"; }
+  async function sendNote(body) {
+    let r;
+    try { r = await api(role === "admin" ? "api/notes" : "api/feedback", { method: "POST", body: JSON.stringify(body) }); }
+    catch (e) { const x = new Error("sin conexión"); x.offline = true; throw x; }
+    if (r.status >= 500 || r.status === 0) { const x = new Error("el núcleo no responde"); x.offline = true; throw x; }
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "No se guardó");
+  }
+  const NQ = "ashur.noteq";
+  function readQ() { try { return JSON.parse(localStorage.getItem(NQ) || "[]"); } catch (e) { return []; } }
+  function queueNote(body) { try { localStorage.setItem(NQ, JSON.stringify([...readQ(), body])); return true; } catch (e) { return false; } }
+  let flushing = false;
+  async function flushNotes() {                          // called on every successful refresh: the connection is back
+    const q = readQ(); if (!q.length || flushing) return; flushing = true;
+    const left = [];
+    for (const [i, body] of q.entries()) { try { await sendNote(body); } catch (e) { left.push(...q.slice(i)); break; } }
+    try { localStorage.setItem(NQ, JSON.stringify(left)); } catch (e) {}
+    flushing = false; if (left.length < q.length) loadNotes();
+  }
+  function toastNote(t) { const n = $("notes-note"); if (n) n.textContent = t; $("subtitle-text").textContent = t; }
   function noteLine(n, i) {
     let c = {}; try { c = JSON.parse(n.ctx || "{}"); } catch (e) {}
     return (i + 1) + ". [" + (n.author && n.author !== "Sergio" ? "opinión de " + n.author + " · " : "") + (c.page || c.tab || "?") + (c.at ? " · " + c.at : "") + (c.w ? " · " + c.w + "×" + c.h : "") + "] " + n.text + (n.images.length ? " (" + n.images.length + " imagen" + (n.images.length > 1 ? "es" : "") + ")" : "");
@@ -1226,7 +1276,7 @@
       const draw = (list) => list.map((n) => {
         let c = {}; try { c = JSON.parse(n.ctx || "{}"); } catch (e) {}
         const r = el("div", "row nrow" + (n.status === "done" ? " done" : "")); const m = el("div", "main");
-        m.append(el("div", "title", n.text), el("div", "detail", (n.author && n.author !== "Sergio" ? "de " + n.author + " · " : "") + (c.page || c.tab || "") + (c.at ? " · " + c.at : "") + (c.w ? " · " + c.w + "×" + c.h : "")));
+        m.append(el("div", "title", n.text), el("div", "detail", (n.author && n.author !== "Sergio" ? "de " + n.author + " · " : "") + (c.page || c.tab || "") + (c.at ? " · " + c.at : "") + (c.w ? " · " + c.w + "×" + c.h : "") + (n.done_ts ? " · resuelto en " + spanText(n.done_ts - n.ts) : "")));
         if (n.images.length) {
           const t = el("div", "thumbs"); m.append(t);
           for (const im of n.images) api("api/notes/" + n.id + "/images/" + im.id).then((x) => x.blob()).then((bl) => { const i = el("img"); i.src = URL.createObjectURL(bl); t.append(i); }).catch(() => {});
@@ -1309,8 +1359,16 @@
       }
       for (const n of d.nodes) {
         const { h, g } = diskBoxes[n.node_id];
-        h.textContent = nm(n.node_id) + (n.online ? "" : " · desconectado");
-        h.onclick = () => rename("node:" + n.node_id, NAMES["node:" + n.node_id]);
+        if (!h._init) {
+          h._init = true; h.append(el("span", "nm"));
+          const pen = el("button", "pen", "Renombrar"); pen.type = "button";
+          pen.onclick = (ev) => { ev.stopPropagation(); rename("node:" + n.node_id, NAMES["node:" + n.node_id]); };
+          h.append(pen);
+          let closed = true; try { const v = localStorage.getItem("ashur.fold.disk." + n.node_id); if (v !== null) closed = v === "0"; } catch (e) {}
+          h.classList.toggle("closed", closed);
+          h.addEventListener("click", () => { const c = h.classList.toggle("closed"); try { localStorage.setItem("ashur.fold.disk." + n.node_id, c ? "0" : "1"); } catch (e) {} });
+        }
+        h.querySelector(".nm").textContent = nm(n.node_id) + " · " + n.disks.length + (n.disks.length === 1 ? " disco" : " discos") + (n.online ? "" : " · desconectado");
         put(g, n.disks.map((x) => {
           const r = el("div", "row disk");
           if (x.present) r.append(el("span", "dot " + (x.scan ? "full" : "offline")));
@@ -1347,6 +1405,8 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
       render(data);
+      flushNotes();
+      if (startHash) { const h = startHash; startHash = ""; openWhere(h); }
       if (tab === "status") loadDisks(); else loadNames();
       $("note-fab").hidden = false; if (role === "admin" && (tab === "settings" || !notesLoaded)) { notesLoaded = true; loadNotes(); }
       showBudget(data.budget);
@@ -1377,6 +1437,11 @@
     er.hidden = !error; er.textContent = error || "";
     $("key").focus();
   }
+  // a notification (or a link) says where it should land: a tab, or a page inside Ajustes
+  const WHERE = { "#diario": ["diary"], "#estado": ["status"], "#memoria": ["settings", "memory"], "#diagnostico": ["settings", "diag"],
+                  "#actualizacion": ["settings", "update"], "#pendientes": ["settings", "notes"] };
+  function openWhere(h) { const w = WHERE[h]; if (!w) return; showTab(w[0]); if (w[1]) showPage(w[1]); }
+  let startHash = location.hash;
   // --- tabs ---------------------------------------------------------------
   let tab = "chat";
   try { tab = localStorage.getItem("ashur.tab") || "chat"; } catch (e) {}
@@ -1410,7 +1475,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
+    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -1933,7 +1998,12 @@
     unlocked = false;
     refresh();
   });
-  $("signout").addEventListener("click", () => showSignin());
+  $("signout").addEventListener("click", () => {          // far from the thumb and two taps: it is easy to hit by accident
+    const b = $("signout");
+    if (b.dataset.sure) { delete b.dataset.sure; showSignin(); return; }
+    b.dataset.sure = 1; b.textContent = "Toca otra vez para olvidar la clave";
+    setTimeout(() => { delete b.dataset.sure; b.textContent = "Olvidar la clave en este navegador"; }, 3000);
+  });
 
 
   // --- commands: what has to be typed on each machine, one tap to copy ---
@@ -1997,6 +2067,8 @@
         return row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + clock(p.ts) });
       }), "Sin errores recientes.", 8);
       for (const x of $("diag-errors").querySelectorAll(".title")) x.style.whiteSpace = "normal";
+      if ((d.slow || []).length) { lines.push("Momentos lentos del núcleo (desde que arrancó):"); for (const x of d.slow) lines.push(clock(x.ts) + " " + x.text); }
+      else lines.push("Momentos lentos del núcleo: ninguno desde que arrancó");
       diagText = lines.join("\n");
     } catch (e) { $("diag-note").textContent = "No pude cargar el diagnóstico."; }
   }
@@ -2045,7 +2117,7 @@
         });
         line.append(code, b); c.append(line); g.append(c);
       }
-      sec.append(g); root.append(sec);
+      sec.append(g); root.append(sec); foldable(sec, "cmds." + title, false);
     }
   }
   // --- diary --------------------------------------------------------------
@@ -2209,10 +2281,9 @@
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", (ev) => {
       const o = ev.data && ev.data.open;
-      if (unlocked && o === "/#diario") showTab("diary");
-      if (unlocked && o === "/#estado") showTab("status");
+      if (unlocked && o) openWhere(o.replace("/", ""));
     });
-    window.addEventListener("hashchange", () => { if (unlocked && location.hash === "#diario") showTab("diary"); if (unlocked && location.hash === "#estado") showTab("status"); });
+    window.addEventListener("hashchange", () => { if (unlocked) openWhere(location.hash); });
     swReg();
   }
 

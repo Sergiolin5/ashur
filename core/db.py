@@ -484,6 +484,17 @@ class DB:
     def last_inventory_task(self, node_id: str) -> Optional[dict]:
         return self.last_module_task("inventory", node_id)
 
+    def ensure_report_indexes(self) -> None:
+        """The duplicates report looked each group up by hash with no index: one full pass over every inventory row
+        per group (a million-plus rows, 30 groups). Small partial indexes make it read only the hashed files."""
+        c = sqlite3.connect(self.path, timeout=60)
+        try:
+            c.execute("CREATE INDEX IF NOT EXISTS inv_hash ON inventory (hash, size) WHERE hash IS NOT NULL")
+            c.execute("CREATE INDEX IF NOT EXISTS inv_size ON inventory (size) WHERE kind = 'file'")
+            c.commit()
+        finally:
+            c.close()
+
     def inventory_report_readonly(self, min_size: int = 1 << 20, top: int = 30) -> dict:
         """Duplicates (same hash and size, 1 MB or more) and the largest files, on its own
         connection so the panel never waits for it. Sensitive files have no hash: never listed."""
@@ -497,7 +508,7 @@ class DB:
                 (min_size, top)).fetchall()
             dups = []
             for g in groups:
-                files = c.execute("SELECT node_id, path FROM inventory WHERE hash = ? AND size = ? LIMIT 10",
+                files = c.execute("SELECT node_id, path FROM inventory WHERE hash IS NOT NULL AND hash = ? AND size = ? LIMIT 10",
                                   (g["hash"], g["size"])).fetchall()
                 dups.append({"size": g["size"], "count": g["n"], "wasted": g["size"] * (g["n"] - 1),
                              "files": [dict(f) for f in files]})

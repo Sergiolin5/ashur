@@ -819,3 +819,18 @@ def test_local_chat_finds_files_by_name_never_sensitive_or_contents(env):
     assert "playa.jpg" in both and "discord_setup.exe" in both
     assert "no hay ninguno" in brain.files_context("dónde está mi contrato de alquiler")
     assert brain.files_context("cuéntame un chiste") == ""
+
+
+def test_duplicate_report_uses_its_indexes(env):
+    c, _ = env
+    db = c.app.state.db
+    db.inventory_add("a", [{"path": f"/x/{i}", "kind": "file", "size": 2 << 20, "hash": "h%d" % (i % 3)} for i in range(9)])
+    db.ensure_report_indexes()
+    db.ensure_report_indexes()                                            # idempotent
+    import sqlite3
+    q = sqlite3.connect(db.path)
+    plan = " ".join(r[3] for r in q.execute(
+        "EXPLAIN QUERY PLAN SELECT node_id, path FROM inventory WHERE hash IS NOT NULL AND hash = 'h1' AND size = 2097152 LIMIT 10"))
+    assert "inv_hash" in plan
+    rep = db.inventory_report_readonly()
+    assert rep["duplicate_groups"] == 3 and rep["wasted"] == 6 * (2 << 20)

@@ -287,6 +287,10 @@ def run(payload: dict, ctx) -> dict:
     import json
 
     cfg = getattr(ctx, "config", {}) or {}
+    if "roots" in payload and not payload["roots"]:
+        # the core sends an empty list when no disk is switched on: nothing to walk, and nothing to upload.
+        # An upload with no rows would reset (wipe) this device's inventory.
+        return {"roots": [], "entries": 0, "skipped": "ningún disco elegido para escanear"}
     roots = payload.get("roots") or cfg.get("inventory_roots") or default_roots()
     task_id = getattr(ctx, "task_id", None)
     state = getattr(ctx, "state_dir", None)

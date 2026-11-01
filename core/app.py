@@ -180,7 +180,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.40.3", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -334,21 +334,20 @@ def create_app(
             return {}
 
     def inventory_payload(node_id: str) -> dict:
-        """Which disks to scan: Sergio's choices, when he made any; otherwise the node decides (every real disk)."""
+        """Which disks to scan. Off by default: a disk is walked only once Sergio switches it on. A node that has not
+        reported its disks yet gets an empty list, so it scans nothing rather than everything."""
         pol = disk_policy(node_id)
         node = next((n for n in db.nodes() if n["id"] == node_id), None)
-        if not pol or not node or not node.get("disks"):
-            return {}
-        on = [d["mount"] for d in node["disks"] if d.get("present") and pol.get(d["key"], d["scanned"])]
-        off = [d["mount"] for d in node["disks"] if d.get("present") and not pol.get(d["key"], d["scanned"])]
+        if not node or not node.get("disks"):
+            return {"roots": []}
+        on = [d["mount"] for d in node["disks"] if d.get("present") and pol.get(d["key"], False)]
+        off = [d["mount"] for d in node["disks"] if d.get("present") and not pol.get(d["key"], False)]
 
         def inside(m: str, r: str) -> bool:
             a, b = m.replace("\\", "/").rstrip("/").lower(), r.replace("\\", "/").rstrip("/").lower()
             return a != b and a.startswith(b + "/")
         roots = [m for m in on if not any(inside(m, r) for r in on)]          # a disk inside another chosen one is walked by it
         exclude = [m for m in off if any(inside(m, r) for r in roots)]        # a switched-off disk inside a chosen one is skipped
-        if not roots:
-            return {}
         return {"roots": roots, **({"exclude": exclude} if exclude else {})}
 
     def names() -> dict:
@@ -385,7 +384,7 @@ def create_app(
                 continue
             pol = disk_policy(n["id"])
             out.append({"node_id": n["id"], "online": n["mode"] != Mode.OFFLINE.value, "disks": [
-                dict(d, kind=disk_kind(d, now), scan=bool(pol.get(d["key"], d["scanned"]))) for d in n["disks"]]})
+                dict(d, kind=disk_kind(d, now), scan=bool(pol.get(d["key"], False))) for d in n["disks"]]})
         return {"nodes": out, "now": now}
 
     class DiskChoice(BaseModel):
@@ -399,8 +398,6 @@ def create_app(
         if not node or not any(d["key"] == c.key for d in node.get("disks") or []):
             raise HTTPException(404, "disco desconocido")
         pol = disk_policy(c.node_id)
-        for d in node["disks"]:                       # the first choice freezes the current state of the others
-            pol.setdefault(d["key"], d["scanned"])
         pol[c.key] = c.scan
         db.set_setting(f"disk_scan:{c.node_id}", json.dumps(pol))
         db.log(clock(), c.node_id, "disk_choice", {"disk": next(d["mount"] for d in node["disks"] if d["key"] == c.key), "scan": c.scan})
@@ -687,7 +684,7 @@ def create_app(
                     add("AVISO", f"Discos de {n['id']}", "aún no los ha informado (hace falta el código v0.34.0 y unos 10 min)")
                     continue
                 pol = disk_policy(n["id"])
-                ds = [dict(d, scanned=bool(pol.get(d["key"], d["scanned"]))) for d in ds]
+                ds = [dict(d, scanned=bool(pol.get(d["key"], False))) for d in ds]
                 here = [d for d in ds if d["present"]]
                 away = [d for d in ds if not d["present"]]
                 miss = [d for d in here if not d["scanned"]]
@@ -771,7 +768,7 @@ def create_app(
             elif core_v and not n.code_version:
                 hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
-                          "code_label": n.code_label, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], x["scanned"]))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint})
+                          "code_label": n.code_label, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint})
         problems = []
         for ev in db.log_rows(600):
             if ev["event"] in DIAG_EVENTS:

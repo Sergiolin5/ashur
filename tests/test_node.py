@@ -211,7 +211,7 @@ def test_container_node_config_and_enroll_key_file(tmp_path, monkeypatch):
     assert enroll_key_from_env() == "EK"                       # never the admin key
 
 
-def test_server_node_scans_its_configured_roots(core, tmp_path):
+def test_server_node_scans_nothing_until_the_core_names_a_disk(core, tmp_path):
     c, _ = core
     data = tmp_path / "DATA"
     make_disk(data)
@@ -219,11 +219,13 @@ def test_server_node_scans_its_configured_roots(core, tmp_path):
            "yield_policy": "always_full", "inventory_roots": [str(data)]}
     agent = Agent(cfg, client=c, policy=Policy("always_full"), state=tmp_path / "s")
     agent.load_modules()
-    agent.register(ENROLL)                                     # first join queues a scan with no roots
+    agent.register(ENROLL)                                     # first join queues a scan: the core sends no roots yet
     agent.tick()
     agent.worker.join(timeout=10)
     task = c.get("/tasks/1", headers=A).json()
-    assert task["status"] == "done" and task["result"]["result"]["roots"] == [str(data)]
+    # off by default: the core sends an empty list, and the node's own config must not turn scanning back on
+    assert task["status"] == "done" and task["result"]["result"]["roots"] == []
+    assert task["result"]["result"]["entries"] == 0
 
 
 def test_config_written_by_powershell_with_bom_loads(tmp_path):

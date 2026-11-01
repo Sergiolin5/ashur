@@ -621,7 +621,7 @@ def test_disks_reach_diagnostics_and_unscanned_ones_are_visible(env):
                                       {"mount": "D:\\", "fstype": "NTFS", "total": 900, "used": 100, "scanned": False, "x": 1}]}
     assert c.post("/nodes/mac/heartbeat", headers=h, json=beat).status_code == 200
     ds = c.get("/api/diagnostics", headers=A).json()["nodes"][0]["disks"]
-    assert sorted(d["scanned"] for d in ds) == [False, True] and all("x" not in d for d in ds)
+    assert sorted(d["scanned"] for d in ds) == [False, False] and all("x" not in d for d in ds)   # off until switched on
 
 
 def test_a_disk_that_comes_and_goes_is_told_apart_from_a_fixed_one():
@@ -664,14 +664,31 @@ def test_disk_choices_decide_which_roots_the_next_inventory_scans(env):
                                       {"device": "b", "mount": "/Volumes/X", "fstype": "exfat", "total": 900, "used": 1, "scanned": False}]}
     assert c.post("/nodes/mac/heartbeat", headers=h, json=hb).status_code == 200
     v = c.get("/api/disks", headers=A).json()["nodes"][0]
-    assert [d["scan"] for d in v["disks"]] == [False, True]               # biggest first: the USB (off) then the main disk (on)
+    assert [d["scan"] for d in v["disks"]] == [False, False]              # off by default: nothing is scanned yet
+    assert c.post("/nodes/mac/heartbeat", headers=h, json=hb).status_code == 200
     usb = v["disks"][0]
     assert c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": "nope", "scan": True}).status_code == 404
     assert c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": usb["key"], "scan": True}).status_code == 200
+    main = [d for d in v["disks"] if d["mount"] == "/"][0]
+    assert c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": main["key"], "scan": True}).status_code == 200
     assert all(d["scan"] for d in c.get("/api/disks", headers=A).json()["nodes"][0]["disks"])
     assert c.post("/api/inventory/refresh", headers=A).json()["queued"] == ["mac"]
     task = c.get("/nodes/mac/tasks/next", headers=h).json()
     assert task["payload"]["roots"] == ["/"]                  # /Volumes/X sits inside "/", so walking "/" covers it
+
+
+def test_nothing_is_scanned_until_a_disk_is_switched_on(env):
+    c, _ = env
+    h = register(c, simulated=False)
+    beat(c, h)
+    first = c.get("/nodes/mac/tasks/next", headers=h).json()          # first-join scan, before any disk is known
+    assert first["payload"] == {"roots": []}
+    c.post(f"/tasks/{first['id']}/result", headers=h, json={"ok": True})
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "full", "disks": [
+        {"device": "a", "mount": "/", "fstype": "ext4", "total": 500, "used": 1, "scanned": True}]})
+    c.post("/api/inventory/refresh", headers=A)
+    assert c.get("/nodes/mac/tasks/next", headers=h).json()["payload"] == {"roots": []}   # on is never inferred
+    assert c.get("/api/disks", headers=A).json()["nodes"][0]["disks"][0]["scan"] is False
 
 
 def test_nested_disks_are_covered_by_their_parent_and_exclusions_are_sent(env):
@@ -685,7 +702,11 @@ def test_nested_disks_are_covered_by_their_parent_and_exclusions_are_sent(env):
     hb = {"mode": "full", "disks": [{"device": "a", "mount": "/host/DATA", "fstype": "ext4", "total": 900, "used": 1, "scanned": True},
                                     {"device": "b", "mount": "/host/DATA/.media/USB", "fstype": "ntfs", "total": 500, "used": 1, "scanned": True}]}
     c.post("/nodes/mac/heartbeat", headers=h, json=hb)
-    usb = [d for d in c.get("/api/disks", headers=A).json()["nodes"][0]["disks"] if d["mount"].endswith("USB")][0]
+    disks_now = c.get("/api/disks", headers=A).json()["nodes"][0]["disks"]
+    usb = [d for d in disks_now if d["mount"].endswith("USB")][0]
+    main = [d for d in disks_now if d["mount"] == "/host/DATA"][0]
+    c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": main["key"], "scan": True})
+    c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": usb["key"], "scan": True})
     c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": usb["key"], "scan": False})
     c.post("/api/inventory/refresh", headers=A)
     p = c.get("/nodes/mac/tasks/next", headers=h).json()["payload"]

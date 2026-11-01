@@ -152,24 +152,35 @@ def create_app(
         if sweep_every_s:
             async def loop():
                 last_summary_check = 0.0
-                while True:
-                    await asyncio.sleep(sweep_every_s)
+
+                def tick(due: bool) -> None:
+                    # These touch the database (sometimes the lock another thread holds for seconds). Run on the event
+                    # loop they froze every request and heartbeat with them; in a worker thread only they wait.
                     sweep()
-                    if clock() - last_summary_check >= 60:       # retry pending summaries now and then
-                        last_summary_check = clock()
+                    if due:
                         app.state.summarize_soon()
                         app.state.inventory_due()
                         app.state.docs_due()
                         app.state.diary_due()
                         app.state.notify_due()
                         app.state.propose_due()
+
+                while True:
+                    await asyncio.sleep(sweep_every_s)
+                    due = clock() - last_summary_check >= 60      # retry pending summaries now and then
+                    if due:
+                        last_summary_check = clock()
+                    try:
+                        await asyncio.to_thread(tick, due)
+                    except Exception as e:
+                        db.log(clock(), None, "periodic_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
             task = asyncio.create_task(loop())
         yield
         if task:
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.40.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep

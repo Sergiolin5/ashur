@@ -59,6 +59,7 @@ def describe(event: str, d: dict) -> str:
         "diary_reminder": "te recordé escribir en el diario" + (" (segundo aviso)" if d.get("which") == "second" else ""),
         "push_subscribed": "activaste los avisos en un dispositivo",
         "feedback_received": f"{d.get('from')} dejó una opinión (Ajustes → Pendientes)",
+        "periodic_failed": f"falló una tarea periódica del núcleo: {d.get('error')}",
         "disk_choice": f"{'activaste' if d.get('scan') else 'quitaste'} el escaneo del disco {d.get('disk')}",
         "node_problem": f"el equipo avisó: {d.get('text')}",
         "push_failed": f"no pude enviar un aviso: {d.get('error')}",

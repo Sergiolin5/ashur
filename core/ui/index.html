@@ -1395,7 +1395,7 @@
   }
   $("notes-copy").addEventListener("click", async () => {
     const b = $("notes-copy");
-    try { await navigator.clipboard.writeText(notesText()); b.textContent = "Copiado: pégalo en el chat"; } catch (e) { b.textContent = "No pude copiar"; }
+    try { await navigator.clipboard.writeText(notesText()); b.textContent = "Copiado: pégalo en el chat"; } catch (e) { b.textContent = "No pude copiar"; showCopy(notesText()); }
     setTimeout(() => { b.textContent = "Copiar texto para Claude"; }, 2500);
   });
   $("notes-share").addEventListener("click", async () => {
@@ -2324,18 +2324,34 @@
       if (stText) {
         $("st-out").textContent = stText; $("st-out").hidden = false; $("st-copy").hidden = false;
         note.textContent = stText.split("\n")[0];
-        try { await navigator.clipboard.writeText(stText); note.textContent += ". Copiado: pégamelo en el chat."; } catch (e) { note.textContent += ". Toca «Copiar informe»."; }
+        try { await navigator.clipboard.writeText(stText); note.textContent += ". Copiado: pégamelo en el chat."; } catch (e) { note.textContent += ". Toca «Copiar informe»."; showCopy(stText); }
       } else { note.textContent = "La prueba no terminó. Inténtalo otra vez."; }
     } catch (e) { note.textContent = "No pude lanzar la prueba."; }
     b.disabled = false; b.textContent = "Probar todo";
   });
+  // iOS refuses clipboard writes once the tap that started them is old (a slow report): show the text, selected, to copy by hand or share
+  function showCopy(text) {
+    const old = document.getElementById("copy-sheet"); if (old) old.remove();
+    const w = el("div"); w.id = "copy-sheet";
+    w.style.cssText = "position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center";
+    const box = el("div"); box.style.cssText = "width:100%;max-width:560px;background:var(--bg,#fff);border-radius:20px 20px 0 0;padding:14px;max-height:80vh;display:flex;flex-direction:column;gap:8px";
+    const ta = el("textarea"); ta.readOnly = true; ta.value = text;
+    ta.style.cssText = "width:100%;height:42vh;font:12px/1.4 ui-monospace,monospace;border:0;border-radius:10px;padding:10px;background:var(--field);color:var(--label)";
+    const row1 = el("div"); row1.style.cssText = "display:flex;gap:8px";
+    const sh = el("button", null, "Compartir"); sh.type = "button";
+    sh.addEventListener("click", async () => { try { await navigator.share({ text }); } catch (e) {} });
+    const cl = el("button", "link", "Cerrar"); cl.type = "button"; cl.addEventListener("click", () => w.remove());
+    if (navigator.share) row1.append(sh); row1.append(cl);
+    box.append(el("div", "note", "No pude copiar solo. Mantén pulsado el texto → Seleccionar todo → Copiar, o usa Compartir."), ta, row1);
+    w.append(box); document.body.append(w); ta.focus(); ta.select();
+  }
   $("st-copy").addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(stText); $("st-copy").textContent = "Copiado"; } catch (e) { $("st-copy").textContent = "No pude copiar"; }
+    try { await navigator.clipboard.writeText(stText); $("st-copy").textContent = "Copiado"; } catch (e) { $("st-copy").textContent = "No pude copiar"; showCopy(stText); }
     setTimeout(() => { $("st-copy").textContent = "Copiar informe"; }, 2000);
   });
   $("diag-copy").addEventListener("click", async () => {
     const b = $("diag-copy");
-    try { await navigator.clipboard.writeText(diagText); b.textContent = "Copiado"; } catch (e) { b.textContent = "No pude copiar"; }
+    try { await navigator.clipboard.writeText(diagText); b.textContent = "Copiado"; } catch (e) { b.textContent = "No pude copiar"; showCopy(diagText); }
     setTimeout(() => { b.textContent = "Copiar todo para pegárselo a Claude"; }, 2000);
   });
   function renderCmds() {

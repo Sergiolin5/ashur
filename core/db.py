@@ -193,6 +193,9 @@ class DB:
         gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
+        dcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(docs)")}
+        if "first_rowid" not in dcols:                 # where a document's chunks start in doc_chunks (see docs_apply)
+            self.conn.execute("ALTER TABLE docs ADD COLUMN first_rowid INTEGER")
         ucols = {r["name"] for r in self.conn.execute("PRAGMA table_info(usage)")}
         if "user" not in ucols:
             self.conn.execute("ALTER TABLE usage ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
@@ -528,22 +531,41 @@ class DB:
         return [dict(r) for r in rows]
 
     # --- documents: the text Sergio's files contain, searchable (SQLite FTS5) ----------
+    def _drop_doc_chunks(self, node_id: str, path: str) -> None:
+        """Delete one document's chunks. doc_chunks has no index on node_id/path (they are UNINDEXED FTS columns), so a
+        delete by them scans the whole table: ~0.1 s at 190k chunks, per document, inside the global lock, which made
+        heartbeats time out. docs remembers where each document's chunks start, so those are deleted by rowid."""
+        row = self.conn.execute("SELECT first_rowid, chunks FROM docs WHERE node_id = ? AND path = ?",
+                                (node_id, path)).fetchone()
+        if row is None:
+            return                                     # never indexed: nothing to delete, no scan
+        if row["first_rowid"] is not None:
+            if row["chunks"]:
+                self.conn.execute("DELETE FROM doc_chunks WHERE rowid BETWEEN ? AND ?",
+                                  (row["first_rowid"], row["first_rowid"] + row["chunks"] - 1))
+        else:                                          # indexed before this column existed: one slow delete, then it is tracked
+            self.conn.execute("DELETE FROM doc_chunks WHERE node_id = ? AND path = ?", (node_id, path))
+
     def docs_apply(self, node_id: str, upserts: list[dict], deletes: list[str]) -> dict:
         """upserts: [{path, modified, chunks:[text]}]. A document's old chunks are replaced whole."""
         n_chunks = 0
         with self.lock:
             for path in deletes:
-                self.conn.execute("DELETE FROM doc_chunks WHERE node_id = ? AND path = ?", (node_id, path))
+                self._drop_doc_chunks(node_id, path)
                 self.conn.execute("DELETE FROM docs WHERE node_id = ? AND path = ?", (node_id, path))
             for d in upserts:
-                self.conn.execute("DELETE FROM doc_chunks WHERE node_id = ? AND path = ?", (node_id, d["path"]))
-                self.conn.execute(
-                    "INSERT INTO docs (node_id, path, modified, chunks) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(node_id, path) DO UPDATE SET modified = excluded.modified, chunks = excluded.chunks",
-                    (node_id, d["path"], d.get("modified"), len(d["chunks"])))
+                self._drop_doc_chunks(node_id, d["path"])
                 self.conn.executemany(
                     "INSERT INTO doc_chunks (content, node_id, path, seq) VALUES (?, ?, ?, ?)",
                     [(c, node_id, d["path"], i) for i, c in enumerate(d["chunks"])])
+                first = None
+                if d["chunks"]:                        # rowids of one executemany under the lock are consecutive
+                    first = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0] - len(d["chunks"]) + 1
+                self.conn.execute(
+                    "INSERT INTO docs (node_id, path, modified, chunks, first_rowid) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(node_id, path) DO UPDATE SET modified = excluded.modified, chunks = excluded.chunks, "
+                    "first_rowid = excluded.first_rowid",
+                    (node_id, d["path"], d.get("modified"), len(d["chunks"]), first))
                 n_chunks += len(d["chunks"])
             self.conn.commit()
         return {"documents": len(upserts), "removed": len(deletes), "chunks": n_chunks}

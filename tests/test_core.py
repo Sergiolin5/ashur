@@ -587,3 +587,21 @@ def test_node_helpers_never_open_a_console_window_on_windows(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert metrics._nvidia() == 12.0
     assert seen["creationflags"] == 0x08000000
+
+
+def test_docs_replace_deletes_only_that_documents_chunks_and_never_scans_for_new_ones(tmp_path):
+    from core.db import DB
+    db = DB(str(tmp_path / "d.db"))
+    db.docs_apply("n", [{"path": "a", "modified": 1, "chunks": ["alfa uno", "alfa dos"]},
+                        {"path": "b", "modified": 1, "chunks": ["beta uno"]}], [])
+    db.docs_apply("n", [{"path": "a", "modified": 2, "chunks": ["alfa nuevo"]}], [])         # replaced whole
+    got = lambda w: [r["path"] for r in db.docs_search([w], limit=10)]
+    assert got("alfa") == ["a"] and got("beta") == ["b"] and not got("uno") == [] or got("uno") == ["b"]
+    assert db.conn.execute("SELECT COUNT(*) FROM doc_chunks WHERE path = 'a'").fetchone()[0] == 1
+    db.docs_apply("n", [], ["b"])                                                             # removed
+    assert db.conn.execute("SELECT COUNT(*) FROM doc_chunks WHERE path = 'b'").fetchone()[0] == 0
+    # a document indexed before first_rowid existed is still replaced correctly
+    db.conn.execute("INSERT INTO doc_chunks (content,node_id,path,seq) VALUES ('viejo','n','c',0)")
+    db.conn.execute("INSERT INTO docs (node_id,path,modified,chunks,first_rowid) VALUES ('n','c',1,1,NULL)")
+    db.docs_apply("n", [{"path": "c", "modified": 2, "chunks": ["nuevo"]}], [])
+    assert [r[0] for r in db.conn.execute("SELECT content FROM doc_chunks WHERE path='c'")] == ["nuevo"]

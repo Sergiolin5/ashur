@@ -88,6 +88,14 @@ def merge_disks(known, reported, now: float) -> list:
     return sorted(out.values(), key=lambda d: (not d["present"], -(d.get("total") or 0)))[:32]
 
 
+def disk_notes(d: dict, now: float) -> str:
+    """What is worth saying about a disk besides its size: nothing for a plain fixed or brand-new disk."""
+    kind = disk_kind(d, now)
+    if kind == "nuevo" and d.get("connected_s", 0) < 360:
+        return ""
+    return f", {kind}, {d.get('connected_s', 0) / 3600:.1f} h conectado en {d.get('sessions', 1)} veces"
+
+
 def disk_kind(d: dict, now: float) -> str:
     """fijo (nearly always there), intermitente (comes and goes) or nuevo (seen for less than a day)."""
     if now - d.get("first_seen", now) < 86400 or d.get("reports", 0) < 3:
@@ -161,7 +169,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.34.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.35.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -307,8 +315,42 @@ def create_app(
         node = next((n for n in db.nodes() if n["id"] == node_id), None)
         if not pol or not node or not node.get("disks"):
             return {}
-        roots = [d["mount"] for d in node["disks"] if d.get("present") and pol.get(d["key"], d["scanned"])]
-        return {"roots": roots} if roots else {}
+        on = [d["mount"] for d in node["disks"] if d.get("present") and pol.get(d["key"], d["scanned"])]
+        off = [d["mount"] for d in node["disks"] if d.get("present") and not pol.get(d["key"], d["scanned"])]
+
+        def inside(m: str, r: str) -> bool:
+            a, b = m.replace("\\", "/").rstrip("/").lower(), r.replace("\\", "/").rstrip("/").lower()
+            return a != b and a.startswith(b + "/")
+        roots = [m for m in on if not any(inside(m, r) for r in on)]          # a disk inside another chosen one is walked by it
+        exclude = [m for m in off if any(inside(m, r) for r in roots)]        # a switched-off disk inside a chosen one is skipped
+        if not roots:
+            return {}
+        return {"roots": roots, **({"exclude": exclude} if exclude else {})}
+
+    def names() -> dict:
+        try:
+            return json.loads(db.setting("names", "{}") or "{}")
+        except ValueError:
+            return {}
+
+    @app.get("/api/names", dependencies=[Depends(require_admin)])
+    def names_get():
+        return names()
+
+    class NameChoice(BaseModel):
+        key: str = Field(max_length=300)
+        name: str = Field(default="", max_length=60)
+
+    @app.post("/api/names", dependencies=[Depends(require_admin)])
+    def names_set(c: NameChoice):
+        """A friendlier name for a device ("node:ryzen9") or one of its disks ("disk:ryzen9:<key>"). Empty clears it."""
+        cur = names()
+        if c.name.strip():
+            cur[c.key] = c.name.strip()
+        else:
+            cur.pop(c.key, None)
+        db.set_setting("names", json.dumps(cur))
+        return cur
 
     @app.get("/api/disks", dependencies=[Depends(require_admin)])
     def disks_view():
@@ -613,7 +655,6 @@ def create_app(
             add("OK" if (count("SELECT COUNT(*) FROM docs") or 0) else "AVISO", "Documentos", f"{count('SELECT COUNT(*) FROM docs')} archivos, {count('SELECT COUNT(*) FROM doc_chunks')} fragmentos")
             add("OK", "Inventario", f"{count('SELECT COUNT(*) FROM inventory')} filas")
             gb = lambda b: f"{b / 1e9:.0f} GB"
-            hours = lambda d: f"{d.get('connected_s', 0) / 3600:.1f} h"
             for n in db.nodes():
                 if n["simulated"] or "inventory" not in n["modules"]:
                     continue
@@ -626,8 +667,8 @@ def create_app(
                 here = [d for d in ds if d["present"]]
                 away = [d for d in ds if not d["present"]]
                 miss = [d for d in here if not d["scanned"]]
-                txt = "; ".join(f"{d['mount']} {gb(d['total'])} ({gb(d['used'])} usados, {disk_kind(d, clock())}, {hours(d)} conectado en {d.get('sessions', 1)} veces) "
-                                + ("escaneado" if d["scanned"] else "SIN ESCANEAR") for d in here) or "ninguno visible"
+                txt = "; ".join(f"{d['mount']} {gb(d['total'])} ({gb(d['used'])} usados" + disk_notes(d, clock()) + ")"
+                                + ("" if d["scanned"] else " SIN ESCANEAR") for d in here) or "ninguno visible"
                 if away:
                     txt += "; ausentes ahora: " + ", ".join(f"{d['mount']} {gb(d['total'])}" for d in away)
                 add("AVISO" if miss else "OK", f"Discos de {n['id']}", txt)
@@ -1575,7 +1616,7 @@ def create_app(
                 cpu_pct=n.get("cpu_pct") if n["mode"] != Mode.OFFLINE.value else None,
                 ram_pct=n.get("ram_pct") if n["mode"] != Mode.OFFLINE.value else None,
                 gpu_pct=n.get("gpu_pct") if n["mode"] != Mode.OFFLINE.value else None,
-                last_seen_s_ago=None if n["last_seen"] is None else round(now - n["last_seen"], 1),
+                last_seen_s_ago=None if n["last_seen"] is None else round(max(0.0, now - n["last_seen"]), 1),
             )
             for n in db.nodes()
         ]

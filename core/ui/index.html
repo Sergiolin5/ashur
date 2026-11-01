@@ -565,6 +565,11 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
+  .dhead { margin: 16px 6px 6px; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--secondary); font-weight: 600; cursor: pointer; }
+  .row.disk { display: flex; align-items: center; gap: 12px; }
+  .row.disk .title { white-space: normal; cursor: pointer; }
+  button.tog { width: auto; flex: none; margin: 0; padding: 7px 14px; font-size: 14px; border-radius: 999px; }
+  button.tog:not(.on) { background: var(--field); color: var(--secondary); box-shadow: none; }
 </style>
 
 </head>
@@ -653,7 +658,7 @@
     <section>
       <h2>Discos</h2>
       <div id="disks"></div>
-      <div class="note">Cada disco que ve cada equipo, cuánto tiempo ha estado conectado y si Ashur lo escanea. Los externos que van y vienen se recuerdan aunque estén desconectados; si vuelven y están activados, entran en el siguiente repaso.</div>
+      <div class="note"><b>Incluido</b>: el inventario recorre ese disco y anota el nombre y el tamaño de sus archivos (no cambia ni borra nada). <b>Fuera</b>: lo salta. Un disco montado dentro de otro incluido se recorre junto con él. Toca un nombre para cambiarlo. Los externos que van y vienen se recuerdan aunque estén desconectados.</div>
     </section>
 
     <section>
@@ -1032,7 +1037,7 @@
     // devices
     fill("devices", nodes.map((n) => row({
       dot: n.mode,
-      title: n.device_id,
+      title: nm(n.device_id),
       detail: (OS[n.os] || n.os) + ", " + MODE[n.mode].toLowerCase() +
               (!data.node_code_version || !n.code_version ? ""
                 : n.code_version === data.node_code_version ? ", v" + (n.code_label || data.node_code_label || "?")
@@ -1108,32 +1113,67 @@
     }
   }
 
+  // ---- names and disks -------------------------------------------------------------------------------
+  let NAMES = {};
+  const nm = (id) => NAMES["node:" + id] || id;
+  const gbs = (b) => b >= 1e12 ? (b / 1e12).toFixed(1).replace(".0", "") + " TB" : Math.round(b / 1e9) + " GB";
+  // a readable name for a disk: C:\ -> C:, /host/DATA/.media/Seagate_Backup_Plus_Drive -> Seagate Backup Plus Drive
+  function diskName(nodeId, x) {
+    const own = NAMES["disk:" + nodeId + ":" + x.key]; if (own) return own;
+    const m = x.mount;
+    if (/^[A-Za-z]:[\\/]?$/.test(m)) return m.slice(0, 2);
+    if (m === "/") return "Disco principal";
+    return (m.split("/").filter(Boolean).pop() || m).replace(/_/g, " ");
+  }
+  // only what is worth saying: size and use; the rest appears when it matters
+  function diskDetail(x) {
+    const bits = [x.present ? gbs(x.used) + " usados de " + gbs(x.total) : "ausente ahora · " + gbs(x.total)];
+    if (x.kind !== "nuevo") bits.push(x.kind);
+    if ((x.connected_s || 0) >= 360 && x.kind !== "fijo") bits.push((Math.round(x.connected_s / 360) / 10) + " h conectado en " + (x.sessions || 1) + (x.sessions === 1 ? " vez" : " veces"));
+    return bits.join(" · ");
+  }
+  async function rename(key, current) {
+    const v = window.prompt("Nombre nuevo (déjalo vacío para volver al original):", current || "");
+    if (v === null) return;
+    try { await api("api/names", { method: "POST", body: JSON.stringify({ key, name: v }) }); } catch (e) {}
+    await loadNames(); loadDisks();
+  }
+  async function loadNames() { try { NAMES = await (await api("api/names")).json(); } catch (e) {} }
+  const diskBoxes = {};
   async function loadDisks() {
     try {
+      await loadNames();
       const d = await (await api("api/disks")).json();
-      const gb = (b) => b >= 1e12 ? (b / 1e12).toFixed(1) + " TB" : Math.round(b / 1e9) + " GB";
-      const hrs = (s) => s >= 36000 ? Math.round(s / 3600) + " h" : (Math.round(s / 360) / 10) + " h";
       const box = $("disks");
-      const secs = d.nodes.map((n) => {
-        const g = el("div", "group"); g.id = "disks-" + n.node_id;
-        const h = el("h3", null, n.node_id + (n.online ? "" : " · desconectado")); h.style.cssText = "margin:14px 4px 6px;font-size:13px;opacity:.7";
-        const rows = n.disks.map((x) => {
-          const r = row({ dot: x.present ? "full" : "offline", title: x.mount + " · " + gb(x.total),
-            detail: (x.present ? gb(x.used) + " usados · " : "ausente ahora · ") + x.kind + " · " + hrs(x.connected_s || 0) + " conectado en " + (x.sessions || 1) + (x.sessions === 1 ? " vez" : " veces") });
-          const b = el("button", "pill", x.scan ? "Escanear: sí" : "Escanear: no");
+      const wanted = d.nodes.map((n) => n.node_id);
+      if (Object.keys(diskBoxes).join() !== wanted.join()) {            // build the containers once; later refreshes only fill them
+        for (const k of Object.keys(diskBoxes)) delete diskBoxes[k];
+        const kids = [];
+        for (const id of wanted) {
+          const h = el("h3", "dhead"); const g = el("div", "group"); diskBoxes[id] = { h, g }; kids.push(h, g);
+        }
+        box.replaceChildren(...(kids.length ? kids : [el("div", "note", "Ningún equipo ha informado sus discos todavía (tarda unos 10 minutos).")]));
+      }
+      for (const n of d.nodes) {
+        const { h, g } = diskBoxes[n.node_id];
+        h.textContent = nm(n.node_id) + (n.online ? "" : " · desconectado");
+        h.onclick = () => rename("node:" + n.node_id, NAMES["node:" + n.node_id]);
+        put(g, n.disks.map((x) => {
+          const r = el("div", "row disk");
+          if (x.present) r.append(el("span", "dot " + (x.scan ? "full" : "offline")));
+          const m = el("div", "main");
+          const t = el("div", "title", diskName(n.node_id, x)); t.onclick = () => rename("disk:" + n.node_id + ":" + x.key, NAMES["disk:" + n.node_id + ":" + x.key]);
+          m.append(t, el("div", "detail", diskDetail(x)));
+          const b = el("button", "tog" + (x.scan ? " on" : ""), x.scan ? "Incluido" : "Fuera");
           b.addEventListener("click", async () => {
             b.disabled = true;
-            try { await api("api/disks/scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node_id: n.node_id, key: x.key, scan: !x.scan }) }); } catch (e) {}
+            try { await api("api/disks/scan", { method: "POST", body: JSON.stringify({ node_id: n.node_id, key: x.key, scan: !x.scan }) }); } catch (e) {}
             loadDisks();
           });
-          b.style.cssText = "padding:6px 12px;font-size:13px;flex:none;margin-left:10px";
-          r.append(b);
+          r.append(m, b);
           return r;
-        });
-        put(g, rows);
-        return [h, g];
-      }).flat();
-      box.replaceChildren(...(secs.length ? secs : [el("div", "note", "Ningún equipo ha informado sus discos todavía (tarda unos 10 minutos después de actualizar).")]));
+        }));
+      }
     } catch (e) {}
   }
   async function refresh() {
@@ -1154,7 +1194,7 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
       render(data);
-      if (tab === "status") loadDisks();
+      if (tab === "status") loadDisks(); else loadNames();
       showBudget(data.budget);
       unlock();
     } catch (e) {
@@ -1784,11 +1824,11 @@
         lines.push(n.device_id + ": " + state + (n.hint ? ". " + n.hint : ""));
         const mods = (n.modules || []).join(", ") || "ninguno";
         lines.push("  módulos: " + mods);
-        const gb = (b) => Math.round(b / 1e9) + " GB";
-        const dh = (x) => (Math.round((x.connected_s || 0) / 360) / 10) + " h conectado en " + (x.sessions || 1) + " veces";
-        const disks = n.disks ? n.disks.map((x) => x.mount + " " + gb(x.total) + " (" + (x.present ? gb(x.used) + " usados, " + x.kind + ", " + (x.scanned ? "escaneado" : "SIN ESCANEAR") : x.kind + ", ausente ahora") + ", " + dh(x) + ")") : null;
-        lines.push("  discos: " + (disks ? disks.join("; ") || "ninguno visible" : "sin informar"));
-        return row({ dot: n.mode, title: n.device_id, detail: state + " · módulos: " + mods + (disks ? " · discos: " + disks.join(" · ") : "") + (n.hint ? " · " + n.hint : ""),
+        const dl = (n.disks || []).map((x) => x.mount + " " + gbs(x.total) + (x.present ? " (" + gbs(x.used) + " usados" + (x.kind !== "nuevo" ? ", " + x.kind : "") + ")" : " (ausente)") + (x.present && !x.scanned ? " SIN ESCANEAR" : ""));
+        lines.push("  discos: " + (n.disks ? dl.join("; ") || "ninguno visible" : "sin informar"));
+        const off = (n.disks || []).filter((x) => x.present && !x.scanned).length;
+        const sum = n.disks ? (n.disks.length + (n.disks.length === 1 ? " disco" : " discos") + (off ? ", " + off + " sin escanear" : "")) : "";
+        return row({ dot: n.mode, title: nm(n.device_id), detail: state + " · módulos: " + mods + (sum ? " · " + sum : "") + (n.hint ? " · " + n.hint : ""),
                      value: ago(n.last_seen_s_ago) });
       }), "Sin equipos.");
       for (const x of $("diag-nodes").querySelectorAll(".detail")) x.style.whiteSpace = "normal";

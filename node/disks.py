@@ -8,13 +8,19 @@ PSEUDO_FS = {"squashfs", "tmpfs", "devtmpfs", "overlay", "autofs", "proc", "sysf
              "fusectl", "debugfs", "tracefs", "securityfs", "pstore", "bpf", "configfs", "mqueue", "hugetlbfs",
              "ramfs", "binfmt_misc", "nsfs", "devfs", "iso9660", "udf"}
 SKIP_PREFIXES = ("/proc", "/sys", "/dev", "/run", "/snap", "/var/lib/docker", "/var/lib/containers",
-                 "/System/Volumes", "/private/var/vm", "/boot/efi")
+                 "/System/Volumes", "/private/var/vm", "/boot/efi", "/Volumes/Recovery", "/Volumes/Preboot", "/Volumes/Update")
 EVERY_S = 600
 _cache = {"at": -1e9, "val": None}
 
 
 def _norm(p: str) -> str:
     return p.rstrip("/\\").lower() if len(p) > 1 else p
+
+
+def _covered(mount: str, roots: set) -> bool:
+    """The inventory walks folders without checking where a disk starts, so a disk mounted inside a scanned folder is scanned too."""
+    m = _norm(mount)
+    return any(m == r or m.startswith(r.rstrip("/\\") + "/") or m.startswith(r.rstrip("/\\") + "\\") for r in roots)
 
 
 def read(scanned_roots: Optional[list] = None) -> list[dict]:
@@ -44,7 +50,7 @@ def read(scanned_roots: Optional[list] = None) -> list[dict]:
         if not u.total:
             continue
         out.append({"device": p.device, "mount": p.mountpoint, "fstype": p.fstype, "total": u.total, "used": u.used,
-                    "scanned": _norm(p.mountpoint) in roots})
+                    "scanned": _covered(p.mountpoint, roots)})
     return sorted(out, key=lambda d: -d["total"])
 
 

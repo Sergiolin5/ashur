@@ -671,4 +671,24 @@ def test_disk_choices_decide_which_roots_the_next_inventory_scans(env):
     assert all(d["scan"] for d in c.get("/api/disks", headers=A).json()["nodes"][0]["disks"])
     assert c.post("/api/inventory/refresh", headers=A).json()["queued"] == ["mac"]
     task = c.get("/nodes/mac/tasks/next", headers=h).json()
-    assert sorted(task["payload"]["roots"]) == ["/", "/Volumes/X"]
+    assert task["payload"]["roots"] == ["/"]                  # /Volumes/X sits inside "/", so walking "/" covers it
+
+
+def test_nested_disks_are_covered_by_their_parent_and_exclusions_are_sent(env):
+    from node import disks
+    assert disks._covered("/host/DATA/.media/USB", {"/host/data"}) and not disks._covered("/state", {"/host/data"})
+    c, clock = env
+    h = register(c, simulated=False)
+    beat(c, h)
+    first = c.get("/nodes/mac/tasks/next", headers=h).json()
+    c.post(f"/tasks/{first['id']}/result", headers=h, json={"ok": True})
+    hb = {"mode": "full", "disks": [{"device": "a", "mount": "/host/DATA", "fstype": "ext4", "total": 900, "used": 1, "scanned": True},
+                                    {"device": "b", "mount": "/host/DATA/.media/USB", "fstype": "ntfs", "total": 500, "used": 1, "scanned": True}]}
+    c.post("/nodes/mac/heartbeat", headers=h, json=hb)
+    usb = [d for d in c.get("/api/disks", headers=A).json()["nodes"][0]["disks"] if d["mount"].endswith("USB")][0]
+    c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": usb["key"], "scan": False})
+    c.post("/api/inventory/refresh", headers=A)
+    p = c.get("/nodes/mac/tasks/next", headers=h).json()["payload"]
+    assert p == {"roots": ["/host/DATA"], "exclude": ["/host/DATA/.media/USB"]}
+    names = c.post("/api/names", headers=A, json={"key": "node:mac", "name": "Mac del cuarto"}).json()
+    assert names == {"node:mac": "Mac del cuarto"} and c.post("/api/names", headers=A, json={"key": "node:mac", "name": ""}).json() == {}

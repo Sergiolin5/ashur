@@ -287,7 +287,7 @@ def run(payload: dict, ctx) -> dict:
             flush()
 
     stats = scan(roots, emit, stop=ctx.should_stop, hash_files=bool(payload.get("hash")),
-                 max_entries=payload.get("max_entries"), skip=done,
+                 max_entries=payload.get("max_entries"), skip=done | {_norm(x) for x in payload.get("exclude") or []},
                  on_done=lambda folder: pending_done.append(_norm(folder)))
     flush()
     if not stats.get("stopped") and ck_path and ck_path.exists():

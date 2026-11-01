@@ -1700,6 +1700,13 @@
       ["Instalar o reinstalar el nodo (también instala lo que falte)", "irm http://zimaos:8711/install/windows.ps1 | iex"],
       ["Ver las últimas líneas del registro del nodo", "Get-Content $env:LOCALAPPDATA\\Ashur\\agent.log -Tail 50"],
       ["Reiniciar el nodo", "Stop-ScheduledTask -TaskName 'Ashur node'; Start-ScheduledTask -TaskName 'Ashur node'"]]],
+    ["Modelo local en Windows (Ryzen 9, Legion Go)", "PowerShell normal. Primero mira cuánta memoria tiene el equipo: con 16 GB o más cabe un modelo mejor que el de 3B", [
+      ["0. Memoria (GB) y tarjeta gráfica del equipo", "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB); (Get-CimInstance Win32_VideoController).Name"],
+      ["1. Instalar Ollama", "winget install -e --id Ollama.Ollama"],
+      ["2. Descargar un modelo (3B, ligero; para más calidad prueba qwen2.5:7b, unos 5 GB)", "ollama pull qwen2.5:3b"],
+      ["3. Abrir la configuración del nodo y añadir «llm» a la línea modules (y, si usas otro modelo, una línea llm_model: qwen2.5:7b)", "notepad $env:LOCALAPPDATA\\Ashur\\node.yaml"],
+      ["4. Reiniciar el nodo", "Stop-ScheduledTask -TaskName 'Ashur node'; Start-ScheduledTask -TaskName 'Ashur node'"],
+      ["Comprobar que el modelo está descargado", "ollama list"]]],
     ["Mac", "Terminal", [
       ["Instalar o reinstalar el nodo", "curl -fsSL http://zimaos:8711/install/mac.sh | bash"],
       ["Reiniciar el nodo", "launchctl kickstart -k gui/$(id -u)/com.ashur.node"],
@@ -1727,7 +1734,9 @@
       fill("diag-nodes", d.nodes.map((n) => {
         const state = n.mode === "offline" ? "desconectado" : n.behind ? "código atrasado (v" + (n.code_label || "?") + " → v" + d.core_code_label + ")" : "al día";
         lines.push(n.device_id + ": " + state + (n.hint ? ". " + n.hint : ""));
-        return row({ dot: n.mode, title: n.device_id, detail: state + (n.hint ? " · " + n.hint : ""),
+        const mods = (n.modules || []).join(", ") || "ninguno";
+        lines.push("  módulos: " + mods);
+        return row({ dot: n.mode, title: n.device_id, detail: state + " · módulos: " + mods + (n.hint ? " · " + n.hint : ""),
                      value: ago(n.last_seen_s_ago) });
       }), "Sin equipos.");
       for (const x of $("diag-nodes").querySelectorAll(".detail")) x.style.whiteSpace = "normal";

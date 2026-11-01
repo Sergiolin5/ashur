@@ -16,7 +16,8 @@ def _nvidia() -> Optional[float]:
     if not exe:
         return None
     out = subprocess.run([exe, "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
-                         capture_output=True, text=True, timeout=5).stdout
+                         capture_output=True, text=True, timeout=5,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout     # no console flash on Windows
     vals = [float(x) for x in out.split() if x.replace(".", "", 1).isdigit()]
     return max(vals) if vals else None
 

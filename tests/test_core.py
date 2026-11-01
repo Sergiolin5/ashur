@@ -570,3 +570,20 @@ def test_selftest_builds_a_plain_report_without_secrets(env):
     r = j["report"]
     assert r.startswith("INFORME ASHUR") and "[OK] Núcleo" in r and "Equipo" in r
     assert ADMIN not in r and ENROLL not in r
+
+
+def test_node_helpers_never_open_a_console_window_on_windows(monkeypatch):
+    """nvidia-smi runs every 20 s: without CREATE_NO_WINDOW a console window flashes on Windows (it did on the Ryzen 9)."""
+    import subprocess
+    import types
+    from node import metrics
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(metrics.shutil, "which", lambda n: "nvidia-smi")
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return types.SimpleNamespace(stdout="12\n", returncode=0)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert metrics._nvidia() == 12.0
+    assert seen["creationflags"] == 0x08000000

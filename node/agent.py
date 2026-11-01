@@ -179,14 +179,15 @@ def install_requirements(req: Path) -> None:
     """Install new node dependencies into this same Python (pip, or uv for uv-made venvs)."""
     import shutil
     import subprocess
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)                  # Windows: no console window
     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, creationflags=flags)
     if r.returncode == 0:
         return
     uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
     if Path(uv).exists():
         r = subprocess.run([uv, "pip", "install", "-q", "--python", sys.executable, "-r", str(req)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, creationflags=flags)
         if r.returncode == 0:
             return
     raise RuntimeError(f"could not install node requirements: {(r.stderr or r.stdout)[-300:]}")

@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.33.2 | 2026-10-31 | Node: no more console window flashing on Windows. The GPU reader ran `nvidia-smi` every 20 s without hiding its console (the Ryzen 9 has an NVIDIA card; the Legion Go reads its GPU through PowerShell, which already hid it); the agent's pip/uv runs get the same flag. Nodes update themselves |
 | 0.33.1 | 2026-10-31 | Panel: the tab bar sticks to the top again (a glass rule made it `relative` since 0.23.0, found by measuring in a browser: top stayed at -1050 px after scrolling, now 10 px); the space under the last chat message is the real height of the writing area, so the «Compartir con Claude» boxes no longer cover replies; those boxes are a bit smaller |
 | 0.33.0 | 2026-10-31 | Ajustes → Diagnóstico → «Probar todo»: one button runs core, devices, tasks, memory, diary, documents, audio and updater checks and asks every local model a real question (in parallel, up to 90 s); the result is one plain-text report ([OK]/[AVISO]/[FALLA] per line, no keys) that is copied to the clipboard to paste in the chat. `POST/GET /api/selftest` (admin only) |
 | 0.32.3 | 2026-10-31 | Diagnóstico shows each device's modules (so «has no local model» is visible); Comandos gets the Windows local-model steps (hardware check, Ollama, model, add llm to node.yaml) |

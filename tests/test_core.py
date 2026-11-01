@@ -692,3 +692,37 @@ def test_nested_disks_are_covered_by_their_parent_and_exclusions_are_sent(env):
     assert p == {"roots": ["/host/DATA"], "exclude": ["/host/DATA/.media/USB"]}
     names = c.post("/api/names", headers=A, json={"key": "node:mac", "name": "Mac del cuarto"}).json()
     assert names == {"node:mac": "Mac del cuarto"} and c.post("/api/names", headers=A, json={"key": "node:mac", "name": ""}).json() == {}
+
+
+def test_panel_notes_with_images_are_admin_only_and_round_trip(env):
+    import base64
+    c, _ = env
+    png = "data:image/png;base64," + base64.b64encode(b"\x89PNG fake").decode()
+    assert c.post("/api/notes", json={"text": "x"}).status_code == 401
+    r = c.post("/api/notes", headers=A, json={"text": "La barra tapa el texto", "ctx": '{"tab":"chat"}', "images": [png]})
+    assert r.status_code == 200
+    nid = r.json()["id"]
+    got = c.get("/api/notes", headers=A).json()
+    assert got[0]["text"] == "La barra tapa el texto" and got[0]["status"] == "open" and len(got[0]["images"]) == 1
+    img = c.get(f"/api/notes/{nid}/images/{got[0]['images'][0]['id']}", headers=A)
+    assert img.status_code == 200 and img.content == b"\x89PNG fake" and img.headers["content-type"] == "image/png"
+    assert c.get(f"/api/notes/{nid}/images/{got[0]['images'][0]['id']}").status_code == 401
+    assert c.post("/api/notes", headers=A, json={"text": "x", "images": ["data:text/html;base64,AAAA"]}).status_code == 422
+    assert c.post(f"/api/notes/{nid}/status", headers=A, json={"status": "done"}).status_code == 200
+    assert c.get("/api/notes", headers=A).json()[0]["status"] == "done"
+    assert c.post(f"/api/notes/{nid}/status", headers=A, json={"status": "weird"}).status_code == 422
+    c.delete(f"/api/notes/{nid}", headers=A)
+    assert c.get("/api/notes", headers=A).json() == []
+
+
+def test_guests_can_leave_an_opinion_only_sergio_reads_it(env):
+    c, _ = env
+    gk = c.post("/api/guests", headers=A, json={"name": "Camila"}).json()
+    key = gk.get("key") or gk.get("chat_key")
+    r = c.post("/api/feedback", headers={"X-Admin-Key": key}, json={"text": "No encontré dónde escribir"})
+    assert r.status_code == 200
+    assert c.get("/api/notes", headers={"X-Admin-Key": key}).status_code == 401        # guests cannot read the notes
+    n = c.get("/api/notes", headers=A).json()[0]
+    assert n["author"] == "Camila" and n["text"] == "No encontré dónde escribir"
+    assert c.post("/api/feedback", headers={"X-Admin-Key": key}, json={"text": "x" * 1600}).status_code == 422
+    assert c.post("/api/feedback", json={"text": "hola"}).status_code == 401

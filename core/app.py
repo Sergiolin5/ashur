@@ -169,7 +169,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.35.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.36.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1219,6 +1219,71 @@ def create_app(
         return {"entries": db.diary_list(max(1, min(limit, 200)), before), "question": today_question(now),
                 "written_today": db.diary_has_day(local_day(now)), "settings": diary_settings(),
                 "devices": len(db.push_subs())}
+
+    # --- panel notes: bugs and ideas Sergio jots down while he browses, to hand to Claude as one request -------------
+    class NoteIn(BaseModel):
+        text: str = Field(min_length=1, max_length=4000)
+        ctx: str = Field(default="", max_length=300)
+        images: list[str] = Field(default_factory=list, max_length=6)     # data:image/jpeg;base64,... (the panel shrinks them)
+
+    def _save_note(body: NoteIn, author: str) -> int:
+        import base64
+        imgs = []
+        for u in body.images:
+            head, _, b64 = u.partition(",")
+            mime = head[5:].split(";")[0] if head.startswith("data:") else ""
+            if mime not in ("image/jpeg", "image/png", "image/webp"):
+                raise HTTPException(422, "Solo imágenes JPEG, PNG o WebP.")
+            try:
+                data = base64.b64decode(b64, validate=True)
+            except ValueError:
+                raise HTTPException(422, "Imagen dañada.")
+            if len(data) > 3_000_000:
+                raise HTTPException(413, "Una imagen pesa más de 3 MB.")
+            imgs.append((mime, data))
+        return db.note_add(clock(), body.text.strip(), body.ctx.strip(), imgs, author)
+
+    @app.post("/api/notes", dependencies=[Depends(require_admin)])
+    def note_add(body: NoteIn):
+        return {"id": _save_note(body, "Sergio")}
+
+    @app.post("/api/feedback")
+    def feedback(body: NoteIn, guest: Optional[dict] = Depends(require_chat)):
+        """Anyone with a chat key can leave an opinion or report a problem; only Sergio reads it (Ajustes → Pendientes)."""
+        if guest is None:
+            return {"id": _save_note(body, "Sergio")}
+        if db.notes_count_by(guest["name"], clock() - 3600) >= 10:
+            raise HTTPException(429, "Ya enviaste varias opiniones en esta hora. Inténtalo más tarde.")
+        if len(body.text) > 1500 or len(body.images) > 2:
+            raise HTTPException(422, "Máximo 1500 letras y 2 imágenes.")
+        nid = _save_note(body, guest["name"][:40])
+        db.log(clock(), None, "feedback_received", {"from": guest["name"][:40]})
+        return {"id": nid}
+
+    @app.get("/api/notes", dependencies=[Depends(require_admin)])
+    def notes_get():
+        return db.notes_list()
+
+    @app.get("/api/notes/{note_id}/images/{image_id}", dependencies=[Depends(require_admin)])
+    def note_image(note_id: int, image_id: int):
+        got = db.note_image(note_id, image_id)
+        if not got:
+            raise HTTPException(404, "No existe.")
+        return Response(content=got[1], media_type=got[0], headers={"Cache-Control": "private, max-age=86400"})
+
+    class NoteStatus(BaseModel):
+        status: str = Field(pattern=r"^(open|done)$")
+
+    @app.post("/api/notes/{note_id}/status", dependencies=[Depends(require_admin)])
+    def note_status(note_id: int, body: NoteStatus):
+        if not db.note_set_status(note_id, body.status):
+            raise HTTPException(404, "No existe.")
+        return {"ok": True}
+
+    @app.delete("/api/notes/{note_id}", dependencies=[Depends(require_admin)])
+    def note_delete(note_id: int):
+        db.note_delete(note_id)
+        return {"ok": True}
 
     class DiaryIn(BaseModel):
         text: str = Field(min_length=1, max_length=20000)

@@ -16,6 +16,14 @@ CREATE TABLE IF NOT EXISTS diary (            -- Sergio's own words; never leave
     source TEXT NOT NULL DEFAULT 'panel'
 );
 CREATE INDEX IF NOT EXISTS diary_day ON diary (day);
+CREATE TABLE IF NOT EXISTS notes (            -- Sergio's own bug/idea notes about the panel, collected to hand to Claude in one go
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, text TEXT NOT NULL, ctx TEXT,
+    status TEXT NOT NULL DEFAULT 'open', author TEXT
+);
+CREATE TABLE IF NOT EXISTS note_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, mime TEXT NOT NULL, data BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS note_images_note ON note_images (note_id);
 CREATE TABLE IF NOT EXISTS diary_reminders (  -- what was sent each day, so a reminder is never sent twice
     day TEXT PRIMARY KEY, first REAL, second REAL
 );
@@ -196,6 +204,9 @@ class DB:
         gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
+        ncols2 = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
+        if "author" not in ncols2:
+            self.conn.execute("ALTER TABLE notes ADD COLUMN author TEXT")
         dcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(docs)")}
         if "first_rowid" not in dcols:                 # where a document's chunks start in doc_chunks (see docs_apply)
             self.conn.execute("ALTER TABLE docs ADD COLUMN first_rowid INTEGER")
@@ -472,6 +483,47 @@ class DB:
         with self.lock:
             self.conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
                               "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+            self.conn.commit()
+
+    def note_add(self, ts: float, text: str, ctx: str, images: list, author: str = "Sergio") -> int:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO notes (ts, text, ctx, author) VALUES (?, ?, ?, ?)", (ts, text, ctx, author))
+            nid = cur.lastrowid
+            self.conn.executemany("INSERT INTO note_images (note_id, mime, data) VALUES (?, ?, ?)",
+                                  [(nid, m, d) for m, d in images])
+            self.conn.commit()
+            return nid
+
+    def notes_count_by(self, author: str, since: float) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) FROM notes WHERE author = ? AND ts > ?", (author, since)).fetchone()[0]
+
+    def notes_list(self) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT id, ts, text, ctx, status, author FROM notes ORDER BY id DESC").fetchall()
+            imgs = self.conn.execute("SELECT id, note_id, mime FROM note_images ORDER BY id").fetchall()
+        out = [dict(r, images=[]) for r in rows]
+        by = {n["id"]: n for n in out}
+        for i in imgs:
+            if i["note_id"] in by:
+                by[i["note_id"]]["images"].append({"id": i["id"], "mime": i["mime"]})
+        return out
+
+    def note_image(self, note_id: int, image_id: int):
+        with self.lock:
+            r = self.conn.execute("SELECT mime, data FROM note_images WHERE id = ? AND note_id = ?", (image_id, note_id)).fetchone()
+        return (r["mime"], bytes(r["data"])) if r else None
+
+    def note_set_status(self, note_id: int, status: str) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE notes SET status = ? WHERE id = ?", (status, note_id))
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def note_delete(self, note_id: int) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM note_images WHERE note_id = ?", (note_id,))
+            self.conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
             self.conn.commit()
 
     def diary_add(self, ts: float, day: str, text: str, source: str = "panel") -> int:

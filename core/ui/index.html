@@ -570,6 +570,31 @@
   .row.disk .title { white-space: normal; cursor: pointer; }
   button.tog { width: auto; flex: none; margin: 0; padding: 7px 14px; font-size: 14px; border-radius: 999px; }
   button.tog:not(.on) { background: var(--field); color: var(--secondary); box-shadow: none; }
+  header { position: relative; }
+  .notefab { position: absolute; top: 22px; right: 4px; width: 40px; height: 40px; margin: 0; padding: 0; border-radius: 50%;
+             display: flex; align-items: center; justify-content: center; background: var(--field); box-shadow: none; color: var(--tint); }
+  .notefab svg { width: 20px; height: 20px; }
+  .notefab .badge { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--tint); color: #fff;
+                    font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; padding: 0 4px; }
+  #note-sheet { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(0,0,0,.45);
+                -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  #note-sheet[hidden] { display: none; }
+  #note-sheet .sheet { width: min(560px, 100%); background: var(--row); border-radius: 24px 24px 0 0; padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+                       -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%); }
+  #note-sheet h3 { margin: 0 0 4px; font-size: 17px; }
+  #note-sheet textarea { width: 100%; min-height: 110px; margin: 8px 0; box-sizing: border-box; border-radius: 14px; border: 0; padding: 12px;
+                         font: inherit; font-size: 16px; background: var(--field); color: var(--label); resize: vertical; }
+  .thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+  .thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; }
+  .thumbs .rm { position: relative; }
+  .thumbs .rm button { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; margin: 0; border-radius: 50%; font-size: 13px; line-height: 22px; background: var(--red); }
+  .sheet .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .sheet .actions button { margin: 0; flex: 1; padding: 12px; font-size: 16px; }
+  .sheet .actions .ghost { background: var(--field); color: var(--label); box-shadow: none; }
+  .nrow .acts { display: flex; gap: 8px; margin-top: 8px; }
+  .nrow .acts button { margin: 0; width: auto; padding: 6px 12px; font-size: 13px; background: var(--field); color: var(--label); box-shadow: none; }
+  .nrow.done .title { opacity: .5; text-decoration: line-through; }
+  .nrow .title { white-space: normal; }
 </style>
 
 </head>
@@ -578,6 +603,7 @@
   <header>
     <h1>Ashur</h1>
     <div class="greet" id="greet" hidden></div>
+    <button type="button" class="notefab" id="note-fab" aria-label="Anotar un problema o una idea" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg><span class="badge" id="note-badge" hidden></span></button>
     <div class="subtitle" id="subtitle"><span class="live"></span><span id="subtitle-text">Conectando…</span></div>
   </header>
 
@@ -677,6 +703,7 @@
       <button type="button" class="menu-item" data-page="voices"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mi-text"><b>Personas</b><small>Cómo te habla Ashur en cada dispositivo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="notes"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span><span class="mi-text"><b>Pendientes</b><small id="notes-sub">Problemas e ideas que anotaste</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="diag"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span><span class="mi-text"><b>Diagnóstico</b><small>Errores y por qué un equipo no está al día</small></span><span class="mi-go" aria-hidden="true">›</span></button>
     </nav>
 
@@ -784,6 +811,15 @@
 
     </div>
 
+    <div class="page" data-page="notes" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Pendientes</div></div>
+      <section><h2>Por llevarle a Claude</h2><div class="group" id="notes-open"></div>
+        <div class="row"><button type="button" id="notes-copy">Copiar texto para Claude</button></div>
+        <div class="row"><button type="button" id="notes-share" class="forget">Compartir con las imágenes</button></div>
+        <div class="note" id="notes-note">Toca la banderita arriba a la derecha desde cualquier pestaña para anotar algo en el momento.</div></section>
+      <section><h2>Resueltos</h2><div class="group" id="notes-done"></div></section>
+    </div>
+
     <div class="page" data-page="diag" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Diagnóstico</div></div>
       <section><h2>Prueba completa</h2>
@@ -829,6 +865,19 @@
     </section>
   </div>
 </main>
+
+<div id="note-sheet" hidden>
+  <div class="sheet">
+    <h3 id="note-title">Anotar para después</h3>
+    <div class="detail" id="note-help" style="color:var(--secondary);font-size:13px">Escribe qué pasó. Se guarda con la pestaña, la hora y el tamaño de pantalla. Luego lo juntas todo en un solo mensaje para Claude.</div>
+    <textarea id="note-text" placeholder="Qué pasó, qué esperabas…" maxlength="4000"></textarea>
+    <div class="thumbs" id="note-thumbs"></div>
+    <input type="file" id="note-file" accept="image/*" multiple hidden>
+    <div class="actions"><button type="button" class="ghost" id="note-add-img">Añadir imagen</button><button type="button" id="note-save">Guardar</button></div>
+    <div class="actions"><button type="button" class="ghost" id="note-cancel">Cancelar</button></div>
+    <div class="error" id="note-err" style="margin-top:6px"></div>
+  </div>
+</div>
 
 <div class="composer" id="composer" hidden>
   <div class="inner">
@@ -979,6 +1028,7 @@
       case "conversation_summarized": return "Resumió " + d.messages + " mensajes de conversación";
       case "summary_deleted": return "Borraste un resumen de conversación";
       case "summary_failed": return "No pudo resumir la conversación";
+      case "feedback_received": return (d.from || "Alguien") + " dejó una opinión";
       case "disk_choice": return (d.scan ? "Activaste" : "Quitaste") + " el escaneo del disco " + d.disk;
       case "node_problem": return "Avisó: " + (d.text || "un problema");
       case "diary_saved": return "Nueva entrada en el diario";
@@ -1071,6 +1121,7 @@
     $("subtitle").classList.remove("stale", "locked");
     // "v" and a separator keep the version from running into the count (0.11.1, 4 read as 0.11.4)
     greet();
+    panelVersion = data.version;
     $("subtitle-text").textContent = "Núcleo v" + data.version + "\u00a0\u00a0·\u00a0\u00a0" +
       (online === 1 ? "1 dispositivo conectado" : online + " dispositivos conectados");
   }
@@ -1100,6 +1151,7 @@
     unlocked = true;
     $("signin").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
     $("guest-signout").hidden = false;
+    $("note-fab").hidden = false;                       // guests can leave an opinion
     $("subtitle").classList.remove("locked", "stale");
     greet();
     $("subtitle-text").textContent = role === "self" ? "Aquí estoy" : "Ashur, el asistente de Sergio";
@@ -1116,6 +1168,95 @@
     }
   }
 
+  // ---- notes: bugs and ideas jotted down on the spot, handed to Claude as one request -------------------
+  let noteImgs = [], notesCache = [], panelVersion = "", notesLoaded = false;
+  const noteCtx = () => ({ tab, page: document.querySelector(".page:not([hidden])")?.dataset.page || "", w: innerWidth, h: innerHeight, v: panelVersion, at: new Date().toLocaleString("es-CO") });
+  function shrink(file) {                                   // a phone photo is 4 MB; 1600 px JPEG is enough to see a layout bug
+    return new Promise((ok, no) => {
+      const img = new Image(), url = URL.createObjectURL(file);
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement("canvas");
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+        ok(c.toDataURL("image/jpeg", 0.8));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); no(new Error("imagen")); };
+      img.src = url;
+    });
+  }
+  function drawNoteThumbs() {
+    $("note-thumbs").replaceChildren(...noteImgs.map((u, i) => {
+      const w = el("div", "rm"), im = el("img"); im.src = u;
+      const b = el("button", null, "×"); b.type = "button"; b.onclick = () => { noteImgs.splice(i, 1); drawNoteThumbs(); };
+      w.append(im, b); return w;
+    }));
+  }
+  function openNote() {
+    const g = role === "guest";
+    $("note-title").textContent = g ? "Tu opinión" : "Anotar para después";
+    $("note-help").textContent = g ? "Cuéntale a Sergio qué te gustó, qué falló o qué cambiarías. Solo él lo lee." : "Escribe qué pasó. Se guarda con la pestaña, la hora y el tamaño de pantalla. Luego lo juntas todo en un solo mensaje para Claude."; noteImgs = []; $("note-text").value = ""; $("note-err").textContent = ""; drawNoteThumbs(); $("note-sheet").hidden = false; setTimeout(() => $("note-text").focus(), 50); }
+  $("note-fab").addEventListener("click", openNote);
+  $("note-cancel").addEventListener("click", () => { $("note-sheet").hidden = true; });
+  $("note-add-img").addEventListener("click", () => $("note-file").click());
+  $("note-file").addEventListener("change", async () => {
+    for (const f of [...$("note-file").files].slice(0, 6 - noteImgs.length)) { try { noteImgs.push(await shrink(f)); } catch (e) { $("note-err").textContent = "No pude leer una imagen."; } }
+    $("note-file").value = ""; drawNoteThumbs();
+  });
+  $("note-save").addEventListener("click", async () => {
+    const text = $("note-text").value.trim(); if (!text) { $("note-err").textContent = "Escribe algo primero."; return; }
+    const b = $("note-save"); b.disabled = true;
+    try {
+      const r = await api(role === "admin" ? "api/notes" : "api/feedback", { method: "POST", body: JSON.stringify({ text, ctx: JSON.stringify(noteCtx()), images: noteImgs }) });
+      if (!r.ok) throw new Error((await r.json()).detail || "No se guardó");
+      $("note-sheet").hidden = true; loadNotes();
+    } catch (e) { $("note-err").textContent = "No se guardó: " + e.message; }
+    b.disabled = false;
+  });
+  function noteLine(n, i) {
+    let c = {}; try { c = JSON.parse(n.ctx || "{}"); } catch (e) {}
+    return (i + 1) + ". [" + (n.author && n.author !== "Sergio" ? "opinión de " + n.author + " · " : "") + (c.page || c.tab || "?") + (c.at ? " · " + c.at : "") + (c.w ? " · " + c.w + "×" + c.h : "") + "] " + n.text + (n.images.length ? " (" + n.images.length + " imagen" + (n.images.length > 1 ? "es" : "") + ")" : "");
+  }
+  const notesText = () => { const o = notesCache.filter((n) => n.status === "open").reverse(); return "Pendientes del panel (" + o.length + "), panel v" + panelVersion + ":\n" + o.map(noteLine).join("\n"); };
+  async function loadNotes() {
+    try {
+      notesCache = await (await api("api/notes")).json();
+      const open = notesCache.filter((n) => n.status === "open"), done = notesCache.filter((n) => n.status === "done");
+      const badge = $("note-badge"); badge.hidden = !open.length; badge.textContent = open.length;
+      $("notes-sub").textContent = open.length ? open.length + (open.length === 1 ? " por llevarle a Claude" : " por llevarle a Claude") : "Problemas e ideas que anotaste";
+      const draw = (list) => list.map((n) => {
+        let c = {}; try { c = JSON.parse(n.ctx || "{}"); } catch (e) {}
+        const r = el("div", "row nrow" + (n.status === "done" ? " done" : "")); const m = el("div", "main");
+        m.append(el("div", "title", n.text), el("div", "detail", (n.author && n.author !== "Sergio" ? "de " + n.author + " · " : "") + (c.page || c.tab || "") + (c.at ? " · " + c.at : "") + (c.w ? " · " + c.w + "×" + c.h : "")));
+        if (n.images.length) {
+          const t = el("div", "thumbs"); m.append(t);
+          for (const im of n.images) api("api/notes/" + n.id + "/images/" + im.id).then((x) => x.blob()).then((bl) => { const i = el("img"); i.src = URL.createObjectURL(bl); t.append(i); }).catch(() => {});
+        }
+        const a = el("div", "acts");
+        const t1 = el("button", null, n.status === "open" ? "Resuelto" : "Reabrir"); t1.onclick = async () => { await api("api/notes/" + n.id + "/status", { method: "POST", body: JSON.stringify({ status: n.status === "open" ? "done" : "open" }) }); loadNotes(); };
+        const t2 = el("button", null, "Borrar"); t2.onclick = async () => { if (t2.dataset.s) { await api("api/notes/" + n.id, { method: "DELETE" }); loadNotes(); } else { t2.dataset.s = 1; t2.textContent = "Toca otra vez"; setTimeout(() => { delete t2.dataset.s; t2.textContent = "Borrar"; }, 2500); } };
+        a.append(t1, t2); m.append(a); r.append(m); return r;
+      });
+      put($("notes-open"), draw(open).length ? draw(open) : [row({ title: "Nada pendiente." })]);
+      put($("notes-done"), draw(done).length ? draw(done) : [row({ title: "Aún no has resuelto ninguno." })]);
+    } catch (e) {}
+  }
+  $("notes-copy").addEventListener("click", async () => {
+    const b = $("notes-copy");
+    try { await navigator.clipboard.writeText(notesText()); b.textContent = "Copiado: pégalo en el chat"; } catch (e) { b.textContent = "No pude copiar"; }
+    setTimeout(() => { b.textContent = "Copiar texto para Claude"; }, 2500);
+  });
+  $("notes-share").addEventListener("click", async () => {
+    const b = $("notes-share"), open = notesCache.filter((n) => n.status === "open").reverse();
+    try {
+      const files = [];
+      for (const n of open) for (const [k, im] of n.images.entries()) {
+        const bl = await (await api("api/notes/" + n.id + "/images/" + im.id)).blob();
+        files.push(new File([bl], "nota" + (open.indexOf(n) + 1) + "-" + (k + 1) + ".jpg", { type: bl.type }));
+      }
+      if (navigator.canShare && navigator.canShare({ files })) await navigator.share({ text: notesText(), files });
+      else { await navigator.clipboard.writeText(notesText()); b.textContent = "Este navegador no comparte archivos: copié el texto"; setTimeout(() => { b.textContent = "Compartir con las imágenes"; }, 3500); }
+    } catch (e) { if (e.name !== "AbortError") { b.textContent = "No pude compartir"; setTimeout(() => { b.textContent = "Compartir con las imágenes"; }, 2500); } }
+  });
   // ---- names and disks -------------------------------------------------------------------------------
   let NAMES = {};
   const nm = (id) => NAMES["node:" + id] || id;
@@ -1207,6 +1348,7 @@
       const data = await r.json();
       render(data);
       if (tab === "status") loadDisks(); else loadNames();
+      $("note-fab").hidden = false; if (role === "admin" && (tab === "settings" || !notesLoaded)) { notesLoaded = true; loadNotes(); }
       showBudget(data.budget);
       unlock();
     } catch (e) {

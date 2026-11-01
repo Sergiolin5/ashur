@@ -512,6 +512,28 @@ class DB:
         finally:
             c.close()
 
+    def inventory_find(self, words: list[str], exts: Optional[tuple] = None, limit: int = 8) -> list[dict]:
+        """Files whose path contains every word (any word if none contains all), by name only.
+        Sensitive entries have no size and are left out; folders summarised whole are skipped."""
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            def esc(w):
+                return "%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            for joiner in (" AND ", " OR "):
+                where = joiner.join("path LIKE ? ESCAPE '\\'" for _ in words)
+                q = f"SELECT node_id, path, COALESCE(size, 0) size FROM inventory WHERE kind = 'file' AND ({where})"
+                args = [esc(w) for w in words]
+                if exts:
+                    q += " AND (" + " OR ".join("lower(path) LIKE ?" for _ in exts) + ")"
+                    args += ["%" + e for e in exts]
+                rows = [dict(r) for r in c.execute(q + " ORDER BY size DESC LIMIT ?", args + [limit]).fetchall()]
+                if rows or len(words) == 1:
+                    return rows
+            return []
+        finally:
+            c.close()
+
     # --- file map: where the space goes, one folder level at a time ---------------------------
     MAP_CATEGORIES = {
         "documentos": {".pdf", ".doc", ".docx", ".odt", ".txt", ".md", ".rtf", ".xls", ".xlsx", ".csv", ".ppt", ".pptx", ".epub"},

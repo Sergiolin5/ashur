@@ -406,6 +406,32 @@ class Brain:
         return ("Entradas del diario de Sergio (privadas; nunca las repitas fuera de esta respuesta). Responde solo con lo "
                 "que dicen, menciona la fecha, y si no alcanzan para responder, dilo.\n\n" + "\n\n".join(lines), len(hits))
 
+    FILE_FIND_CUES = re.compile(r"d[oó]nde (est[aá]n?|qued[oó]|tengo|guard)|en qu[eé] (disco|equipo|carpeta|m[aá]quina)|"
+                                r"(encuentra|busca|ubica|localiza)\w* (mi|mis|el|la|los|las)\b|ruta de|ubicaci[oó]n de")
+    FILE_GENERIC = set("""paquete paquetes archivo archivos carpeta carpetas disco discos equipo equipos máquina maquina
+    tengo guardado guardada guardados está esta están estan donde dónde quedó quedo ruta ubicación ubicacion encuentra busca
+    ubica localiza mis mi el la los las del de que qué para con""".split())
+    PACKAGE_EXT = (".zip", ".rar", ".7z", ".tar", ".gz", ".tgz")
+
+    def files_context(self, text: str) -> str:
+        """Where a file is, by NAME, from the inventory, for the local model. Only paths and devices: never contents,
+        and sensitive entries (no size, never hashed) are not searched at all."""
+        low = text.lower()
+        if not self.FILE_FIND_CUES.search(low):
+            return ""
+        words = [w for w in dict.fromkeys(re.findall(r"[a-záéíóúñü0-9._-]{3,}", low))
+                 if w not in self.FILE_GENERIC and w not in STOPWORDS_ES]
+        if not words:
+            return ""
+        wants_package = bool(re.search(r"paquete|comprimido|\bzip\b|export", low))
+        hits = self.db.inventory_find(words[:5], self.PACKAGE_EXT if wants_package else None, 8)
+        if not hits:
+            return ("Buscaste por nombre en el inventario de archivos de Sergio y no hay ninguno que coincida "
+                    f"con: {', '.join(words[:5])}. Dilo con claridad y sugiere que el equipo puede no estar inventariado; no inventes rutas.")
+        lines = [f"- {h['node_id']}: {h['path']} ({h['size'] // (1 << 20)} MB)" for h in hits]
+        return ("Archivos del inventario de Sergio cuyo nombre coincide (solo rutas, sin contenido). Dile en qué "
+                "dispositivo y carpeta están; si hay varios, menciónalos; no inventes rutas.\n" + "\n".join(lines))
+
     def docs_context(self, text: str) -> tuple[str, list[str]]:
         """Fragments of Sergio's documents for the local model, when his message is about them.
 
@@ -600,6 +626,10 @@ class Brain:
                         else "Llegué al tope de gasto del mes con Claude. Respondí con un modelo local.")
             try:
                 docs_block, doc_files = ("", []) if guest else self.docs_context(text)
+                if not guest:
+                    found = self.files_context(text)
+                    if found:
+                        docs_block = (docs_block + "\n\n" + found).strip()
                 diary_block, diary_n = ("", 0) if guest else self.diary_context(text)
                 reply, device = self.local(self._local_system(guest, voice, docs_block, diary_block), messages)
                 provider = "local"

@@ -802,3 +802,20 @@ def test_time_tracking_start_stop_week_and_export(env):
     first = exp[-1]["id"]
     assert c.delete(f"/api/time/{first}", headers=A).status_code == 200
     assert c.delete(f"/api/time/{first}", headers=A).status_code == 404
+
+
+def test_local_chat_finds_files_by_name_never_sensitive_or_contents(env):
+    c, _ = env
+    brain, db = c.app.state.brain, c.app.state.db
+    db.inventory_add("legion", [
+        {"path": "D:\\Descargas\\package-discord-2024.zip", "kind": "file", "size": 300 << 20},
+        {"path": "D:\\Descargas\\discord_setup.exe", "kind": "file", "size": 90 << 20},
+        {"path": "D:\\Bancos\\discord-claves", "kind": "sensitive"},
+        {"path": "C:\\Fotos\\playa.jpg", "kind": "file", "size": 4 << 20}])
+    out = brain.files_context("¿Dónde está mi paquete de Discord?")
+    assert "legion: D:\\Descargas\\package-discord-2024.zip (300 MB)" in out
+    assert "discord_setup.exe" not in out and "claves" not in out        # 'paquete' narrows to archives; sensitive never listed
+    both = brain.files_context("dónde tengo mis fotos de discord")      # nothing has both words: falls back to either
+    assert "playa.jpg" in both and "discord_setup.exe" in both
+    assert "no hay ninguno" in brain.files_context("dónde está mi contrato de alquiler")
+    assert brain.files_context("cuéntame un chiste") == ""

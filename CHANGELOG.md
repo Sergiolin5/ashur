@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.33.0 | 2026-10-31 | Ajustes → Diagnóstico → «Probar todo»: one button runs core, devices, tasks, memory, diary, documents, audio and updater checks and asks every local model a real question (in parallel, up to 90 s); the result is one plain-text report ([OK]/[AVISO]/[FALLA] per line, no keys) that is copied to the clipboard to paste in the chat. `POST/GET /api/selftest` (admin only) |
 | 0.32.3 | 2026-10-31 | Diagnóstico shows each device's modules (so «has no local model» is visible); Comandos gets the Windows local-model steps (hardware check, Ollama, model, add llm to node.yaml) |
 | 0.32.2 | 2026-10-31 | Core: one «se desconectó» per node instead of a dozen (the sweep ran in every concurrent request and each logged the same event); silence is counted from the core's own start, so a restart no longer flags every node offline; «Buscar recuerdos nuevos ahora» now says why it found nothing (no free model, model timed out, or nothing new) |
 | 0.32.1 | 2026-10-31 | Panel: fixed the flicker on every refresh. Rows animate in only the first time a list appears, not each time the panel redraws (0.30.0 replayed the entrance on every redraw) |

@@ -772,6 +772,12 @@
 
     <div class="page" data-page="diag" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Diagnóstico</div></div>
+      <section><h2>Prueba completa</h2>
+        <div class="group"><div class="row"><div class="main"><div class="title">Probar todo y sacar un informe</div>
+          <div class="detail" id="st-note" style="white-space:normal">Revisa núcleo, equipos, tareas, memoria y le hace una pregunta real a cada modelo local. Tarda hasta un minuto y medio.</div></div></div>
+          <div class="row"><button type="button" id="st-run">Probar todo</button><button type="button" id="st-copy" class="forget" hidden>Copiar informe</button></div></div>
+        <pre id="st-out" class="note" hidden style="white-space:pre-wrap;font-size:12px;user-select:all"></pre>
+      </section>
       <section><h2>Equipos</h2><div class="group" id="diag-nodes"></div><div class="note" id="diag-note"></div></section>
       <section><h2>Errores recientes</h2><div class="group" id="diag-errors"></div>
         <button type="button" id="diag-copy" class="link">Copiar todo para pegárselo a Claude</button></section>
@@ -1750,6 +1756,29 @@
       diagText = lines.join("\n");
     } catch (e) { $("diag-note").textContent = "No pude cargar el diagnóstico."; }
   }
+  let stText = "";
+  $("st-run").addEventListener("click", async () => {
+    const b = $("st-run"), note = $("st-note"); b.disabled = true; b.textContent = "Probando…"; $("st-copy").hidden = true; $("st-out").hidden = true;
+    note.textContent = "Probando… (los modelos locales pueden tardar)";
+    try {
+      await api("api/selftest", { method: "POST" });
+      for (let i = 0; i < 80; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const r = await api("api/selftest"); const j = await r.json();
+        if (!j.running && j.report) { stText = j.report; break; }
+      }
+      if (stText) {
+        $("st-out").textContent = stText; $("st-out").hidden = false; $("st-copy").hidden = false;
+        note.textContent = stText.split("\n")[0];
+        try { await navigator.clipboard.writeText(stText); note.textContent += ". Copiado: pégamelo en el chat."; } catch (e) { note.textContent += ". Toca «Copiar informe»."; }
+      } else { note.textContent = "La prueba no terminó. Inténtalo otra vez."; }
+    } catch (e) { note.textContent = "No pude lanzar la prueba."; }
+    b.disabled = false; b.textContent = "Probar todo";
+  });
+  $("st-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(stText); $("st-copy").textContent = "Copiado"; } catch (e) { $("st-copy").textContent = "No pude copiar"; }
+    setTimeout(() => { $("st-copy").textContent = "Copiar informe"; }, 2000);
+  });
   $("diag-copy").addEventListener("click", async () => {
     const b = $("diag-copy");
     try { await navigator.clipboard.writeText(diagText); b.textContent = "Copiado"; } catch (e) { b.textContent = "No pude copiar"; }

@@ -128,7 +128,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.32.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.33.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -466,6 +466,124 @@ def create_app(
 
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
                    "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem"}
+
+    # --- full self-test: runs the checks and a real question to every local model, returns one plain-text report ---
+    selftest = {"running": False, "report": None, "started": 0.0, "checks": []}
+    selftest_lock = threading.Lock()
+
+    def run_selftest() -> None:
+        checks: list[tuple[str, str, str]] = []                      # (state OK/FALLA/AVISO, name, detail)
+
+        def add(state: str, name: str, detail: str = "") -> None:
+            checks.append((state, name, detail))
+
+        def count(sql: str, *args) -> Optional[int]:
+            try:
+                with db.lock:
+                    return db.conn.execute(sql, args).fetchone()[0]
+            except Exception:
+                return None
+
+        try:
+            now = clock()
+            core_v = node_code()[0]
+            add("OK", "Núcleo", f"v{app.version}, código de nodos v{db.code_label(core_v)}")
+            try:
+                size = os.path.getsize(db_path) // 1024
+                add("OK", "Base de datos", f"{size} KB")
+            except OSError:
+                add("AVISO", "Base de datos", "no pude medir su tamaño")
+            b = brain.budget()
+            has_key = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+            add("OK" if has_key or brain.s.brain != "claude" else "FALLA", "Cerebro",
+                f"modo {brain.s.brain}; clave de Claude {'configurada' if has_key else 'NO configurada'}; "
+                f"gasto US$ {b['spent_usd']:.2f} de US$ {b['budget_usd']:.2f} este mes")
+            code, st = ask_updater("GET", "/status")
+            add("OK" if code == 200 else "FALLA", "Actualizador",
+                ("listo" if code == 200 and not (st or {}).get("busy") else "ocupado" if code == 200 else
+                 f"no responde ({(st or {}).get('detail') or code})"))
+            latest = latest_version()
+            add("OK" if latest else "AVISO", "Última versión publicada", f"v{latest}" if latest else "no pude consultar GitHub")
+            # devices
+            llm_ready = []
+            for n in db.nodes():
+                if n["simulated"]:
+                    continue
+                label = db.code_label(n.get("code_version")) or "?"
+                behind = bool(core_v) and n.get("code_version") != core_v
+                seen = "nunca" if n["last_seen"] is None else f"hace {int(now - n['last_seen'])} s"
+                off = n["mode"] == Mode.OFFLINE.value
+                add("FALLA" if off else "AVISO" if behind else "OK", f"Equipo {n['id']}",
+                    f"{n['mode']}, visto {seen}, código v{label}{' (atrasado)' if behind else ''}, módulos {', '.join(n['modules']) or 'ninguno'}"
+                    + ("" if off or n.get("cpu_pct") is None else f", CPU {n['cpu_pct']:.0f}% RAM {n['ram_pct']:.0f}%"))
+                if "llm" in n["modules"] and n["mode"] in ("full", "light"):
+                    llm_ready.append(n["id"])
+            # tasks
+            tc = db.task_counts()
+            q = db.queued_tasks()
+            add("OK", "Tareas", f"{tc}; en espera: " + ("; ".join(f"{t['module']}@{t['target'] or '*'}" for t in q) or "ninguna"))
+            fails = [e for e in db.log_rows(300) if e["event"] in ("task_failed", "node_problem", "chat_error") and now - e["ts"] < 86400]
+            add("AVISO" if fails else "OK", "Fallos de las últimas 24 h", f"{len(fails)}" + ("".join(
+                f"\n      - {e['node_id'] or 'núcleo'}: {e['detail'].get('error') or e['detail'].get('text') or e['detail'].get('reason') or e['event']}"[:230]
+                for e in fails[:6])))
+            # data
+            add("OK", "Memoria", f"{count('SELECT COUNT(*) FROM memory')} recuerdos, {count('SELECT COUNT(*) FROM memory_proposals WHERE status = ?', 'pending')} por revisar, "
+                f"{count('SELECT COUNT(*) FROM summaries')} resúmenes, {count('SELECT COUNT(*) FROM messages')} mensajes")
+            add("OK", "Diario y avisos", f"{count('SELECT COUNT(*) FROM diary')} entradas, {count('SELECT COUNT(*) FROM push_subs')} dispositivos con avisos")
+            add("OK" if (count("SELECT COUNT(*) FROM docs") or 0) else "AVISO", "Documentos", f"{count('SELECT COUNT(*) FROM docs')} archivos, {count('SELECT COUNT(*) FROM doc_chunks')} fragmentos")
+            add("OK", "Inventario", f"{count('SELECT COUNT(*) FROM inventory')} filas")
+            add("OK", "Audio", f"{count('SELECT COUNT(*) FROM audio_jobs')} trabajos; con módulo de voz: "
+                + (", ".join(n["id"] for n in db.nodes() if "voice" in n["modules"]) or "ningún equipo"))
+            # a real question to every local model, in parallel
+            results: dict = {}
+
+            def ask(node_id: str) -> None:
+                t0 = time.monotonic()
+                tid = db.add_task("llm", {"system": "Responde en español con una sola palabra.",
+                                          "messages": [{"role": "user", "content": "Di: listo"}]}, Weight.LIGHT.value, clock(), target=node_id)
+                try:
+                    while time.monotonic() - t0 < 90:
+                        t = db.get_task(tid)
+                        if t["status"] == "done":
+                            r = (t["result"] or {}).get("result", {})
+                            results[node_id] = ("OK", f"respondió «{(r.get('text') or '').strip()[:30]}» con {r.get('model')} en {time.monotonic() - t0:.1f} s")
+                            return
+                        if t["status"] == "failed":
+                            results[node_id] = ("FALLA", f"falló: {(t['result'] or {}).get('error') or 'sin detalle'}"[:200])
+                            return
+                        time.sleep(0.5)
+                    db.cancel_task(tid, "timeout", clock())
+                    results[node_id] = ("FALLA", "no respondió en 90 s")
+                finally:
+                    db.clear_payload(tid)
+            ths = [threading.Thread(target=ask, args=(i,)) for i in llm_ready]
+            [t.start() for t in ths]; [t.join() for t in ths]
+            for i in sorted(results):
+                add(results[i][0], f"Modelo local en {i}", results[i][1])
+            if not llm_ready:
+                add("FALLA", "Modelos locales", "ningún equipo con módulo llm está disponible ahora")
+            add("AVISO", "No probado desde aquí", "las puertas pública y de tailnet (corre `ashur probar` en el núcleo) y los avisos al iPhone (botón Probar en Diario)")
+        except Exception as e:
+            add("FALLA", "La prueba misma", f"{type(e).__name__}: {e}"[:200])
+        bad = sum(1 for c in checks if c[0] == "FALLA")
+        warn = sum(1 for c in checks if c[0] == "AVISO")
+        stamp = dt.datetime.fromtimestamp(clock(), BOGOTA).strftime("%Y-%m-%d %H:%M")
+        lines = [f"INFORME ASHUR {stamp} (hora de Bogotá) — {bad} fallas, {warn} avisos"]
+        lines += [f"[{st}] {name}: {detail}" if detail else f"[{st}] {name}" for st, name, detail in checks]
+        selftest.update(report="\n".join(lines), running=False, checks=[{"state": a, "name": n, "detail": d} for a, n, d in checks])
+
+    @app.post("/api/selftest", dependencies=[Depends(require_admin)])
+    def selftest_start():
+        with selftest_lock:
+            if selftest["running"] and time.time() - selftest["started"] < 180:
+                return {"started": False}
+            selftest.update(running=True, started=time.time(), report=None, checks=[])
+        threading.Thread(target=run_selftest, daemon=True).start()
+        return {"started": True}
+
+    @app.get("/api/selftest", dependencies=[Depends(require_admin)])
+    def selftest_get():
+        return {"running": selftest["running"], "report": selftest["report"], "checks": selftest["checks"]}
 
     @app.get("/api/diagnostics", dependencies=[Depends(require_admin)])
     def diagnostics():

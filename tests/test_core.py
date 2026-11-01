@@ -554,3 +554,19 @@ def test_offline_is_logged_once_and_not_right_after_a_restart(tmp_path):
     c3 = TestClient(app3)
     c3.get("/api/overview", headers=A)
     assert [n["mode"] for n in c3.get("/api/diagnostics", headers=A).json()["nodes"]] == ["full"]
+
+
+def test_selftest_builds_a_plain_report_without_secrets(env):
+    import time as _t
+    c, clock = env
+    h = register(c, modules=("inventory",), simulated=False)
+    assert c.post("/api/selftest").status_code == 401
+    assert c.post("/api/selftest", headers=A).json()["started"] is True
+    for _ in range(50):
+        j = c.get("/api/selftest", headers=A).json()
+        if j["report"]:
+            break
+        _t.sleep(0.1)
+    r = j["report"]
+    assert r.startswith("INFORME ASHUR") and "[OK] Núcleo" in r and "Equipo" in r
+    assert ADMIN not in r and ENROLL not in r

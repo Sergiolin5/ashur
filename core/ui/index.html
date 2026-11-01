@@ -836,12 +836,15 @@
       Hablando desde
       <select id="voice" aria-label="Dispositivo desde el que hablas" style="font:inherit;color:var(--tint);background:none;border:0;padding:2px"></select>
     </div>
-    <label id="docs-row" hidden style="display:flex;align-items:center;gap:8px;margin:0 4px 4px;font-size:12.5px;line-height:1.25;color:var(--secondary)">
-      <input type="checkbox" id="share-docs"> Compartir fragmentos de mis documentos con Claude en este mensaje
-    </label>
-    <label id="diary-row" hidden style="display:flex;align-items:center;gap:8px;margin:0 4px 4px;font-size:12.5px;line-height:1.25;color:var(--secondary)">
-      <input type="checkbox" id="share-diary"> Compartir mi diario con Claude en este mensaje
-    </label>
+    <details id="opts" hidden style="margin:0 4px 6px;font-size:13px;color:var(--secondary)">
+      <summary id="opts-sum" style="cursor:pointer;list-style:none">Compartir con Claude en este mensaje ›</summary>
+      <label id="docs-row" hidden style="display:flex;align-items:center;gap:8px;margin:6px 0 4px;font-size:12.5px;line-height:1.25">
+        <input type="checkbox" id="share-docs"> Fragmentos de mis documentos
+      </label>
+      <label id="diary-row" hidden style="display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:12.5px;line-height:1.25">
+        <input type="checkbox" id="share-diary"> Mi diario
+      </label>
+    </details>
     <form id="chat-form">
       <button class="mic" id="mic" type="button" aria-label="Dictar un mensaje">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
@@ -1138,6 +1141,15 @@
     try { await api("api/names", { method: "POST", body: JSON.stringify({ key, name: v }) }); } catch (e) {}
     await loadNames(); loadDisks();
   }
+  // the options are folded away to save height, so a ticked box must stay visible: the summary says what is being shared
+  function optsSummary() {
+    const on = [$("share-docs").checked && "documentos", $("share-diary").checked && "diario"].filter(Boolean);
+    const sum = $("opts-sum");
+    sum.textContent = on.length ? "Compartiendo con Claude: " + on.join(" y ") + " ›" : "Compartir con Claude en este mensaje ›";
+    sum.style.color = on.length ? "var(--tint)" : "";
+  }
+  for (const id of ["share-docs", "share-diary"]) $(id).addEventListener("change", optsSummary);
+  setInterval(optsSummary, 1500);                      // they are also unticked by code after a reply
   async function loadNames() { try { NAMES = await (await api("api/names")).json(); } catch (e) {} }
   const diskBoxes = {};
   async function loadDisks() {
@@ -1725,7 +1737,7 @@
       sel.value = list.some((p) => p.name === saved) ? saved : "";
       $("voice-row").hidden = !list.length;
     } catch (e) {}
-    $("docs-row").hidden = $("diary-row").hidden = $("mic").hidden = role === "guest";
+    $("docs-row").hidden = $("diary-row").hidden = $("opts").hidden = $("mic").hidden = role === "guest";
   }
   $("voice").addEventListener("change", () => { try { localStorage.setItem("ashur.voice", $("voice").value); } catch (e) {} });
 
@@ -1834,6 +1846,10 @@
       for (const x of $("diag-nodes").querySelectorAll(".detail")) x.style.whiteSpace = "normal";
       $("diag-note").textContent = "Núcleo v" + d.version + ", código de nodos v" + d.core_code_label + ".";
       lines.push("Núcleo v" + d.version);
+      const probe = el("div"); probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
+      document.body.append(probe); const cs = getComputedStyle(probe); const safe = [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].join("/"); probe.remove();
+      lines.push("Pantalla de ESTE dispositivo: " + innerWidth + "×" + innerHeight + " px CSS (pantalla " + screen.width + "×" + screen.height + "), escala " + devicePixelRatio +
+                 ", app de inicio: " + ((navigator.standalone || matchMedia("(display-mode: standalone)").matches) ? "sí" : "no") + ", márgenes seguros arriba/der/abajo/izq: " + safe);
       fill("diag-errors", d.problems.map((p) => {
         lines.push(clock(p.ts) + " " + (p.node_id || "núcleo") + " " + p.text);
         return row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + clock(p.ts) });

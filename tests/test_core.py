@@ -874,3 +874,15 @@ def test_selftest_scope_and_offline_devices_are_not_failures(env):
     assert "[APAGADO] Equipo legion-go" in rep and "[FALLA] Equipo legion-go" not in rep
     assert "Núcleo" not in rep and "Base de datos" not in rep        # node scope: only that device's lines
     assert "[FALLA]" not in rep.split("\n")[0] or "0 fallas" in rep.split("\n")[0]
+
+
+def test_selftest_counts_are_numbers_not_none(env):
+    c, _ = env
+    assert c.post("/api/selftest", headers=A).json()["started"] is True
+    import time as _t
+    for _ in range(100):
+        j = c.get("/api/selftest", headers=A).json()
+        if not j["running"] and j["report"]:
+            break
+        _t.sleep(0.1)
+    assert "Memoria: 0 recuerdos" in j["report"] and "Inventario: 0 filas" in j["report"]

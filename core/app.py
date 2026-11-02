@@ -180,7 +180,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.40.5", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -205,7 +205,8 @@ def create_app(
             return await call_next(request)
         finally:
             took = time.monotonic() - t0
-            if took >= 5.0 and not request.url.path.startswith("/nodes/") or took >= 20.0:
+            long_poll = request.url.path.endswith("/tasks/next")       # held open on purpose (wait=25 s): not a stall
+            if not long_poll and (took >= 5.0 and not request.url.path.startswith("/nodes/") or took >= 20.0):
                 slow_requests.append({"at": time.time(), "path": request.url.path, "s": round(took, 1)})
                 del slow_requests[:-30]
 

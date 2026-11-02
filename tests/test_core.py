@@ -855,3 +855,4 @@ def test_duplicate_report_uses_its_indexes(env):
     assert "inv_hash" in plan
     rep = db.inventory_report_readonly()
     assert rep["duplicate_groups"] == 3 and rep["wasted"] == 6 * (2 << 20)
+

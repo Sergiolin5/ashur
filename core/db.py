@@ -819,11 +819,17 @@ class DB:
         return {"documents": len(upserts), "removed": len(deletes), "chunks": n_chunks}
 
     def docs_summary(self) -> list[dict]:
-        with self.lock:
-            rows = self.conn.execute(
+        """Own read-only connection: counting 200 k chunks held the shared lock for over a second, and every
+        request (heartbeats included) waited behind it."""
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            rows = c.execute(
                 "SELECT node_id, COUNT(*) documents, COALESCE(SUM(chunks), 0) chunks FROM docs "
                 "GROUP BY node_id ORDER BY node_id").fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
+        finally:
+            c.close()
 
     def docs_search(self, words: list[str], limit: int = 8, with_text: bool = True,
                     any_word: bool = False, full: bool = False) -> list[dict]:

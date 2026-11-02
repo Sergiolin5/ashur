@@ -7,6 +7,7 @@ and `ashur-node` as `:latest`, as `:<core version>` and as `:<commit>`. ZimaOS r
 
 | Version | Date | What changed |
 | --- | --- | --- |
+| 0.40.7 | 2026-11-02 | «Núcleo responde, pero los datos tardan»: each node waiting for work (long poll) checked the database four times a second, taking the shared lock twice per check. With three nodes that kept the lock busy and the panel's overview (which takes the lock about a dozen times) waited behind it. Checks now run once a second; a new task still starts within a second. |
 | 0.40.6 | 2026-11-02 | «No pude lanzar la prueba» hid its cause. The message now says whether the request got no answer (phone connection) or an HTTP status, so the next failure can be read. |
 | 0.40.5 | 2026-11-02 | Two fixes from the 15:21 diagnostics. (1) «Momentos lentos» was flagging every node's `tasks/next` at 25 s: that is the long poll (the node waits up to 25 s for work on purpose), not a stall; those calls are no longer recorded. (2) The documents summary took the shared database lock for 1.1–1.5 s per call (200 k chunks counted); it now reads on its own connection, like the inventory summary. |
 | 0.40.4 | 2026-11-02 | **Calmer panel.** The panel asks the core every 10 s on screen (was 3 s), every 60 s in a hidden tab, and backs off to 20/40/60 s while calls fail. When a call fails it asks `/health` (touches no database): if that answers, the message says the core is alive and its data is busy, instead of the same «tardando» for every case. |

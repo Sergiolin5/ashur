@@ -180,7 +180,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.6", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.40.7", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -482,7 +482,7 @@ def create_app(
             t = db.claim_task(node["id"], mine, WEIGHTS_FOR_MODE[Mode(fresh["mode"])], now=clock())
             if t or time.monotonic() >= deadline:
                 break
-            time.sleep(0.25)
+            time.sleep(1.0)     # each pass takes the shared database lock twice: 4 passes a second per waiting node starved the panel
         if not t:
             return None
         db.log(clock(), node["id"], "task_start", {"task_id": t["id"], "module": t["module"]})

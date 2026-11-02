@@ -2327,7 +2327,8 @@
     const b = $("st-run"), note = $("st-note"); b.disabled = true; b.textContent = "Probando…"; $("st-copy").hidden = true; $("st-out").hidden = true;
     note.textContent = "Probando… (los modelos locales pueden tardar)";
     try {
-      await api("api/selftest", { method: "POST" });
+      const start = await api("api/selftest", { method: "POST" });
+      if (!start.ok) throw new Error("HTTP " + start.status);
       for (let i = 0; i < 80; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         const r = await api("api/selftest"); const j = await r.json();
@@ -2338,7 +2339,7 @@
         note.textContent = stText.split("\n")[0];
         try { await navigator.clipboard.writeText(stText); note.textContent += ". Copiado: pégamelo en el chat."; } catch (e) { note.textContent += ". Toca «Copiar informe»."; showCopy(stText); }
       } else { note.textContent = "La prueba no terminó. Inténtalo otra vez."; }
-    } catch (e) { note.textContent = "No pude lanzar la prueba."; }
+    } catch (e) { note.textContent = "No pude lanzar la prueba (" + (e && e.message ? e.message : "sin respuesta") + "). Si dice «sin respuesta», es la conexión del teléfono; si dice HTTP, dime el número."; }
     b.disabled = false; b.textContent = "Probar todo";
   });
   // iOS refuses clipboard writes once the tap that started them is old (a slow report): show the text, selected, to copy by hand or share

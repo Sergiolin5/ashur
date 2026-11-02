@@ -180,7 +180,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.7", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.40.8", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -615,16 +615,24 @@ def create_app(
     selftest = {"running": False, "report": None, "started": 0.0, "checks": []}
     selftest_lock = threading.Lock()
 
-    def run_selftest() -> None:
-        checks: list[tuple[str, str, str]] = []                      # (state OK/FALLA/AVISO, name, detail)
+    def run_selftest(only: str = "") -> None:
+        """only: "" = everything, "nucleo" = the core's own checks, or one device id = that device's checks.
+        A switched-off device is APAGADO, not a failure: expected, and it must not hide what the core is doing."""
+        def wanted(node_id: Optional[str]) -> bool:
+            return not only or (node_id is not None and only == node_id)
+        checks: list[tuple[str, str, str]] = []                      # (state OK/FALLA/AVISO/APAGADO, name, detail)
 
         def add(state: str, name: str, detail: str = "") -> None:
             checks.append((state, name, detail))
 
         def count(sql: str, *args) -> Optional[int]:
+            # own read-only connection: a count over 1.4 M inventory rows held the shared lock for seconds
             try:
-                with db.lock:
-                    return db.conn.execute(sql, args).fetchone()[0]
+                c = sqlite3.connect(db_path, timeout=30)
+                try:
+                    return c.execute(sql, args).fetchone()[0]
+                finally:
+                    c.close()
             except Exception:
                 return None
 
@@ -657,10 +665,14 @@ def create_app(
                 behind = bool(core_v) and n.get("code_version") != core_v
                 seen = "nunca" if n["last_seen"] is None else f"hace {int(now - n['last_seen'])} s"
                 off = n["mode"] == Mode.OFFLINE.value
-                add("FALLA" if off else "AVISO" if behind else "OK", f"Equipo {n['id']}",
+                if not wanted(n["id"]):
+                    if not off and "llm" in n["modules"] and n["mode"] in ("full", "light"):
+                        llm_ready.append(n["id"])
+                    continue
+                add("APAGADO" if off else "AVISO" if behind else "OK", f"Equipo {n['id']}",
                     f"{n['mode']}, visto {seen}, código v{label}{' (atrasado)' if behind else ''}, módulos {', '.join(n['modules']) or 'ninguno'}"
                     + ("" if off or n.get("cpu_pct") is None else f", CPU {n['cpu_pct']:.0f}% RAM {n['ram_pct']:.0f}%"))
-                if "llm" in n["modules"] and n["mode"] in ("full", "light"):
+                if "llm" in n["modules"] and n["mode"] in ("full", "light") and n["id"] not in llm_ready:
                     llm_ready.append(n["id"])
             # tasks
             tc = db.task_counts()
@@ -678,7 +690,7 @@ def create_app(
             add("OK", "Inventario", f"{count('SELECT COUNT(*) FROM inventory')} filas")
             gb = lambda b: f"{b / 1e9:.0f} GB"
             for n in db.nodes():
-                if n["simulated"] or "inventory" not in n["modules"]:
+                if n["simulated"] or "inventory" not in n["modules"] or not wanted(n["id"]):
                     continue
                 ds = n.get("disks")
                 if ds is None:
@@ -718,15 +730,18 @@ def create_app(
                     results[node_id] = ("FALLA", "no respondió en 90 s")
                 finally:
                     db.clear_payload(tid)
-            ths = [threading.Thread(target=ask, args=(i,)) for i in llm_ready]
+            ths = [threading.Thread(target=ask, args=(i,)) for i in llm_ready if wanted(i)]
             [t.start() for t in ths]; [t.join() for t in ths]
             for i in sorted(results):
                 add(results[i][0], f"Modelo local en {i}", results[i][1])
-            if not llm_ready:
-                add("FALLA", "Modelos locales", "ningún equipo con módulo llm está disponible ahora")
+            if not llm_ready and wanted(None):
+                add("APAGADO" if any(n["mode"] == Mode.OFFLINE.value for n in db.nodes() if "llm" in n["modules"]) else "FALLA",
+                    "Modelos locales", "ningún equipo con módulo llm está encendido ahora")
             add("AVISO", "No probado desde aquí", "las puertas pública y de tailnet (corre `ashur probar` en el núcleo) y los avisos al iPhone (botón Probar en Diario)")
         except Exception as e:
             add("FALLA", "La prueba misma", f"{type(e).__name__}: {e}"[:200])
+        if only and only != "nucleo":        # a single device: keep only its own lines (the core checks are for the whole)
+            checks = [c for c in checks if c[1].endswith(" " + only) or c[1].startswith("Modelo local en " + only)]
         bad = sum(1 for c in checks if c[0] == "FALLA")
         warn = sum(1 for c in checks if c[0] == "AVISO")
         stamp = dt.datetime.fromtimestamp(clock(), BOGOTA).strftime("%Y-%m-%d %H:%M")
@@ -735,12 +750,12 @@ def create_app(
         selftest.update(report="\n".join(lines), running=False, checks=[{"state": a, "name": n, "detail": d} for a, n, d in checks])
 
     @app.post("/api/selftest", dependencies=[Depends(require_admin)])
-    def selftest_start():
+    def selftest_start(only: str = Query(default="", max_length=40, pattern=r"^(|nucleo|[a-z0-9][a-z0-9-]{0,30})$")):
         with selftest_lock:
             if selftest["running"] and time.time() - selftest["started"] < 180:
                 return {"started": False}
             selftest.update(running=True, started=time.time(), report=None, checks=[])
-        threading.Thread(target=run_selftest, daemon=True).start()
+        threading.Thread(target=run_selftest, args=(only,), daemon=True).start()
         return {"started": True}
 
     @app.get("/api/selftest", dependencies=[Depends(require_admin)])

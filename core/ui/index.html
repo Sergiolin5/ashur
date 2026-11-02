@@ -895,7 +895,7 @@
       <section><h2>Prueba completa</h2>
         <div class="group"><div class="row"><div class="main"><div class="title">Probar todo y sacar un informe</div>
           <div class="detail" id="st-note" style="white-space:normal">Revisa núcleo, equipos, tareas, memoria y le hace una pregunta real a cada modelo local. Tarda hasta un minuto y medio.</div></div></div>
-          <div class="row"><button type="button" id="st-run">Probar todo</button><button type="button" id="st-copy" class="forget" hidden>Copiar informe</button></div></div>
+          <div class="row"><select id="st-scope" aria-label="Qué probar" style="flex:1;font:inherit;font-size:15px;padding:9px;border-radius:10px;border:0;background:var(--field);color:var(--label)"><option value="">Todo</option><option value="nucleo">Solo el núcleo</option></select><button type="button" id="st-run">Probar</button><button type="button" id="st-copy" class="forget" hidden>Copiar informe</button></div></div>
         <pre id="st-out" class="note" hidden style="white-space:pre-wrap;font-size:12px;user-select:all"></pre>
       </section>
       <section><h2>Equipos</h2><div class="group" id="diag-nodes"></div><div class="note" id="diag-note"></div></section>
@@ -2288,6 +2288,10 @@
   async function loadDiag() {
     try {
       const r = await api("api/diagnostics"); const d = await r.json();
+      { const sc = $("st-scope"), keep = sc.value;                     // one choice per device, built from what the core knows
+        for (const n of d.nodes || []) if (!sc.querySelector('option[value="' + n.id + '"]')) {
+          const o = el("option", null, "Solo " + n.id); o.value = n.id; sc.append(o); }
+        sc.value = keep; }
       const lines = [];
       fill("diag-nodes", d.nodes.map((n) => {
         const state = n.mode === "offline" ? "desconectado" : n.behind ? "código atrasado (v" + (n.code_label || "?") + " → v" + d.core_code_label + ")" : "al día";
@@ -2327,7 +2331,8 @@
     const b = $("st-run"), note = $("st-note"); b.disabled = true; b.textContent = "Probando…"; $("st-copy").hidden = true; $("st-out").hidden = true;
     note.textContent = "Probando… (los modelos locales pueden tardar)";
     try {
-      const start = await api("api/selftest", { method: "POST" });
+      const scope = $("st-scope").value;
+      const start = await api("api/selftest" + (scope ? "?only=" + encodeURIComponent(scope) : ""), { method: "POST" });
       if (!start.ok) throw new Error("HTTP " + start.status);
       for (let i = 0; i < 80; i++) {
         await new Promise((r) => setTimeout(r, 2000));
@@ -2340,7 +2345,7 @@
         try { await navigator.clipboard.writeText(stText); note.textContent += ". Copiado: pégamelo en el chat."; } catch (e) { note.textContent += ". Toca «Copiar informe»."; showCopy(stText); }
       } else { note.textContent = "La prueba no terminó. Inténtalo otra vez."; }
     } catch (e) { note.textContent = "No pude lanzar la prueba (" + (e && e.message ? e.message : "sin respuesta") + "). Si dice «sin respuesta», es la conexión del teléfono; si dice HTTP, dime el número."; }
-    b.disabled = false; b.textContent = "Probar todo";
+    b.disabled = false; b.textContent = "Probar";
   });
   // iOS refuses clipboard writes once the tap that started them is old (a slow report): show the text, selected, to copy by hand or share
   function showCopy(text) {

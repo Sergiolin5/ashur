@@ -856,3 +856,21 @@ def test_duplicate_report_uses_its_indexes(env):
     rep = db.inventory_report_readonly()
     assert rep["duplicate_groups"] == 3 and rep["wasted"] == 6 * (2 << 20)
 
+
+
+def test_selftest_scope_and_offline_devices_are_not_failures(env):
+    c, _ = env
+    register(c, device_id="legion-go", simulated=False)
+    c.app.state.db.set_node_mode("legion-go", "offline")    # switched off
+    assert c.post("/api/selftest?only=bogus!", headers=A).status_code == 422
+    assert c.post("/api/selftest?only=legion-go", headers=A).json()["started"] is True
+    import time as _t
+    for _ in range(100):
+        j = c.get("/api/selftest", headers=A).json()
+        if not j["running"] and j["report"]:
+            break
+        _t.sleep(0.1)
+    rep = j["report"]
+    assert "[APAGADO] Equipo legion-go" in rep and "[FALLA] Equipo legion-go" not in rep
+    assert "Núcleo" not in rep and "Base de datos" not in rep        # node scope: only that device's lines
+    assert "[FALLA]" not in rep.split("\n")[0] or "0 fallas" in rep.split("\n")[0]

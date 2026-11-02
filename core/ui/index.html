@@ -1490,6 +1490,8 @@
       }
     } catch (e) {}
   }
+  // Calls to the core that fail in a row slow the panel down (10 s → 20 s → 40 s → 60 s) instead of hammering a busy core.
+  let failStreak = 0;
   async function refresh() {
     if (!key) return showSignin();
     try {
@@ -1507,6 +1509,7 @@
       }
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
+      failStreak = 0;
       render(data);
       flushNotes();
       if (startHash) { const h = startHash; startHash = ""; openWhere(h); }
@@ -1515,15 +1518,21 @@
       showBudget(data.budget);
       unlock();
     } catch (e) {
+      failStreak++;
       $("subtitle").classList.add("stale");
       const slow = e && e.name === "AbortError";
-      $("subtitle-text").textContent = slow ? "El núcleo está tardando en contestar. Sigo intentándolo…"
-                                            : "Perdí la conexión un momento. Sigo intentándolo…";
+      // /health touches no database: if it answers, the process is alive and only the data is slow (or stuck)
+      let alive = false;
+      try { const h = new AbortController(); const t = setTimeout(() => h.abort(), 4000);
+            alive = (await fetch("health", { cache: "no-store", signal: h.signal })).ok; clearTimeout(t); } catch (x) {}
+      const msg = alive ? "El núcleo responde, pero sus datos tardan: la base está ocupada. Sigo intentándolo…"
+                        : (slow ? "El núcleo no contesta. Sigo intentándolo…" : "Perdí la conexión un momento. Sigo intentándolo…");
+      $("subtitle-text").textContent = msg;
       if (!unlocked) {
         const er = $("signin-error");
         er.hidden = false;
-        er.textContent = slow ? "El núcleo está tardando más de lo normal. Si sigue así, en su terminal: ashur probar"
-                              : "No logro llegar al núcleo todavía. Revisa tu conexión; lo intento de nuevo cada pocos segundos.";
+        er.textContent = alive ? "El núcleo está encendido, pero sus datos tardan. Espera un poco; si no cambia, en su terminal: ashur probar"
+                               : "No logro llegar al núcleo todavía. Revisa tu conexión; lo intento de nuevo en un rato.";
       }
     }
   }
@@ -2216,10 +2225,13 @@
     loadPersonas();
   });
 
+  // Every 10 s while the panel is on screen (was 3 s), 60 s in a hidden tab, and backing off while the core fails.
   function loop() {
     clearTimeout(timer);
-    if (document.visibilityState === "visible" && (tab === "status" || tab === "settings" || !unlocked)) refresh();
-    timer = setTimeout(loop, 3000);
+    const visible = document.visibilityState === "visible";
+    if (visible && (tab === "status" || tab === "settings" || !unlocked)) refresh();
+    const base = visible ? 10000 : 60000;
+    timer = setTimeout(loop, Math.min(60000, base * Math.pow(2, Math.min(failStreak, 3))));
   }
 
   $("signin-form").addEventListener("submit", (e) => {

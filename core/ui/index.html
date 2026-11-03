@@ -2337,9 +2337,12 @@
         lines.push("  módulos: " + mods);
         const dl = (n.disks || []).map((x) => x.mount + " " + gbs(x.total) + (x.present ? " (" + gbs(x.used) + " usados" + (x.kind !== "nuevo" ? ", " + x.kind : "") + ")" : " (ausente)") + (x.present && !x.scanned ? " SIN ESCANEAR" : ""));
         lines.push("  discos: " + (n.disks ? dl.join("; ") || "ninguno visible" : "sin informar"));
+        lines.push("  GPU: " + (n.gpus ? n.gpus.join("; ") || "ninguna visible" : "sin informar (hace falta el código v0.42.0 y unos 10 min)"));
+        if (n.llm) lines.push("  modelo local: " + n.llm);
         const off = (n.disks || []).filter((x) => x.present && !x.scanned).length;
         const sum = n.disks ? (n.disks.length + (n.disks.length === 1 ? " disco" : " discos") + (off ? ", " + off + " sin escanear" : "")) : "";
-        return row({ dot: n.mode, title: nm(n.device_id), detail: state + " · módulos: " + mods + (sum ? " · " + sum : "") + (n.hint ? " · " + n.hint : ""),
+        const gsum = (n.gpus || []).length ? " · GPU: " + n.gpus.join("; ") : "";
+        return row({ dot: n.mode, title: nm(n.device_id), detail: state + " · módulos: " + mods + (sum ? " · " + sum : "") + gsum + (n.llm ? " · modelo: " + n.llm : "") + (n.hint ? " · " + n.hint : ""),
                      value: ago(n.last_seen_s_ago) });
       }), "Sin equipos.");
       for (const x of $("diag-nodes").querySelectorAll(".detail")) x.style.whiteSpace = "normal";

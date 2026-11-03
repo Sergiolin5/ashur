@@ -42,4 +42,20 @@ def run(payload: dict, ctx, client=None) -> dict:
     r.raise_for_status()
     data = r.json()
     return {"text": data.get("message", {}).get("content", ""), "model": model,
-            "tokens_out": data.get("eval_count"), "seconds": round((data.get("total_duration") or 0) / 1e9, 2)}
+            "tokens_out": data.get("eval_count"), "seconds": round((data.get("total_duration") or 0) / 1e9, 2),
+            "gpu_share": gpu_share(url, model, c)}
+
+
+def gpu_share(url: str, model: str, client) -> "float | None":
+    """How much of the loaded model sits in GPU memory (Ollama's «100% GPU» is 1.0, «100% CPU» is 0.0).
+    This is the truth about whether a GPU (an eGPU included) is really doing the work; None if Ollama cannot say."""
+    try:
+        r = client.get(f"{url}/api/ps", timeout=3)
+        r.raise_for_status()
+        for m in r.json().get("models", []):
+            if m.get("name") == model or m.get("model") == model:
+                size, vram = m.get("size") or 0, m.get("size_vram") or 0
+                return round(vram / size, 2) if size else None
+    except Exception:
+        return None
+    return None

@@ -90,6 +90,32 @@ def merge_disks(known, reported, now: float) -> list:
     return sorted(out.values(), key=lambda d: (not d["present"], -(d.get("total") or 0)))[:32]
 
 
+def merge_gpus(known, reported, now: float) -> list:
+    """Remember every GPU a node has shown, by name. One missing from this report stays as absent: an eGPU unplugged is
+    «ausente», not an error, and comes back present when plugged in again."""
+    out = {g["name"]: dict(g, present=False) for g in known or [] if isinstance(g, dict) and g.get("name")}
+    for g in reported:
+        if not isinstance(g, dict) or not g.get("name"):
+            continue
+        name = str(g["name"])[:80]
+        keep = {k: g.get(k) for k in ("vendor", "vram_total_mb", "vram_free_mb", "driver", "shared_memory") if g.get(k) is not None}
+        out[name] = {"name": name, **keep, "present": True, "first_seen": (out.get(name) or {}).get("first_seen", now),
+                     "last_seen": now}
+    return sorted(out.values(), key=lambda g: (not g["present"], -(g.get("vram_total_mb") or 0)))[:12]
+
+
+def gpu_text(g: dict) -> str:
+    """«NVIDIA GeForce RTX 3060, 12 GB (6.7 GB libres)», «AMD Radeon RX 7600M XT (ausente)»."""
+    t = g["name"]
+    if g.get("vram_total_mb"):
+        t += f", {g['vram_total_mb'] / 1024:.0f} GB"
+        if g.get("vram_free_mb") is not None:
+            t += f" ({g['vram_free_mb'] / 1024:.1f} GB libres)"
+    elif g.get("shared_memory"):
+        t += ", memoria compartida"
+    return t + ("" if g.get("present") else " (ausente)")
+
+
 def disk_notes(d: dict, now: float) -> str:
     """What is worth saying about a disk besides its size: nothing for a plain fixed or brand-new disk."""
     kind = disk_kind(d, now)
@@ -182,7 +208,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.41.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.42.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -428,6 +454,8 @@ def create_app(
                 db.log(now, node["id"], "code_updated", {"from": node["code_version"], "to": hb.code_version})
         if hb.disks is not None:
             db.set_node_disks(node["id"], merge_disks(node.get("disks"), hb.disks, now))
+        if hb.gpus is not None:
+            db.set_node_gpus(node["id"], merge_gpus(node.get("gpus"), hb.gpus, now))
         for text in (hb.problems or [])[:5]:
             db.log(now, node["id"], "node_problem", {"text": str(text)[:200]})
         if hb.fresh_start:
@@ -514,6 +542,8 @@ def create_app(
                {"task_id": task_id, "module": t["module"], "error": res.error})
         if t["module"] == "voice":
             voice_received(task_id, res)
+        if t["module"] == "llm" and res.ok:
+            remember_llm_run(t["node_id"], res.result or {}, now)
         return {"ok": True}
 
     @app.post("/nodes/{node_id}/inventory")
@@ -735,7 +765,8 @@ def create_app(
                             total = time.monotonic() - t0
                             queued = max(0.0, (t.get("started") or t["created"]) - t["created"])   # waiting for the node vs. the model itself
                             results[node_id] = ("OK", f"respondió «{(r.get('text') or '').strip()[:30]}» con {r.get('model')} en {total:.1f} s"
-                                                + (f" (esperó {queued:.0f} s a que el equipo la tomara)" if queued >= 5 else ""))
+                                                + (f" (esperó {queued:.0f} s a que el equipo la tomara)" if queued >= 5 else "")
+                                                + ("" if r.get("gpu_share") is None else f"; modelo {r['gpu_share']:.0%} en GPU"))
                             return
                         if t["status"] in ("failed", "cancelled"):
                             results[node_id] = ("FALLA", f"falló: {(t['result'] or {}).get('error') or 'sin detalle'}"[:200])
@@ -800,7 +831,8 @@ def create_app(
             elif core_v and not n.code_version:
                 hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
-                          "code_label": n.code_label, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint})
+                          "code_label": n.code_label, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
+                          "gpus": gpus_text_of(n.device_id), "llm": llm_line(n.device_id)})
         problems = []
         for ev in db.log_rows(600):
             if ev["event"] in DIAG_EVENTS:
@@ -851,6 +883,62 @@ def create_app(
 
     local_timeout_s = float(os.environ.get("ASHUR_LOCAL_TIMEOUT_S", "120"))
 
+    # --- which device answers the chat (0.42.0) ---------------------------------------------
+    # Ollama itself says how much of the model sits in GPU memory; that, not a spec sheet, decides. A measurement
+    # counts while the device still has the same GPUs plugged in (an eGPU unplugged voids it) and for two days.
+    def present_gpus(node: dict) -> list[str]:
+        return sorted(g["name"] for g in node.get("gpus") or [] if g.get("present"))
+
+    def remember_llm_run(node_id: str, out: dict, now: float) -> None:
+        node = db.get_node(node_id) or {}
+        db.set_setting(f"llm_perf:{node_id}", json.dumps({
+            "share": out.get("gpu_share"), "model": out.get("model"), "seconds": out.get("seconds"), "at": now,
+            "gpus": present_gpus(node)}))
+
+    def llm_perf(node: dict) -> Optional[dict]:
+        try:
+            p = json.loads(db.setting(f"llm_perf:{node['id']}", "") or "null")
+        except ValueError:
+            return None
+        if not p or clock() - p.get("at", 0) > 2 * 86400 or p.get("gpus") != present_gpus(node):
+            return None
+        return p
+
+    def model_size_b(model: Optional[str]) -> float:
+        m = re.search(r"(\d+(?:\.\d+)?)b\b", (model or "").lower())
+        return float(m.group(1)) if m else 0.0
+
+    def gpus_text_of(node_id: str) -> Optional[list[str]]:
+        node = db.get_node(node_id) or {}
+        return None if node.get("gpus") is None else [gpu_text(g) for g in node["gpus"]]
+
+    def llm_line(node_id: str) -> Optional[str]:
+        """«qwen2.5:7b en GPU (100%), 1.2 s», from the last answer of that device's model; None if never measured."""
+        node = db.get_node(node_id)
+        if not node or "llm" not in node["modules"]:
+            return None
+        try:
+            p = json.loads(db.setting(f"llm_perf:{node_id}", "") or "null")
+        except ValueError:
+            p = None
+        if not p:
+            return "sin medir (se mide con su próxima respuesta o con «Probar»)"
+        sh = p.get("share")
+        where = "sin dato de GPU" if sh is None else ("en GPU" if sh >= 0.9 else "en CPU" if sh <= 0.1 else "repartido GPU/CPU") + (f" ({sh:.0%})" if sh is not None else "")
+        stale = "" if llm_perf(node) else " · medida vieja o con otras GPU conectadas"
+        return f"{p.get('model')} {where}, {p.get('seconds')} s" + stale
+
+    def best_llm_node(ready: list[dict]) -> Optional[str]:
+        """The device whose model last ran on its GPU, the bigger model first, then the faster one. None: any may answer."""
+        scored = []
+        for n in ready:
+            p = llm_perf(n)
+            if p and (p.get("share") or 0) >= 0.9:
+                scored.append((-model_size_b(p.get("model")), p.get("seconds") or 999.0, n["id"]))
+        return min(scored)[2] if scored else None
+
+    app.state.best_llm_node = best_llm_node
+
     def local_complete(system: str, messages: list) -> tuple[str, str]:
         """Ask a node with a local model (module 'llm') and wait for its answer."""
         sweep()
@@ -858,10 +946,15 @@ def create_app(
         if not ready:
             raise LocalUnavailable("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
                                    "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
-        tid = db.add_task("llm", {"system": system, "messages": messages}, Weight.LIGHT.value, clock())
+        target = best_llm_node(ready)
+        tid = db.add_task("llm", {"system": system, "messages": messages}, Weight.LIGHT.value, clock(), target=target)
         deadline = time.monotonic() + local_timeout_s
+        handoff = time.monotonic() + 10           # the preferred device is busy or asleep: after 10 s, any device may take it
         try:
             while time.monotonic() < deadline:
+                if target and time.monotonic() >= handoff:
+                    db.untarget_if_queued(tid)
+                    target = None
                 t = db.get_task(tid)
                 if t["status"] == "done":
                     return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]

@@ -948,3 +948,38 @@ def test_diagnostics_reports_the_longest_holds(env):
     c.app.state.db.slow_longest.append({"at": 1.0, "held_s": 429.2, "waited_s": 0.0, "who": "inventory_reset"})
     d = c.get("/api/diagnostics", headers=A).json()
     assert any("429.2" in x["text"] and "inventory_reset" in x["text"] for x in d["slow_longest"])
+
+
+def test_gpus_are_remembered_and_an_unplugged_egpu_is_absent(env):
+    c, _ = env
+    h = register(c, device_id="legion", modules=("llm",))
+    egpu = {"name": "AMD Radeon RX 7600M XT", "vendor": "amd", "driver": "32.0"}
+    igpu = {"name": "AMD Radeon Graphics", "vendor": "amd", "driver": "32.0"}
+    c.post("/nodes/legion/heartbeat", headers=h, json={"mode": "full", "gpus": [igpu, egpu]})
+    c.post("/nodes/legion/heartbeat", headers=h, json={"mode": "full", "gpus": [igpu]})        # eGPU unplugged
+    n = [x for x in c.get("/api/diagnostics", headers=A).json()["nodes"] if x["device_id"] == "legion"][0]
+    assert n["gpus"] == ["AMD Radeon Graphics", "AMD Radeon RX 7600M XT (ausente)"]
+    assert n["llm"].startswith("sin medir")
+
+
+def test_chat_prefers_the_device_whose_model_ran_on_its_gpu(env):
+    c, _ = env
+    hr = register(c, device_id="ryzen9", modules=("llm",))
+    hm = register(c, device_id="mac", modules=("llm",))
+    for d, h in (("ryzen9", hr), ("mac", hm)):
+        c.post(f"/nodes/{d}/heartbeat", headers=h, json={"mode": "full", "gpus": [{"name": "G-" + d}]})
+    app = c.app
+    db = app.state.db
+    import json as _j
+    # what each device's last answer said: the Ryzen ran its 7B fully on GPU, the Mac its 3B on CPU
+    for d, share, model in (("ryzen9", 1.0, "qwen2.5:7b"), ("mac", 0.0, "qwen2.5:3b")):
+        tid = db.add_task("llm", {}, "light", 0, target=d)
+        t = c.get(f"/nodes/{d}/tasks/next", headers=hr if d == "ryzen9" else hm).json()
+        c.post(f"/tasks/{t['id']}/result", headers=hr if d == "ryzen9" else hm,
+               json={"ok": True, "result": {"text": "listo", "model": model, "seconds": 1.0, "gpu_share": share}})
+    nodes = [n for n in db.nodes() if n["id"] in ("ryzen9", "mac")]
+    assert c.app.state.best_llm_node(nodes) == "ryzen9"
+    # the GPUs the Ryzen measured with are gone (an eGPU unplugged): its measurement no longer counts
+    c.post("/nodes/ryzen9/heartbeat", headers=hr, json={"mode": "full", "gpus": []})
+    nodes = [n for n in db.nodes() if n["id"] in ("ryzen9", "mac")]
+    assert c.app.state.best_llm_node(nodes) is None

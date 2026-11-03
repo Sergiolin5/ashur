@@ -22,6 +22,7 @@ import httpx
 import yaml
 
 from node import disks as disks_mod
+from node import gpus as gpus_mod
 from node import metrics
 from node.modules import Module, load, this_os
 from node.policy import Policy, Thresholds
@@ -307,6 +308,12 @@ class Agent:
         disks = disks_mod.cached(self.cfg.get("inventory_roots"))
         if disks is not None:
             beat["disks"] = disks
+        try:
+            gpus = gpus_mod.cached()
+        except Exception:
+            gpus = None
+        if gpus is not None:
+            beat["gpus"] = gpus
         problems = PROBLEMS.take()
         if problems:
             beat["problems"] = problems

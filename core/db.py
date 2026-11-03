@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     code_version TEXT,
     cpu_pct REAL, ram_pct REAL, gpu_pct REAL,
     mode_reason TEXT,                   -- why the node is in that mode, in Spanish
-    disks TEXT                          -- JSON: its disks and whether the inventory scans each
+    disks TEXT,                         -- JSON: its disks and whether the inventory scans each
+    gpus TEXT                           -- JSON: its GPUs, absent ones remembered (0.42.0)
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -240,6 +241,8 @@ class DB:
                 self.conn.execute(f"ALTER TABLE nodes ADD COLUMN {c} REAL")
         if "disks" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN disks TEXT")
+        if "gpus" not in ncols:         # 0.42.0: GPUs each node reports, remembered when absent (an eGPU comes and goes)
+            self.conn.execute("ALTER TABLE nodes ADD COLUMN gpus TEXT")
         if "mode_reason" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN mode_reason TEXT")
         mem = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory)")}
@@ -342,6 +345,11 @@ class DB:
                               (cpu, ram, gpu, node_id))
             self.conn.commit()
 
+    def set_node_gpus(self, node_id: str, gpus: list) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE nodes SET gpus = ? WHERE id = ?", (json.dumps(gpus[:12]), node_id))
+            self.conn.commit()
+
     def set_node_disks(self, node_id: str, disks: list) -> None:
         with self.lock:
             self.conn.execute("UPDATE nodes SET disks = ? WHERE id = ?", (json.dumps(disks[:32]), node_id))
@@ -390,6 +398,7 @@ class DB:
         d["resources"] = json.loads(d["resources"])
         d["simulated"] = bool(d["simulated"])
         d["disks"] = json.loads(d["disks"]) if d.get("disks") else None
+        d["gpus"] = json.loads(d["gpus"]) if d.get("gpus") else None
         return d
 
     # --- tasks -----------------------------------------------------------
@@ -451,6 +460,11 @@ class DB:
             self.conn.execute(
                 "UPDATE tasks SET status = 'failed', result = ?, finished = ? WHERE id = ? AND status IN ('queued', 'running')",
                 (json.dumps({"ok": False, "error": reason}), now, task_id))
+            self.conn.commit()
+
+    def untarget_if_queued(self, task_id: int) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE tasks SET target = NULL WHERE id = ? AND status = 'queued'", (task_id,))
             self.conn.commit()
 
     def cancel_queued(self, task_id: int, now: float) -> Optional[str]:

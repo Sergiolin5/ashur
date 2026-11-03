@@ -367,3 +367,33 @@ def test_module_that_failed_at_start_is_retried_and_announced(core, tmp_path, mo
     assert "llm" in agent.modules
     node = [n for n in c.get("/status", headers=A).json()["nodes"] if n["device_id"] == "ryzen9"][0]
     assert node["modules"] == ["inventory", "llm"]
+
+
+def test_llm_module_reports_how_much_of_the_model_is_on_the_gpu():
+    """0.42.0: Ollama's own /api/ps decides whether a GPU (an eGPU too) really did the work."""
+    from types import SimpleNamespace
+    from modules.llm.action import run
+
+    def handler(req):
+        if req.url.path == "/api/chat":
+            return _httpx.Response(200, json={"message": {"content": "listo"}, "total_duration": 1_000_000_000})
+        if req.url.path == "/api/ps":
+            return _httpx.Response(200, json={"models": [{"name": "qwen2.5:7b", "size": 4800, "size_vram": 4800}]})
+        return _httpx.Response(404)
+    out = run({"model": "qwen2.5:7b", "messages": []}, SimpleNamespace(config={}),
+              client=_httpx.Client(transport=_httpx.MockTransport(handler)))
+    assert out["gpu_share"] == 1.0
+
+
+def test_gpus_are_read_without_guessing(monkeypatch):
+    from node import gpus
+    monkeypatch.setattr(gpus.shutil, "which", lambda exe: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(gpus.platform, "system", lambda: "Linux")
+
+    class Out:
+        stdout = "NVIDIA GeForce RTX 3060, 12288, 6728, 576.02\n"
+    monkeypatch.setattr(gpus.subprocess, "run", lambda *a, **k: Out())
+    assert gpus.read() == [{"name": "NVIDIA GeForce RTX 3060", "vendor": "nvidia", "vram_total_mb": 12288,
+                            "vram_free_mb": 6728, "driver": "576.02"}]
+    monkeypatch.setattr(gpus.shutil, "which", lambda exe: None)
+    assert gpus.read() == []                                  # nothing readable: nothing reported

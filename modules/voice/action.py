@@ -14,9 +14,33 @@ def load_model(cfg: dict):
     return WhisperModel(cfg.get("voice_model", DEFAULT_MODEL), device="cpu", compute_type="int8")
 
 
+def decode(path: Path):
+    """16 kHz mono float32 samples, decoded with PyAV directly.
+    faster-whisper's own decoder calls av.open(..., metadata_errors=...), an argument PyAV 15 removed, so on a node
+    that installed a newer PyAV every transcription failed with «open() got an unexpected keyword argument»."""
+    import av
+    import numpy as np
+    chunks = []
+    with av.open(str(path), mode="r") as container:
+        stream = container.streams.audio[0]
+        resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=16000)
+        for frame in container.decode(stream):
+            for out in resampler.resample(frame):
+                chunks.append(out.to_ndarray().reshape(-1))
+        for out in resampler.resample(None):             # flush what the resampler still holds
+            chunks.append(out.to_ndarray().reshape(-1))
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
+
+
 def transcribe(model, path: Path, language: str, should_stop) -> tuple[str, bool]:
     """Returns (text, stopped). Stops between segments when the machine is needed back."""
-    segments, _info = model.transcribe(str(path), language=language or None, vad_filter=True, beam_size=1)
+    try:
+        audio = decode(path)
+    except ImportError:                                  # tests and machines without PyAV: let faster-whisper read the file
+        audio = str(path)
+    segments, _info = model.transcribe(audio, language=language or None, vad_filter=True, beam_size=1)
     parts: list[str] = []
     for seg in segments:
         if should_stop():

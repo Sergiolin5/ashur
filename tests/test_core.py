@@ -886,3 +886,40 @@ def test_selftest_counts_are_numbers_not_none(env):
             break
         _t.sleep(0.1)
     assert "Memoria: 0 recuerdos" in j["report"] and "Inventario: 0 filas" in j["report"]
+
+
+def test_scanning_some_disks_keeps_the_rows_of_disks_switched_off(env):
+    """0.40.10: since disks are off by default, a scan of S:\\ alone used to wipe X:\\ and every other disk's rows."""
+    c, _ = env
+    h = register(c, device_id="ryzen9", simulated=False)
+    beat(c, h, device_id="ryzen9")
+    first = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+    c.post(f"/tasks/{first['id']}/result", headers=h, json={"ok": True})
+    rows = [{"path": "S:\\juegos\\a.zip", "size": 1}, {"path": "S:\\b.txt", "size": 1},
+            {"path": "X:\\fotos\\c.jpg", "size": 1}, {"path": "SS:\\no-es-S.txt", "size": 1}]
+    c.post("/nodes/ryzen9/inventory", headers=h, json={"reset": True, "rows": rows})   # an old full scan
+    c.app.state.db.conn.execute("UPDATE inventory SET approved = 1 WHERE path = 'S:\\b.txt'")
+    c.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "disks": [
+        {"device": "s", "mount": "S:\\", "fstype": "NTFS", "total": 9, "used": 1, "scanned": True},
+        {"device": "x", "mount": "X:\\", "fstype": "NTFS", "total": 9, "used": 1, "scanned": True}]})
+    s = [d for d in c.get("/api/disks", headers=A).json()["nodes"][0]["disks"] if d["mount"] == "S:\\"][0]
+    c.post("/api/disks/scan", headers=A, json={"node_id": "ryzen9", "key": s["key"], "scan": True})
+    c.post("/api/inventory/refresh", headers=A)
+    task = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+    assert task["payload"]["roots"] == ["S:\\"]
+    c.post("/nodes/ryzen9/inventory", headers=h, json={"reset": True, "rows": [{"path": "S:\\nuevo.txt", "size": 1}]})
+    paths = sorted(r["path"] for r in c.get("/inventory/ryzen9", headers=A).json())
+    assert paths == ["S:\\b.txt", "S:\\nuevo.txt", "SS:\\no-es-S.txt", "X:\\fotos\\c.jpg"]   # X: and approvals survive
+
+
+def test_reset_with_roots_spares_nested_switched_off_disks(tmp_path):
+    from core.db import DB
+    db = DB(str(tmp_path / "r.db"))
+    db.inventory_add("zima", [{"path": p, "size": 1} for p in
+                              ("/host/DATA/a", "/host/DATA/.media/USB/b", "/host/DATAX/c", "/state/d")])
+    assert db.inventory_reset("zima", ["/host/DATA"], ["/host/DATA/.media/USB"]) == 1
+    left = sorted(r["path"] for r in db.inventory_rows("zima", False, 10, 0))
+    assert left == ["/host/DATA/.media/USB/b", "/host/DATAX/c", "/state/d"]
+    assert db.inventory_reset("zima", []) == 0                      # nothing chosen: nothing cleared
+    db.inventory_add("mac", [{"path": "/Users/s/a", "size": 1}])
+    assert db.inventory_reset("mac", ["/"]) == 1                    # "/" covers everything

@@ -1,7 +1,15 @@
 """The node side of voice: download, transcribe here, leave nothing behind."""
 from types import SimpleNamespace as NS
 
+import pytest
+
 from modules.voice import action, selftest
+
+
+@pytest.fixture(autouse=True)
+def no_decoding(monkeypatch):
+    """The fake model reads the file itself; real decoding (PyAV) is not what these tests check."""
+    monkeypatch.setattr(action, "decode", lambda path: str(path))
 
 
 class FakeModel:

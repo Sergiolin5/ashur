@@ -181,7 +181,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.9", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.40.10", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -512,7 +512,9 @@ def create_app(
     @app.post("/nodes/{node_id}/inventory")
     def inventory_upload(batch: InventoryBatch, node: dict = Depends(require_node)):
         if batch.reset:
-            db.inventory_reset(node["id"])
+            # clear only the disks this scan walks; rows of disks switched off stay (0.40.10)
+            pl = db.running_task_payload(node["id"], "inventory") or {}
+            db.inventory_reset(node["id"], pl.get("roots") if "roots" in pl else None, pl.get("exclude"))
             progress[node["id"]] = {"entries": 0}
         n = db.inventory_add(node["id"], [r.model_dump() for r in batch.rows])
         p = progress.setdefault(node["id"], {"entries": 0})

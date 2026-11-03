@@ -468,11 +468,51 @@ class DB:
         return {r["status"]: r["n"] for r in rows}
 
     # --- inventory ---------------------------------------------------------
-    def inventory_reset(self, node_id: str) -> None:
-        """A fresh scan starts clean, except files Sergio approved: those keep their approval."""
+    def inventory_reset(self, node_id: str, roots: Optional[list[str]] = None,
+                        exclude: Optional[list[str]] = None) -> int:
+        """A fresh scan starts clean, except files Sergio approved: those keep their approval.
+
+        With `roots`, only rows on those disks are cleared (minus `exclude`, switched-off disks nested inside one):
+        since 0.40.3 a scan walks only the disks switched on, and clearing the whole device wiped the rows of every
+        disk switched off (1.44 M rows fell to 210 k on 2026-11-02). Without `roots` (scans queued before disks
+        were chosen, which walk everything) the whole device is cleared as before.
+        Deletes go in chunks and release the shared lock between them, so heartbeats never wait behind a big wipe."""
+        def under(p: str) -> tuple[str, list]:
+            base = p if p.endswith(("/", "\\")) else p + ("\\" if "\\" in p or p.endswith(":") else "/")
+            return "(path = ? OR (path >= ? AND path < ?))", [p.rstrip("/\\") or p, base, base + "\U0010ffff"]
+
+        where, args = "node_id = ? AND approved = 0", [node_id]
+        if roots is not None:
+            if not roots:
+                return 0
+            parts = [under(r) for r in roots]
+            where += " AND (" + " OR ".join(s for s, _ in parts) + ")"
+            for _, a in parts:
+                args += a
+            for x in exclude or []:
+                s, a = under(x)
+                where += f" AND NOT {s}"
+                args += a
+        total = 0
+        while True:
+            with self.lock:
+                n = self.conn.execute(
+                    f"DELETE FROM inventory WHERE rowid IN (SELECT rowid FROM inventory WHERE {where} LIMIT 5000)",
+                    args).rowcount
+                self.conn.commit()
+            total += n
+            if n < 5000:
+                return total
+
+    def running_task_payload(self, node_id: str, module: str) -> Optional[dict]:
         with self.lock:
-            self.conn.execute("DELETE FROM inventory WHERE node_id = ? AND approved = 0", (node_id,))
-            self.conn.commit()
+            r = self.conn.execute(
+                "SELECT payload FROM tasks WHERE status = 'running' AND node_id = ? AND module = ?"
+                " ORDER BY id DESC LIMIT 1", (node_id, module)).fetchone()
+        try:
+            return json.loads(r["payload"]) if r else None
+        except ValueError:
+            return None
 
     def last_module_task(self, module: str, node_id: str) -> Optional[dict]:
         with self.lock:

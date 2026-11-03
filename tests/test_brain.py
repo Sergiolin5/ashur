@@ -691,3 +691,45 @@ def test_the_proposals_endpoints_are_admin_only(tmp_path):
     g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()["key"]
     for m, path in (("get", "/api/proposals"), ("post", "/api/proposals/run"), ("post", "/api/proposals/1/approve")):
         assert getattr(c, m)(path, headers={"X-Admin-Key": g}).status_code == 401, path
+
+
+def _notes_brain(local):
+    from core.brain import Brain
+    b = Brain.__new__(Brain)
+    b.local = local
+    b.s = type("S", (), {"brain": "local-first"})()
+    return b
+
+
+def test_long_talk_notes_keep_the_end_and_group_by_topic():
+    calls = []
+
+    def local(system, msgs):
+        calls.append(system)
+        text = msgs[0]["content"]
+        if system.startswith("Estás leyendo"):
+            n = len(calls)
+            return f"- nota del trozo {n}\n- otra cosa del trozo {n}", "ryzen9"
+        lines = [ln for ln in text.splitlines() if ln.startswith("- ")]
+        return "## Planes\n" + "\n".join(lines), "ryzen9"
+
+    transcript = "x" * 5000 * 40                  # ~2 h of talk: 40 chunks, 80 notes
+    out = _notes_brain(local).conversation_notes(transcript, "Ana")
+    assert out.startswith("## Planes")
+    assert "trozo 1\n" in out and "trozo 40" in out          # the end is no longer dropped
+    assert out.count("\n- ") + out.startswith("- ") >= 80
+
+
+def test_topic_pass_that_drops_notes_falls_back_to_the_original_notes():
+    def local(system, msgs):
+        if system.startswith("Estás leyendo"):
+            return "\n".join(f"- dato {i}" for i in range(12)), "mac-m1"
+        return "## Todo\n- dato 0", "mac-m1"        # the small model lost 11 of 12 notes
+
+    out = _notes_brain(local).conversation_notes("hola", "Ana")
+    assert "## Notas" in out and "dato 11" in out
+
+
+def test_short_talk_stays_a_plain_list():
+    out = _notes_brain(lambda s, m: ("- una\n- dos", "mac-m1")).conversation_notes("hola", "Ana")
+    assert out == "- una\n- dos"

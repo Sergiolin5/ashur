@@ -103,8 +103,13 @@ claramente importan a alguno. Una nota por línea, empezando con "- ", frases co
 largos tramos, sin interpretar emociones ni diagnosticar. Omite charla trivial, claves y números de documentos.
 Si no hay nada importante, responde solo: NADA"""
 
-NOTER_MERGE = """Estas son notas sueltas de una misma conversación. Quédate con un máximo de 12 de las más importantes,
-junta las repetidas y mantén el orden. Una por línea, empezando con "- "."""
+NOTER_TOPICS = """Estas son notas de una misma conversación, en orden. Agrúpalas por tema.
+Escribe cada tema como una línea que empiece con "## " y un título corto, y debajo sus notas, una por línea, empezando
+con "- ". Conserva TODAS las notas: solo junta las que dicen exactamente lo mismo. No inventes temas ni notas que no estén
+en la lista, no interpretes emociones. Máximo 8 temas."""
+NOTES_TOPICS_FROM = 10          # fewer notes than this stay a plain list
+NOTES_BATCH_CHARS = 5000        # notes handed to the topic pass at a time, so a long talk's end is never cut off
+NOTES_MAX_LINES = 120
 
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
@@ -528,12 +533,49 @@ class Brain:
             text, _d = self.local(NOTER.format(who=label or "otra persona"), [{"role": "user", "content": ch}])
             step += [ln.strip() for ln in text.splitlines() if ln.strip().startswith(("-", "•", "*")) and not looks_like_secret(ln)
                      and not DIARY_SECRET.search(ln)]
-        step = list(dict.fromkeys(step))
-        if len(step) > 14:                              # long talk: one more pass to keep only what matters most
-            text, _d = self.local(NOTER_MERGE, [{"role": "user", "content": "\n".join(step)[:6000]}])
-            merged = [ln.strip() for ln in text.splitlines() if ln.strip().startswith(("-", "•", "*"))]
-            step = merged or step[:14]
-        return "\n".join("- " + ln.lstrip("-•* ").strip() for ln in step[:20])
+        step = list(dict.fromkeys("- " + ln.lstrip("-•* ").strip() for ln in step))
+        if len(step) < NOTES_TOPICS_FROM:
+            return "\n".join(step)
+        return self._notes_by_topic(step)
+
+    def _notes_by_topic(self, notes: list[str]) -> str:
+        """Group every note under a topic, batch by batch. Until 0.42.1 a second pass kept at most 12 notes and read only
+        the first 6000 characters of them, so the end of a two-hour talk was lost. A batch the model mangles (drops many
+        notes or ignores the format) is kept as written, under the stretch of the talk it came from."""
+        batches, cur = [], []
+        for n in notes:
+            if cur and sum(len(x) + 1 for x in cur) + len(n) > NOTES_BATCH_CHARS:
+                batches.append(cur)
+                cur = []
+            cur.append(n)
+        batches.append(cur)
+        topics: dict[str, list[str]] = {}
+        for i, batch in enumerate(batches, 1):
+            try:
+                text, _d = self.local(NOTER_TOPICS, [{"role": "user", "content": "\n".join(batch)}])
+            except LocalUnavailable:
+                text = ""
+            got, head = {}, None
+            for ln in (text or "").splitlines():
+                ln = ln.strip()
+                if ln.startswith("#"):
+                    head = ln.lstrip("# ").strip().rstrip(":") or None
+                elif ln.startswith(("-", "•", "*")) and head and not looks_like_secret(ln) and not DIARY_SECRET.search(ln):
+                    got.setdefault(head, []).append("- " + ln.lstrip("-•* ").strip())
+            if sum(len(v) for v in got.values()) < 0.6 * len(batch):
+                got = {(f"Tramo {i} de {len(batches)}" if len(batches) > 1 else "Notas"): batch}
+            for h, lines in got.items():
+                key = next((k for k in topics if k.casefold() == h.casefold()), h)
+                topics.setdefault(key, [])
+                topics[key] += [x for x in lines if x not in topics[key]]
+        out, count = [], 0
+        for h, lines in topics.items():
+            if count >= NOTES_MAX_LINES:
+                break
+            take = lines[:NOTES_MAX_LINES - count]
+            count += len(take)
+            out.append("## " + h + "\n" + "\n".join(take))
+        return "\n\n".join(out)
 
     def propose_memories(self) -> int:
         """Read what Sergio wrote since last time (diary and chat) with a LOCAL model only, and put lasting facts

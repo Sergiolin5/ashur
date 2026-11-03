@@ -168,9 +168,10 @@ class TimedLock:
     Slow moments land in SLOW (newest last) and show up in Diagnóstico, so a stall is measured instead of guessed."""
     HOLD_S, WAIT_S = 1.0, 2.0
 
-    def __init__(self, slow: list):
+    def __init__(self, slow: list, longest: Optional[list] = None):
         self._lock = threading.Lock()
         self._slow = slow
+        self._longest = longest if longest is not None else []      # the 3 longest holds since start, never pushed out
         self._t = self._who = None
         self._waited = 0.0
 
@@ -185,8 +186,14 @@ class TimedLock:
         held, who, waited = time.monotonic() - self._t, self._who, self._waited
         self._lock.release()
         if held >= self.HOLD_S or waited >= self.WAIT_S:
-            self._slow.append({"at": time.time(), "held_s": round(held, 2), "waited_s": round(waited, 2), "who": who})
+            entry = {"at": time.time(), "held_s": round(held, 2), "waited_s": round(waited, 2), "who": who}
+            self._slow.append(entry)
             del self._slow[:-30]
+            if held >= self.HOLD_S:
+                # a 7-minute stall (2026-11-02) left only its victims in the last 30; the culprit must stay visible
+                self._longest.append(entry)
+                self._longest.sort(key=lambda x: -x["held_s"])
+                del self._longest[3:]
         return False
 
 
@@ -204,7 +211,8 @@ class DB:
         except sqlite3.DatabaseError:
             pass
         self.slow: list = []
-        self.lock = TimedLock(self.slow)
+        self.slow_longest: list = []
+        self.lock = TimedLock(self.slow, self.slow_longest)
         with self.lock:
             self.conn.executescript(SCHEMA)
             self._migrate()

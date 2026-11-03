@@ -181,7 +181,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.10", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.40.11", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -723,7 +723,10 @@ def create_app(
                         t = db.get_task(tid)
                         if t["status"] == "done":
                             r = (t["result"] or {}).get("result", {})
-                            results[node_id] = ("OK", f"respondió «{(r.get('text') or '').strip()[:30]}» con {r.get('model')} en {time.monotonic() - t0:.1f} s")
+                            total = time.monotonic() - t0
+                            queued = max(0.0, (t.get("started") or t["created"]) - t["created"])   # waiting for the node vs. the model itself
+                            results[node_id] = ("OK", f"respondió «{(r.get('text') or '').strip()[:30]}» con {r.get('model')} en {total:.1f} s"
+                                                + (f" (esperó {queued:.0f} s a que el equipo la tomara)" if queued >= 5 else ""))
                             return
                         if t["status"] == "failed":
                             results[node_id] = ("FALLA", f"falló: {(t['result'] or {}).get('error') or 'sin detalle'}"[:200])
@@ -799,7 +802,11 @@ def create_app(
                  + (f" (otra petición esperó {x['waited_s']} s)" if x["waited_s"] >= 0.5 else "")} for x in db.slow[-10:]]
         slow += [{"ts": x["at"], "text": f"{x['path']} tardó {x['s']} s en responder"} for x in slow_requests[-10:]]
         slow.sort(key=lambda x: x["ts"])
-        return {"version": app.version, "now": clock(), "core_code_label": core_label, "nodes": nodes, "problems": problems, "slow": slow[-12:],
+        slow = slow[-12:]
+        longest = [{"ts": x["at"], "text": f"retención más larga desde que arrancó: {x['held_s']} s por «{x['who']}»"}
+                   for x in db.slow_longest]
+        return {"version": app.version, "now": clock(), "core_code_label": core_label, "nodes": nodes, "problems": problems, "slow": slow,
+                "slow_longest": longest,
                 "brain": brain.budget()}
 
     @app.get("/api/overview", dependencies=[Depends(require_admin)])

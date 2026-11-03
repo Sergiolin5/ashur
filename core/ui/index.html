@@ -2323,6 +2323,7 @@
       for (const x of $("diag-errors").querySelectorAll(".title")) x.style.whiteSpace = "normal";
       if ((d.slow || []).length) { lines.push("Momentos lentos del núcleo (desde que arrancó):"); for (const x of d.slow) lines.push(clock(x.ts) + " " + x.text); }
       else lines.push("Momentos lentos del núcleo: ninguno desde que arrancó");
+      for (const x of (d.slow_longest || [])) lines.push(clock(x.ts) + " " + x.text);
       diagText = lines.join("\n");
     } catch (e) { $("diag-note").textContent = "No pude cargar el diagnóstico."; }
   }

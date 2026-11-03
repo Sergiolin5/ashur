@@ -923,3 +923,28 @@ def test_reset_with_roots_spares_nested_switched_off_disks(tmp_path):
     assert db.inventory_reset("zima", []) == 0                      # nothing chosen: nothing cleared
     db.inventory_add("mac", [{"path": "/Users/s/a", "size": 1}])
     assert db.inventory_reset("mac", ["/"]) == 1                    # "/" covers everything
+
+
+def test_the_longest_lock_hold_survives_a_flood_of_its_victims():
+    """2026-11-02: a 7-minute stall showed only the requests that waited for it; the holder had been pushed out."""
+    from core.db import TimedLock
+    slow, longest = [], []
+    lock = TimedLock(slow, longest)
+    lock.HOLD_S = 0.0
+    import time as _t
+    def culprit():
+        with lock:
+            _t.sleep(0.05)
+    culprit()
+    for _ in range(40):
+        with lock:
+            pass
+    assert all(x["who"] != "culprit" for x in slow)              # gone from the last 30
+    assert longest[0]["who"] == "culprit" and len(longest) <= 3
+
+
+def test_diagnostics_reports_the_longest_holds(env):
+    c, _ = env
+    c.app.state.db.slow_longest.append({"at": 1.0, "held_s": 429.2, "waited_s": 0.0, "who": "inventory_reset"})
+    d = c.get("/api/diagnostics", headers=A).json()
+    assert any("429.2" in x["text"] and "inventory_reset" in x["text"] for x in d["slow_longest"])

@@ -573,6 +573,9 @@
   .row.disk .title { white-space: normal; cursor: pointer; }
   button.tog { width: auto; flex: none; margin: 0; padding: 7px 14px; font-size: 14px; border-radius: 999px; }
   button.tog:not(.on) { background: var(--field); color: var(--secondary); box-shadow: none; }
+  .row .qbtns { display: flex; gap: 6px; flex: none; }
+  .row .qbtns button.tog { padding: 7px 11px; }
+  #queue-pause { margin-top: 10px; }
   header { position: relative; }
   .notefab { position: fixed; z-index: 40; top: 22px; right: 10px; width: 46px; height: 46px; margin: 0; padding: 0; border-radius: 50%;
              touch-action: none; user-select: none; -webkit-user-select: none; box-shadow: 0 6px 18px rgba(0,0,0,.28); cursor: grab;
@@ -693,6 +696,8 @@
       <h2>Trabajando ahora</h2>
       <div class="group" id="working"></div>
       <div class="note" id="queued-note" hidden></div>
+      <div class="group" id="queued-list" hidden></div>
+      <button class="tog" id="queue-pause" hidden></button>
     </section>
 
     <section>
@@ -1120,6 +1125,7 @@
     }
   }
 
+  const queueArmed = {};          // a cancel waits for a second tap; kept across the panel's redraws
   function render(data) {
     const now = data.now;
     const nodes = [...data.status.nodes].sort((a, b) => (a.mode === "offline") - (b.mode === "offline") || a.device_id.localeCompare(b.device_id));
@@ -1150,18 +1156,42 @@
     });
     fill("working", working, "Todo tranquilo. Nada en curso.");
 
+    // waiting tasks, in the order devices will take them: Sergio can move or cancel each one, and pause the queue (0.41)
     const waiting = data.queued.length;
-    const qn = $("queued-note");
-    if (waiting) {
-      const blocked = data.queued.filter((q) => q.weight === "heavy" && q.target && byId[q.target] && byId[q.target].mode !== "full");
-      const MODS = { inventory: "Inventario", docs: "Lectura de documentos", llm: "Respuesta del modelo local", voice: "Transcripción de voz" };
-      const what = data.queued.map((q) => (MODS[q.module] || q.module) + (q.target ? " en " + q.target : " (en cualquier equipo libre)")).join("; ");
-      let text = (waiting === 1 ? "1 tarea en espera: " : waiting + " tareas en espera: ") + what + ".";
-      if (blocked.length) {
-        text += " Las pesadas empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.";
-      }
-      qn.textContent = text; qn.hidden = false;
-    } else { qn.hidden = true; }
+    const qn = $("queued-note"), ql = $("queued-list"), qp = $("queue-pause");
+    const MODS = { inventory: "Inventario", docs: "Lectura de documentos", llm: "Respuesta del modelo local", voice: "Transcripción de voz" };
+    let note = "";
+    if (data.queue_paused) note = "Cola en pausa: los equipos no reciben tareas nuevas (las respuestas del chat sí siguen). Lo que ya corre termina solo.";
+    if (waiting && data.queued.some((q) => q.weight === "heavy" && q.target && byId[q.target] && byId[q.target].mode !== "full"))
+      note += (note ? " " : "") + "Las pesadas empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.";
+    qn.textContent = note; qn.hidden = !note;
+    ql.hidden = !waiting;
+    if (waiting) put(ql, data.queued.map((q, i) => {
+      const r = el("div", "row");
+      const m = el("div", "main");
+      m.append(el("div", "title", (MODS[q.module] || q.module)), el("div", "detail", (q.target ? "en " + nm(q.target) : "en cualquier equipo libre") + " · " + (i + 1) + "º en la fila"));
+      const bs = el("div", "qbtns");
+      const btn = (label, title, fn) => { const b = el("button", "tog", label); b.title = title; b.setAttribute("aria-label", title);
+        b.addEventListener("click", async () => { b.disabled = true; try { await fn(b); } catch (e) {} b.disabled = false; }); bs.append(b); return b; };
+      if (i > 0) btn("↑", "Subir", async () => { await api("api/tasks/" + q.id + "/move", { method: "POST", body: JSON.stringify({ to: "up" }) }); refresh(); });
+      if (i < waiting - 1) btn("↓", "Bajar", async () => { await api("api/tasks/" + q.id + "/move", { method: "POST", body: JSON.stringify({ to: "down" }) }); refresh(); });
+      const x = btn(queueArmed[q.id] ? "Toca otra vez" : "Cancelar", "Cancelar esta tarea", async (b) => {
+        if (!queueArmed[q.id]) {
+          queueArmed[q.id] = setTimeout(() => { delete queueArmed[q.id]; b.textContent = "Cancelar"; }, 3000);
+          b.textContent = "Toca otra vez"; return;
+        }
+        clearTimeout(queueArmed[q.id]); delete queueArmed[q.id];
+        const res = await api("api/tasks/" + q.id, { method: "DELETE" });
+        if (res.status === 409) { const d = await res.json().catch(() => ({})); qn.textContent = d.detail || "Esa tarea ya no está en espera."; qn.hidden = false; }
+        refresh();
+      });
+      r.append(m, bs);
+      return r;
+    }));
+    qp.hidden = !(waiting || data.queue_paused);
+    qp.textContent = data.queue_paused ? "Reanudar la cola" : "Pausar la cola";
+    qp.classList.toggle("on", !!data.queue_paused);
+    qp.onclick = async () => { qp.disabled = true; try { await api("api/queue/pause", { method: "POST", body: JSON.stringify({ paused: !data.queue_paused }) }); } catch (e) {} qp.disabled = false; refresh(); };
 
     // devices
     fill("devices", nodes.map((n) => row({

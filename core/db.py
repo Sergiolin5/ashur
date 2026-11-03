@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     started     REAL,
     result      TEXT,                   -- JSON object
     created     REAL NOT NULL,
-    finished    REAL
+    finished    REAL,
+    priority    INTEGER NOT NULL DEFAULT 0  -- higher is handed out first (0.41.0)
 );
 CREATE TABLE IF NOT EXISTS inventory (
     node_id     TEXT NOT NULL,
@@ -229,6 +230,8 @@ class DB:
             self.conn.execute("ALTER TABLE tasks ADD COLUMN target TEXT")
         if "started" not in cols:
             self.conn.execute("ALTER TABLE tasks ADD COLUMN started REAL")
+        if "priority" not in cols:      # 0.41.0: Sergio reorders the queue; higher goes first, then oldest
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
         ncols = {r["name"] for r in self.conn.execute("PRAGMA table_info(nodes)")}
         if "code_version" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN code_version TEXT")
@@ -413,7 +416,7 @@ class DB:
                 f"""SELECT * FROM tasks WHERE status = 'queued'
                     AND module IN ({m_ph}) AND weight IN ({w_ph})
                     AND (target IS NULL OR target = ?)
-                    ORDER BY id LIMIT 1""",
+                    ORDER BY priority DESC, id LIMIT 1""",
                 (*modules, *weights, node_id),
             ).fetchone()
             if not r:
@@ -449,6 +452,39 @@ class DB:
                 "UPDATE tasks SET status = 'failed', result = ?, finished = ? WHERE id = ? AND status IN ('queued', 'running')",
                 (json.dumps({"ok": False, "error": reason}), now, task_id))
             self.conn.commit()
+
+    def cancel_queued(self, task_id: int, now: float) -> Optional[str]:
+        """Cancel a task only while it still waits. Returns the status it had: anything but 'queued' means nothing changed
+        (a node already holds it, or it ended). The check and the change are one statement, so a node cannot claim it
+        in between."""
+        with self.lock:
+            r = self.conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not r:
+                return None
+            if r["status"] == "queued":
+                n = self.conn.execute(
+                    "UPDATE tasks SET status = 'cancelled', result = ?, finished = ? WHERE id = ? AND status = 'queued'",
+                    (json.dumps({"ok": False, "error": "cancelada por Sergio"}), now, task_id)).rowcount
+                self.conn.commit()
+                return "queued" if n else "running"
+            return r["status"]
+
+    def move_queued(self, task_id: int, to: str) -> Optional[list[int]]:
+        """Move a waiting task up, down or to the top of the queue. Renumbers every waiting task's priority so the order
+        is exactly the one shown. Returns the new order, or None if the task is not waiting."""
+        with self.lock:
+            ids = [r["id"] for r in self.conn.execute(
+                "SELECT id FROM tasks WHERE status = 'queued' ORDER BY priority DESC, id").fetchall()]
+            if task_id not in ids:
+                return None
+            i = ids.index(task_id)
+            ids.pop(i)
+            j = 0 if to == "top" else max(0, i - 1) if to == "up" else min(len(ids), i + 1)
+            ids.insert(j, task_id)
+            self.conn.executemany("UPDATE tasks SET priority = ? WHERE id = ? AND status = 'queued'",
+                                  [(len(ids) - k, tid) for k, tid in enumerate(ids)])
+            self.conn.commit()
+            return ids
 
     def clear_payload(self, task_id: int) -> None:
         """Chat tasks carry Sergio's words; once answered they only live in the messages table."""
@@ -961,8 +997,8 @@ class DB:
     def queued_tasks(self, limit: int = 20) -> list[dict]:
         with self.lock:
             rows = self.conn.execute(
-                "SELECT id, module, target, weight, created FROM tasks WHERE status = 'queued'"
-                " ORDER BY id LIMIT ?", (limit,)
+                "SELECT id, module, target, weight, created, priority FROM tasks WHERE status = 'queued'"
+                " ORDER BY priority DESC, id LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in rows]
 

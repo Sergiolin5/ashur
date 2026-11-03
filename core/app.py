@@ -46,6 +46,7 @@ PUBLIC_LOCK_S = 900
 INVENTORY_EVERY_S = float(os.environ.get("ASHUR_INVENTORY_EVERY_DAYS", "7")) * 86400
 GUEST_MESSAGES_PER_HOUR = 30
 GUEST_DEFAULT_CAP_USD = 1.0
+QUEUE_PAUSE_EXEMPT = ("llm",)       # a paused queue still answers chat: the local model is never held back
 
 # Which task weights a node may take in each mode.
 WEIGHTS_FOR_MODE = {
@@ -181,7 +182,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.40.11", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.41.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -328,6 +329,9 @@ def create_app(
             db.log(now, req.device_id, "task_queued",
                    {"task_id": tid, "module": "inventory", "reason": "first join"})
         return RegisterResponse(device_id=req.device_id, token=token)
+
+    def queue_paused() -> bool:
+        return db.setting("queue_paused", "0") == "1"
 
     def disk_policy(node_id: str) -> dict:
         try:
@@ -480,7 +484,10 @@ def create_app(
         deadline = time.monotonic() + max(0.0, min(wait, 25.0))
         while True:
             fresh = db.get_node(node["id"]) or node
-            t = db.claim_task(node["id"], mine, WEIGHTS_FOR_MODE[Mode(fresh["mode"])], now=clock())
+            # queue paused (0.41.1): hand out nothing new except the local model, which answers chat and self-test
+            # questions; what a node already runs finishes on its own
+            allowed = [m for m in mine if m in QUEUE_PAUSE_EXEMPT] if queue_paused() else mine
+            t = db.claim_task(node["id"], allowed, WEIGHTS_FOR_MODE[Mode(fresh["mode"])], now=clock())
             if t or time.monotonic() >= deadline:
                 break
             time.sleep(1.0)     # each pass takes the shared database lock twice: 4 passes a second per waiting node starved the panel
@@ -728,7 +735,7 @@ def create_app(
                             results[node_id] = ("OK", f"respondió «{(r.get('text') or '').strip()[:30]}» con {r.get('model')} en {total:.1f} s"
                                                 + (f" (esperó {queued:.0f} s a que el equipo la tomara)" if queued >= 5 else ""))
                             return
-                        if t["status"] == "failed":
+                        if t["status"] in ("failed", "cancelled"):
                             results[node_id] = ("FALLA", f"falló: {(t['result'] or {}).get('error') or 'sin detalle'}"[:200])
                             return
                         time.sleep(0.5)
@@ -825,7 +832,7 @@ def create_app(
             running.append({**t, "elapsed_s": round(now - t["started"], 1) if t["started"] else None,
                             "entries": p.get("entries"), "folder": p.get("folder")})
         return {"version": app.version, "now": now, "status": status(), "running": running,
-                "queued": db.queued_tasks(), "inventory": inventory_summary_cached(),
+                "queued": db.queued_tasks(), "queue_paused": queue_paused(), "inventory": inventory_summary_cached(),
                 "activity": db.log_rows(30), "budget": brain.budget(), "node_code_version": node_code()[0],
                 "node_code_label": db.code_label(node_code()[0])}
 
@@ -855,7 +862,7 @@ def create_app(
                 t = db.get_task(tid)
                 if t["status"] == "done":
                     return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]
-                if t["status"] == "failed":
+                if t["status"] in ("failed", "cancelled"):
                     err = (t["result"] or {}).get("error") or "sin detalle"
                     raise LocalUnavailable(f"El modelo local falló en {t['node_id']}: {err}")
                 time.sleep(0.2)
@@ -1877,6 +1884,45 @@ def create_app(
         db.log(now, t.target, "task_queued",
                {"task_id": tid, "module": t.module, "weight": t.weight.value})
         return {"task_id": tid}
+
+    # --- Sergio controls the queue (0.41.0 cancel and reorder, 0.41.1 pause) -------------------
+    @app.delete("/api/tasks/{task_id}", dependencies=[Depends(require_admin)])
+    def cancel_waiting_task(task_id: int):
+        """Only a waiting task can be cancelled. One a device already took finishes there: cancelling it here would leave
+        the panel saying «cancelada» while the device keeps working."""
+        t = db.get_task(task_id)
+        if not t:
+            raise HTTPException(404, "No existe esa tarea.")
+        was = db.cancel_queued(task_id, clock())
+        if was != "queued":
+            raise HTTPException(409, f"Ya la tomó {t.get('node_id') or 'un equipo'}; se terminará sola."
+                                if was == "running" else "Esa tarea ya terminó.")
+        db.log(clock(), t.get("target"), "task_cancelled", {"task_id": task_id, "module": t["module"]})
+        if t["module"] == "voice":           # its audio job must not wait forever for a transcription that will never come
+            db.clear_payload(task_id)
+            job = db.audio_by_task(task_id)
+            if job:
+                db.audio_set(job["id"], status="failed", error="Cancelada por Sergio antes de empezar.")
+        return {"ok": True}
+
+    class MoveTask(BaseModel):
+        to: str = Field(pattern="^(up|down|top)$")
+
+    @app.post("/api/tasks/{task_id}/move", dependencies=[Depends(require_admin)])
+    def move_waiting_task(task_id: int, m: MoveTask):
+        order = db.move_queued(task_id, m.to)
+        if order is None:
+            raise HTTPException(409, "Esa tarea ya no está en espera.")
+        return {"order": order}
+
+    class QueuePause(BaseModel):
+        paused: bool
+
+    @app.post("/api/queue/pause", dependencies=[Depends(require_admin)])
+    def set_queue_pause(p: QueuePause):
+        db.set_setting("queue_paused", "1" if p.paused else "0")
+        db.log(clock(), None, "queue_paused" if p.paused else "queue_resumed", {})
+        return {"paused": p.paused}
 
     @app.get("/tasks/{task_id}", dependencies=[Depends(require_admin)])
     def get_task(task_id: int):

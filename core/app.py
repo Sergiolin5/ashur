@@ -182,7 +182,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.41.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.41.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -634,6 +634,7 @@ def create_app(
 
         def add(state: str, name: str, detail: str = "") -> None:
             checks.append((state, name, detail))
+            selftest["progress"] = f"{len(checks)} revisiones listas; la última: {name}"
 
         def count(sql: str, *args) -> Optional[int]:
             # own read-only connection: a count over 1.4 M inventory rows held the shared lock for seconds
@@ -720,6 +721,7 @@ def create_app(
                 + (", ".join(n["id"] for n in db.nodes() if "voice" in n["modules"]) or "ningún equipo"))
             # a real question to every local model, in parallel
             results: dict = {}
+            selftest["progress"] = f"{len(checks)} revisiones listas; esperando a los modelos locales (hasta 90 s)"
 
             def ask(node_id: str) -> None:
                 t0 = time.monotonic()
@@ -767,13 +769,14 @@ def create_app(
         with selftest_lock:
             if selftest["running"] and time.time() - selftest["started"] < 180:
                 return {"started": False}
-            selftest.update(running=True, started=time.time(), report=None, checks=[])
+            selftest.update(running=True, started=time.time(), report=None, checks=[], progress="empezando")
         threading.Thread(target=run_selftest, args=(only,), daemon=True).start()
         return {"started": True}
 
     @app.get("/api/selftest", dependencies=[Depends(require_admin)])
     def selftest_get():
-        return {"running": selftest["running"], "report": selftest["report"], "checks": selftest["checks"]}
+        return {"running": selftest["running"], "report": selftest["report"], "checks": selftest["checks"],
+                "progress": selftest.get("progress") if selftest["running"] else None}
 
     @app.get("/api/diagnostics", dependencies=[Depends(require_admin)])
     def diagnostics():

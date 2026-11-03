@@ -1125,6 +1125,7 @@
     }
   }
 
+  let lastOverviewMs = null;
   const queueArmed = {};          // a cancel waits for a second tap; kept across the panel's redraws
   function render(data) {
     const now = data.now;
@@ -1225,11 +1226,15 @@
 
     const online = data.status.online;
     $("subtitle").classList.remove("stale", "locked");
+    // the core's state stays in sight (0.41.1): how long its data took; over 2 s it is busy even if it answered
+    const ms = lastOverviewMs, slowCore = ms !== null && ms >= 2000;
+    $("subtitle").classList.toggle("stale", slowCore);
     // "v" and a separator keep the version from running into the count (0.11.1, 4 read as 0.11.4)
     greet();
     panelVersion = data.version;
     $("subtitle-text").textContent = "Núcleo v" + data.version + "\u00a0\u00a0·\u00a0\u00a0" +
-      (online === 1 ? "1 dispositivo conectado" : online + " dispositivos conectados");
+      (online === 1 ? "1 dispositivo conectado" : online + " dispositivos conectados") +
+      (ms === null ? "" : "\u00a0\u00a0·\u00a0\u00a0" + (slowCore ? "lento: " : "") + (ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(1).replace(".", ",") + " s"));
   }
 
   // a greeting that knows the hour; shown once we know who is here
@@ -1529,6 +1534,7 @@
       if (role === "guest" || role === "self") return unlockGuest();
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), 10000);
+      const t0 = performance.now();
       const r = await fetch("api/overview", { headers: { "X-Admin-Key": key }, cache: "no-store",
                                               signal: ctl.signal }).finally(() => clearTimeout(timer));
       if (r.status === 401) return showSignin("Esa clave no coincide. Copia otra vez el valor de admin_key en keys.json, sin comillas.");
@@ -1540,6 +1546,7 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
       failStreak = 0;
+      lastOverviewMs = performance.now() - t0;
       render(data);
       flushNotes();
       if (startHash) { const h = startHash; startHash = ""; openWhere(h); }
@@ -2361,14 +2368,18 @@
   $("st-run").addEventListener("click", async () => {
     const b = $("st-run"), note = $("st-note"); b.disabled = true; b.textContent = "Probando…"; $("st-copy").hidden = true; $("st-out").hidden = true;
     note.textContent = "Probando… (los modelos locales pueden tardar)";
+    stText = "";
     try {
       const scope = $("st-scope").value;
       const start = await api("api/selftest" + (scope ? "?only=" + encodeURIComponent(scope) : ""), { method: "POST" });
       if (!start.ok) throw new Error("HTTP " + start.status);
       for (let i = 0; i < 80; i++) {
         await new Promise((r) => setTimeout(r, 2000));
-        const r = await api("api/selftest"); const j = await r.json();
+        let j;
+        try { const r = await api("api/selftest"); if (!r.ok) throw new Error("HTTP " + r.status); j = await r.json(); }
+        catch (e) { note.textContent = "Probando… (el núcleo tarda en contestar, sigo esperando)"; continue; }   // a busy core is not the end of the test
         if (!j.running && j.report) { stText = j.report; break; }
+        if (j.progress) note.textContent = "Probando… " + j.progress;
       }
       if (stText) {
         $("st-out").textContent = stText; $("st-out").hidden = false; $("st-copy").hidden = false;

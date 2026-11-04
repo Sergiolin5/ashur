@@ -26,6 +26,7 @@ def describe(event: str, d: dict) -> str:
         "task_start": f"empezó tarea {t} ({m})",
         "task_done": f"terminó tarea {t}",
         "task_failed": f"FALLÓ tarea {t}: {d.get('error') or 'sin detalle'}",
+        "task_late_result": f"entregó tarde la tarea {t} ({m}) que ya había vuelto a la cola; se guardó su resultado",
         "task_yielded": f"pausó tarea {t} ({m}) para liberar el equipo",
         "revoked": "acceso revocado",
         "chat": ("invitado " + str(d["guest"]) + ": " if d.get("guest") else "") +
@@ -53,7 +54,7 @@ def describe(event: str, d: dict) -> str:
         "memory_tier": f"cambiaste el nivel de un recuerdo a {'solo local' if d.get('tier') == 'local' else 'puede ir a Claude'}",
         "audio_uploaded": f"subiste un audio ({'conversación' if d.get('kind') == 'conversation' else 'dictado'})",
         "audio_done": f"terminó de transcribir un audio ({'conversación: solo notas' if d.get('kind') == 'conversation' else 'dictado'})",
-        "audio_failed": "falló la transcripción de un audio",
+        "audio_failed": "no pude sacar las notas de una conversación" if d.get("step") == "notes" else "falló la transcripción de un audio",
         "notified": f"te avisé de {d.get('items')} novedad(es)",
         "diary_deleted": "borraste una entrada del diario",
         "diary_reminder": "te recordé escribir en el diario" + (" (segundo aviso)" if d.get("which") == "second" else ""),

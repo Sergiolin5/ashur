@@ -123,3 +123,17 @@ def test_only_his_own_keys_reach_the_settings(tmp_path):
     g = c.post("/api/guests", headers=A, json={"name": "Ana", "monthly_cap_usd": 1}).json()["key"]
     assert c.get("/api/notify", headers={"X-Admin-Key": g}).status_code == 401
     assert c.get("/api/notify").status_code == 401
+
+
+def test_conversation_notes_ready_or_failed_are_announced(tmp_path):
+    """0.42.2: a two-hour recording takes hours; he hears when its notes are there instead of checking."""
+    c, clock, sent, app = make(tmp_path)
+    app.state.notify_due(sync=True)
+    db = app.state.db
+    db.log(clock(), None, "audio_done", {"kind": "dictation", "chars": 10})          # dictation: he is looking at it
+    db.log(clock(), None, "audio_done", {"kind": "conversation", "chars": 300})
+    assert app.state.notify_due(sync=True) == ["Las notas de tu conversación grabada están listas."]
+    assert sent[-1]["url"] == "/#diario"
+    db.log(clock(), None, "audio_failed", {"kind": "conversation"})                 # transcription: task_failed already tells
+    db.log(clock(), None, "audio_failed", {"kind": "conversation", "step": "notes"})
+    assert app.state.notify_due(sync=True) == ["No pude terminar las notas de tu conversación grabada; mira Diario → Voz."]

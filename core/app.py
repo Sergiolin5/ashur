@@ -208,7 +208,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.42.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.42.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -530,14 +530,22 @@ def create_app(
         if not t or not t["node_id"]:
             raise HTTPException(404, "task not running")
         require_node(t["node_id"], authorization)  # only the node holding it may report
-        if t["status"] != "running":
-            raise HTTPException(409, f"task is {t['status']}")
         now = clock()
-        if res.requeue:
+        if t["status"] == "queued" and not res.requeue:
+            # the core gave up on this node (it looked silent, e.g. while the core itself was frozen) and put the task
+            # back in the queue, but the node kept working and finished it: keep that result instead of losing it and
+            # running the task again (0.42.2: the «finished task that reappears in the queue»)
+            if not db.finish_late(task_id, t["node_id"], res.ok, res.model_dump(), now):
+                raise HTTPException(409, "task was taken again")
+            db.log(now, t["node_id"], "task_late_result", {"task_id": task_id, "module": t["module"]})
+        elif t["status"] != "running":
+            raise HTTPException(409, f"task is {t['status']}")
+        elif res.requeue:
             db.requeue_task(task_id)
             db.log(now, t["node_id"], "task_yielded", {"task_id": task_id, "module": t["module"]})
             return {"ok": True, "requeued": True}
-        db.finish_task(task_id, res.ok, res.model_dump(), now)
+        else:
+            db.finish_task(task_id, res.ok, res.model_dump(), now)
         db.log(now, t["node_id"], "task_done" if res.ok else "task_failed",
                {"task_id": task_id, "module": t["module"], "error": res.error})
         if t["module"] == "voice":
@@ -660,7 +668,7 @@ def create_app(
         A switched-off device is APAGADO, not a failure: expected, and it must not hide what the core is doing."""
         def wanted(node_id: Optional[str]) -> bool:
             return not only or (node_id is not None and only == node_id)
-        checks: list[tuple[str, str, str]] = []                      # (state OK/FALLA/AVISO/APAGADO, name, detail)
+        checks: list[tuple[str, str, str]] = []                      # (state OK/FALLA/AVISO/APAGADO/OCUPADO, name, detail)
 
         def add(state: str, name: str, detail: str = "") -> None:
             checks.append((state, name, detail))
@@ -772,15 +780,25 @@ def create_app(
                             results[node_id] = ("FALLA", f"falló: {(t['result'] or {}).get('error') or 'sin detalle'}"[:200])
                             return
                         time.sleep(0.5)
+                    still = (db.get_task(tid) or {}).get("status")
                     db.cancel_task(tid, "timeout", clock())
-                    results[node_id] = ("FALLA", "no respondió en 90 s")
+                    if still == "queued":          # never taken: the device was busy with other work, its model was not tried
+                        results[node_id] = ("OCUPADO", "no tomó la pregunta en 90 s: estaba con otra tarea; su modelo no se probó")
+                    else:
+                        results[node_id] = ("FALLA", "tomó la pregunta pero no respondió en 90 s")
                 finally:
                     db.clear_payload(tid)
             ths = [threading.Thread(target=ask, args=(i,)) for i in llm_ready if wanted(i)]
             [t.start() for t in ths]; [t.join() for t in ths]
             for i in sorted(results):
                 add(results[i][0], f"Modelo local en {i}", results[i][1])
-            if not llm_ready and wanted(None):
+            # online but yielding to Sergio (his load, a fullscreen app): busy, not broken (0.42.2)
+            busy = [n for n in db.nodes() if not n["simulated"] and "llm" in n["modules"] and n["mode"] == Mode.OFF.value]
+            for n in busy:
+                if wanted(n["id"]) or wanted(None):
+                    add("OCUPADO", f"Modelo local en {n['id']}",
+                        "no lo probé: el equipo está cediendo a lo que usas" + (f" ({n['mode_reason']})" if n.get("mode_reason") else ""))
+            if not llm_ready and not busy and wanted(None):
                 add("APAGADO" if any(n["mode"] == Mode.OFFLINE.value for n in db.nodes() if "llm" in n["modules"]) else "FALLA",
                     "Modelos locales", "ningún equipo con módulo llm está encendido ahora")
             add("AVISO", "No probado desde aquí", "las puertas pública y de tailnet (corre `ashur probar` en el núcleo) y los avisos al iPhone (botón Probar en Diario)")
@@ -1658,6 +1676,7 @@ def create_app(
         except (LocalUnavailable, OSError) as e:
             db.audio_set(job_id, status="failed", error=("No pude sacar las notas ahora (" + str(e)[:120] + "). "
                          "El texto sigue guardado solo en el servidor: pulsa Reintentar o bórralo."))
+            db.log(clock(), None, "audio_failed", {"kind": "conversation", "step": "notes"})
             return
         db.audio_set(job_id, status="done", notes=notes or "(No encontré nada importante en esta conversación.)", error=None)
         audio_forget_files(job)                      # the literal transcript is never kept
@@ -1734,7 +1753,7 @@ def create_app(
         return {"id": eid}
 
     # --- system notifications: tasks, devices, updates and spending, read from the session log ---
-    NOTIFY_CATS = {"tasks": "Tareas largas terminadas o fallidas", "devices": "Un equipo lleva rato desconectado (y cuando vuelve)",
+    NOTIFY_CATS = {"tasks": "Tareas largas terminadas o fallidas (y las notas de una conversación grabada)", "devices": "Un equipo lleva rato desconectado (y cuando vuelve)",
                    "update": "Hay una versión nueva de Ashur", "budget": "El gasto con Claude llega al 80% del mes",
                    "proposals": "Ashur tiene recuerdos nuevos por revisar"}
     NOTIFY_WATCHED = ("inventory", "docs")                       # background jobs worth a tap on the shoulder
@@ -1797,6 +1816,10 @@ def create_app(
                 items.append(("Una tarea falló", f"Falló {d.get('module') or 'una tarea'} en {node}.", "/#diagnostico"))
             elif ev["event"] == "feedback_received":
                 items.append(("Nueva opinión", f"{d.get('from') or 'Alguien'} dejó una opinión.", "/#pendientes"))
+            elif ev["event"] == "audio_done" and d.get("kind") == "conversation" and cfg["cats"]["tasks"]:
+                items.append(("Notas listas", "Las notas de tu conversación grabada están listas.", "/#diario"))
+            elif ev["event"] == "audio_failed" and d.get("step") == "notes" and cfg["cats"]["tasks"]:
+                items.append(("Las notas fallaron", "No pude terminar las notas de tu conversación grabada; mira Diario → Voz.", "/#diario"))
             elif ev["event"] == "task_done" and cfg["cats"]["tasks"] and d.get("module") in NOTIFY_WATCHED:
                 items.append((f"Terminó: {d['module']}", f"Terminó {d['module']} en {node}.", "/#estado"))
         if events:

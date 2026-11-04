@@ -983,3 +983,60 @@ def test_chat_prefers_the_device_whose_model_ran_on_its_gpu(env):
     c.post("/nodes/ryzen9/heartbeat", headers=hr, json={"mode": "full", "gpus": []})
     nodes = [n for n in db.nodes() if n["id"] in ("ryzen9", "mac")]
     assert c.app.state.best_llm_node(nodes) is None
+
+
+def test_a_late_result_after_the_core_requeued_the_task_is_kept(env):
+    """0.42.2: the core marked a node silent (e.g. while the core itself was frozen) and put its task back in the queue;
+    the node kept working and reported. The result used to be refused (404) and the finished task came back to the queue."""
+    c, clock = env
+    h = register(c, device_id="mac", modules=("docs",), simulated=False)
+    beat(c, h)
+    db = c.app.state.db
+    for t in db.queued_tasks():                         # the join queues a first scan; start from an empty queue
+        db.cancel_queued(t["id"], clock())
+    tid = db.add_task("docs", {}, "light", clock())
+    assert c.get("/nodes/mac/tasks/next", headers=h).json()["id"] == tid
+    clock.now += 60
+    assert c.get("/status", headers=A).json()["nodes"][0]["mode"] == "offline"     # swept; task back in the queue
+    assert db.get_task(tid)["status"] == "queued"
+    r = c.post(f"/tasks/{tid}/result", headers=h, json={"ok": True, "result": {"n": 1}})
+    assert r.status_code == 200, r.text
+    assert db.get_task(tid)["status"] == "done" and not db.queued_tasks()
+    assert "task_late_result" in [e["event"] for e in c.get("/log", headers=A).json()]
+
+
+def test_a_late_result_loses_to_a_device_that_took_the_task_again(env):
+    c, clock = env
+    h1 = register(c, device_id="mac", modules=("docs",), simulated=False)
+    beat(c, h1)
+    db = c.app.state.db
+    for t in db.queued_tasks():
+        db.cancel_queued(t["id"], clock())
+    tid = db.add_task("docs", {}, "light", clock())
+    c.get("/nodes/mac/tasks/next", headers=h1)
+    clock.now += 60
+    c.get("/status", headers=A)
+    h2 = register(c, device_id="ryzen9", modules=("docs",), simulated=False)
+    beat(c, h2, device_id="ryzen9")
+    for t in db.queued_tasks():
+        if t["id"] != tid:
+            db.cancel_queued(t["id"], clock())
+    assert c.get("/nodes/ryzen9/tasks/next", headers=h2).json()["id"] == tid
+    assert c.post(f"/tasks/{tid}/result", headers=h1, json={"ok": True}).status_code == 401   # no longer mac's
+    assert db.get_task(tid)["status"] == "running"
+
+
+def test_selftest_says_busy_not_failure_when_the_only_model_is_yielding(env):
+    c, _ = env
+    h = register(c, device_id="ryzen9", modules=("llm",), simulated=False)
+    c.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "off"})
+    assert c.post("/api/selftest", headers=A).json()["started"] is True
+    import time as _t
+    for _ in range(100):
+        j = c.get("/api/selftest", headers=A).json()
+        if not j["running"] and j["report"]:
+            break
+        _t.sleep(0.1)
+    rep = j["report"]
+    assert "[OCUPADO] Modelo local en ryzen9" in rep
+    assert "[FALLA] Modelos locales" not in rep

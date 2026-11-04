@@ -455,6 +455,15 @@ class DB:
             )
             self.conn.commit()
 
+    def finish_late(self, task_id: int, node_id: str, ok: bool, result: dict, now: float) -> bool:
+        """A result from the node that last held a task the core had put back in the queue; only if nobody took it since."""
+        with self.lock:
+            cur = self.conn.execute(
+                "UPDATE tasks SET status = ?, result = ?, finished = ? WHERE id = ? AND status = 'queued' AND node_id = ?",
+                ("done" if ok else "failed", json.dumps(result), now, task_id, node_id))
+            self.conn.commit()
+            return cur.rowcount == 1
+
     def cancel_task(self, task_id: int, reason: str, now: float) -> None:
         with self.lock:
             self.conn.execute(
@@ -507,13 +516,14 @@ class DB:
             self.conn.commit()
 
     def requeue_tasks_of(self, node_id: str) -> list[int]:
-        """A node vanished mid-task: put its running tasks back in the queue."""
+        """A node vanished mid-task: put its running tasks back in the queue. node_id stays as the last holder, so if
+        the node was only out of touch and still finishes, its late result is kept (finish_late) instead of lost."""
         with self.lock:
             ids = [r["id"] for r in self.conn.execute(
                 "SELECT id FROM tasks WHERE status = 'running' AND node_id = ?", (node_id,)
             ).fetchall()]
             self.conn.execute(
-                "UPDATE tasks SET status = 'queued', node_id = NULL, started = NULL"
+                "UPDATE tasks SET status = 'queued', started = NULL"
                 " WHERE status = 'running' AND node_id = ?",
                 (node_id,),
             )

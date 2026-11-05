@@ -1040,3 +1040,17 @@ def test_selftest_says_busy_not_failure_when_the_only_model_is_yielding(env):
     rep = j["report"]
     assert "[OCUPADO] Modelo local en ryzen9" in rep
     assert "[FALLA] Modelos locales" not in rep
+
+
+def test_docs_search_does_not_take_the_shared_lock(tmp_path):
+    """0.42.4: /api/docs took 24–28 s; the search ran inside the shared lock and waited behind inventory batches."""
+    import threading
+    from core.db import DB
+    db = DB(str(tmp_path / "a.db"))
+    db.docs_apply("n1", [{"path": "/a.txt", "modified": 1, "chunks": ["contrato de arriendo firmado"]}], [])
+    got = {}
+    with db.lock:                                     # someone else holds the lock for a long time
+        t = threading.Thread(target=lambda: got.setdefault("hits", db.docs_search(["contra"], 5)))
+        t.start(); t.join(5)
+    assert not t.is_alive()
+    assert [h["path"] for h in got["hits"]] == ["/a.txt"]

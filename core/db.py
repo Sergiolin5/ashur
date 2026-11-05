@@ -949,13 +949,18 @@ class DB:
         q = (" OR " if any_word else " ").join(terms)
         sel = ("" if not with_text else "substr(content, 1, 700) AS snippet, " if full
                else "snippet(doc_chunks, 0, '', '', ' … ', 40) AS snippet, ")
+        # Own read-only connection (WAL: readers never wait for the writer), like docs_summary: ranking every chunk that
+        # matches a prefix term ran inside the shared lock, and the search itself waited behind inventory batches.
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
         try:
-            with self.lock:
-                rows = self.conn.execute(
-                    f"SELECT {sel}node_id, path, seq FROM doc_chunks WHERE doc_chunks MATCH ? "
-                    "ORDER BY rank LIMIT ?", (q, limit * 3)).fetchall()
+            rows = c.execute(
+                f"SELECT {sel}node_id, path, seq FROM doc_chunks WHERE doc_chunks MATCH ? "
+                "ORDER BY rank LIMIT ?", (q, limit * 3)).fetchall()
         except sqlite3.OperationalError:
             return []
+        finally:
+            c.close()
         out, seen = [], set()
         for r in rows:                                   # one hit per document
             key = (r["node_id"], r["path"])

@@ -97,6 +97,19 @@
   .row .detail { color: var(--secondary); font-size: 15px; margin-top: 1px;
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #devices .detail { white-space: normal; }
+  #diag-nodes .row.dn { align-items: flex-start; cursor: pointer; }
+  #diag-nodes .row.dn .dot { margin-top: 6px; }
+  #diag-nodes .row.dn .detail { white-space: normal; }
+  #diag-nodes .dn-hint { grid-column: 1 / -1; font-size: 13.5px; margin-top: 6px; color: var(--secondary); white-space: normal;
+                         border-left: 2px solid var(--amber); padding-left: 8px; }
+  #diag-nodes .dn-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 8px 0 2px;
+                       font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  #diag-nodes .dn-kv[hidden] { display: none; }
+  #diag-nodes .dn-kv dt { color: var(--secondary); }
+  #diag-nodes .dn-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  #diag-nodes .dn-chev { color: var(--secondary); font-size: 18px; line-height: 1; margin-top: 1px;
+                         transition: transform .2s ease; }
+  #diag-nodes .row.dn.open .dn-chev { transform: rotate(90deg); }
   #activity .row { min-height: 0; padding: 8px 16px; }
   #activity .title { font-size: 15px; }
   #activity .detail { font-size: 12.5px; margin-top: 0; }
@@ -2322,6 +2335,7 @@
       ["Estado de los dispositivos", "ashur dispositivos"]]],
   ];
   let diagText = "";
+  const diagOpen = new Set();                         // which devices are unfolded; survives the redraws
   async function loadDiag() {
     try {
       const r = await api("api/diagnostics"); const d = await r.json();
@@ -2330,7 +2344,8 @@
           const o = el("option", null, "Solo " + n.id); o.value = n.id; sc.append(o); }
         sc.value = keep; }
       const lines = [];
-      fill("diag-nodes", d.nodes.map((n) => {
+      const trouble = (n) => n.mode === "offline" ? 2 : (n.behind || n.hint) ? 1 : 0;   // problems first: that is what this page is for
+      fill("diag-nodes", [...d.nodes].sort((a, b) => trouble(b) - trouble(a)).map((n) => {
         const state = n.mode === "offline" ? "desconectado" : n.behind ? "código atrasado (v" + (n.code_label || "?") + " → v" + d.core_code_label + ")" : "al día";
         lines.push(n.device_id + ": " + state + (n.hint ? ". " + n.hint : ""));
         const mods = (n.modules || []).join(", ") || "ninguno";
@@ -2339,13 +2354,32 @@
         lines.push("  discos: " + (n.disks ? dl.join("; ") || "ninguno visible" : "sin informar"));
         lines.push("  GPU: " + (n.gpus ? n.gpus.join("; ") || "ninguna visible" : "sin informar (hace falta el código v0.42.0 y unos 10 min)"));
         if (n.llm) lines.push("  modelo local: " + n.llm);
+        // On screen: one short line per device; the rest folds away (tap to open). The copied text above stays complete.
         const off = (n.disks || []).filter((x) => x.present && !x.scanned).length;
-        const sum = n.disks ? (n.disks.length + (n.disks.length === 1 ? " disco" : " discos") + (off ? ", " + off + " sin escanear" : "")) : "";
-        const gsum = (n.gpus || []).length ? " · GPU: " + n.gpus.join("; ") : "";
-        return row({ dot: n.mode, title: nm(n.device_id), detail: state + " · módulos: " + mods + (sum ? " · " + sum : "") + gsum + (n.llm ? " · modelo: " + n.llm : "") + (n.hint ? " · " + n.hint : ""),
-                     value: ago(n.last_seen_s_ago) });
+        const short = n.mode === "offline" ? "Sin señal" : n.behind ? "Atrasado · código v" + (n.code_label || "?") : "Al día";
+        const r = row({ dot: n.mode, title: nm(n.device_id), detail: short + (off ? " · " + off + (off === 1 ? " disco sin escanear" : " discos sin escanear") : ""),
+                        value: ago(n.last_seen_s_ago) });
+        r.classList.add("dn");
+        const m = r.querySelector(".main");
+        const kv = el("dl", "dn-kv");
+        const add = (k, vals) => { kv.append(el("dt", null, k)); const dd = el("dd"); for (const v of vals) dd.append(el("div", null, v)); kv.append(dd); };
+        add("Código", ["v" + (n.code_label || "?") + (n.behind ? " (el núcleo reparte v" + d.core_code_label + ")" : "")]);
+        add("Módulos", [mods]);
+        add("Discos", n.disks ? ((n.disks || []).map((x) => x.mount + " · " + (x.present ? gbs(x.used) + " de " + gbs(x.total) + (x.scanned ? "" : " · sin escanear") : gbs(x.total) + " · ausente")).concat(n.disks.length ? [] : ["ninguno visible"])) : ["sin informar"]);
+        add("GPU", n.gpus ? (n.gpus.length ? n.gpus : ["ninguna visible"]) : ["sin informar"]);
+        if (n.llm) add("Modelo", [n.llm]);
+        if (n.hint) { const h = el("div", "dn-hint", n.hint); kv.append(h); }
+        kv.hidden = !diagOpen.has(n.device_id);
+        m.append(kv);
+        const chev = el("span", "dn-chev", "›"); chev.setAttribute("aria-hidden", "true"); r.append(chev);
+        r.classList.toggle("open", !kv.hidden);
+        r.tabIndex = 0; r.setAttribute("role", "button"); r.setAttribute("aria-expanded", String(!kv.hidden));
+        const toggle = () => { kv.hidden = !kv.hidden; r.classList.toggle("open", !kv.hidden); r.setAttribute("aria-expanded", String(!kv.hidden));
+                               if (kv.hidden) diagOpen.delete(n.device_id); else diagOpen.add(n.device_id); };
+        r.addEventListener("click", toggle);
+        r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+        return r;
       }), "Sin equipos.");
-      for (const x of $("diag-nodes").querySelectorAll(".detail")) x.style.whiteSpace = "normal";
       $("diag-note").textContent = "Núcleo v" + d.version + ", código de nodos v" + d.core_code_label + ".";
       lines.push("Núcleo v" + d.version);
       const probe = el("div"); probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";

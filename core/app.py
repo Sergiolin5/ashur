@@ -920,8 +920,10 @@ def create_app(
                         "o vuelve a correr el instalador (Ajustes → Comandos).")
             elif core_v and not n.code_version:
                 hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
+            ds = disks_of.get(n.device_id)
+            pol, now = (disk_policy(n.device_id), clock()) if ds else ({}, 0)    # one settings read per device, not per disk
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
-                          "code_label": n.code_label, "reason": n.reason, "battery_pct": n.battery_pct, "on_power": n.on_power, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
+                          "code_label": n.code_label, "reason": n.reason, "battery_pct": n.battery_pct, "on_power": n.on_power, "behind": behind, "disks": None if ds is None else [dict(x, kind=disk_kind(x, now), scanned=bool(pol.get(x["key"], False))) for x in ds], "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
                           "gpus": gpus_text_of(n.device_id), "llm": llm_line(n.device_id)})
         problems = []
         for ev in db.log_rows(600):

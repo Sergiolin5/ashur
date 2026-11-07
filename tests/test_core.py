@@ -646,6 +646,17 @@ def test_disks_reach_diagnostics_and_unscanned_ones_are_visible(env):
     assert c.post("/nodes/mac/heartbeat", headers=h, json=beat).status_code == 200
     ds = c.get("/api/diagnostics", headers=A).json()["nodes"][0]["disks"]
     assert sorted(d["scanned"] for d in ds) == [False, False] and all("x" not in d for d in ds)   # off until switched on
+    key = next(d["key"] for d in ds if d["mount"] == "C:\\")
+    assert c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": key, "scan": True}).status_code == 200
+    db, reads = c.app.state.db, []
+    real = db.setting
+    db.setting = lambda k, *a: (reads.append(k), real(k, *a))[1]
+    try:
+        ds = c.get("/api/diagnostics", headers=A).json()["nodes"][0]["disks"]
+    finally:
+        db.setting = real
+    assert {d["mount"]: d["scanned"] for d in ds} == {"C:\\": True, "D:\\": False}
+    assert reads.count("disk_scan:mac") == 1          # one settings read (and lock) per device, not one per disk
 
 
 def test_a_disk_that_comes_and_goes_is_told_apart_from_a_fixed_one():

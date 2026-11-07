@@ -229,7 +229,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.43.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.43.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -925,13 +925,20 @@ def create_app(
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
                           "code_label": n.code_label, "reason": n.reason, "battery_pct": n.battery_pct, "on_power": n.on_power, "behind": behind, "disks": None if ds is None else [dict(x, kind=disk_kind(x, now), scanned=bool(pol.get(x["key"], False))) for x in ds], "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
                           "gpus": gpus_text_of(n.device_id), "llm": llm_line(n.device_id)})
-        problems = []
+        problems, same = [], {}                  # the same warning from the same device is one row with a count
         for ev in db.log_rows(600):
             if ev["event"] in DIAG_EVENTS:
-                problems.append({"ts": ev["ts"], "node_id": ev["node_id"], "event": ev["event"],
-                                 "text": describe(ev["event"], ev["detail"])})
+                p = {"ts": ev["ts"], "node_id": ev["node_id"], "event": ev["event"],
+                     "text": describe(ev["event"], ev["detail"]), "count": 1, "first_ts": ev["ts"]}
+                k = (p["node_id"], p["event"], p["text"])
+                if k in same:
+                    same[k]["count"] += 1
+                    same[k]["first_ts"] = p["ts"]          # rows come newest first
+                    continue
                 if len(problems) >= 40:
-                    break
+                    continue
+                same[k] = p
+                problems.append(p)
         slow = [{"ts": x["at"], "text": f"el candado de la base estuvo tomado {x['held_s']} s por «{x['who']}»"
                  + (f" (otra petición esperó {x['waited_s']} s)" if x["waited_s"] >= 0.5 else "")} for x in db.slow[-10:]]
         slow += [{"ts": x["at"], "text": f"{x['path']} tardó {x['s']} s en responder"} for x in slow_requests[-10:]]

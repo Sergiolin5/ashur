@@ -482,6 +482,20 @@ def test_sergio_can_ask_for_an_inventory_rescan_now(env):
     assert c.post("/api/inventory/refresh", headers=A).json() == {"queued": []}     # no pile-up
 
 
+def test_diagnostics_folds_the_same_warning_into_one_row_with_a_count(env):
+    c, clock = env
+    register(c)
+    db = c.app.state.db
+    for i in range(20):
+        db.log(clock.now + i, "mac", "node_problem", {"text": "task 263 failed"})
+    db.log(clock.now + 30, "mac", "node_problem", {"text": "otra cosa"})
+    d = c.get("/api/diagnostics", headers=A).json()
+    rows = [p for p in d["problems"] if p["event"] == "node_problem"]
+    assert len(rows) == 2
+    rep = next(p for p in rows if p["count"] > 1)
+    assert rep["count"] == 20 and rep["first_ts"] == clock.now and rep["ts"] == clock.now + 19
+
+
 def test_diagnostics_lists_problems_and_hints_for_offline_nodes(env):
     c, clock = env
     h = register(c)

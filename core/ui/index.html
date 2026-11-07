@@ -2401,8 +2401,9 @@
                  ", puntero fino=" + mq("(pointer: fine)") + ", hover=" + mq("(hover: hover)") + ", desenfoque=" + (CSS.supports("backdrop-filter", "blur(1px)") || CSS.supports("-webkit-backdrop-filter", "blur(1px)") ? "sí" : "no") +
                  ", animación ligada al scroll=" + (CSS.supports("animation-timeline", "scroll()") ? "sí" : "no") + ", ahorro de batería: no se puede leer desde la web");
       fill("diag-errors", d.problems.map((p) => {
-        lines.push(clock(p.ts) + " " + (p.node_id || "núcleo") + " " + p.text);
-        return row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + clock(p.ts) });
+        const times = p.count > 1 ? " (" + p.count + " veces desde " + clock(p.first_ts) + ")" : "";
+        lines.push(clock(p.ts) + " " + (p.node_id || "núcleo") + " " + p.text + times);
+        return row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + clock(p.ts) + times });
       }), "Sin errores recientes.", 8);
       for (const x of $("diag-errors").querySelectorAll(".title")) x.style.whiteSpace = "normal";
       if ((d.slow || []).length) { lines.push("Momentos lentos del núcleo (desde que arrancó):"); for (const x of d.slow) lines.push(clock(x.ts) + " " + x.text); }

@@ -208,7 +208,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.42.6", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.42.7", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -742,8 +742,11 @@ def create_app(
             add("OK", "Memoria", f"{count('SELECT COUNT(*) FROM memory')} recuerdos, {count('SELECT COUNT(*) FROM memory_proposals WHERE status = ?', 'pending')} por revisar, "
                 f"{count('SELECT COUNT(*) FROM summaries')} resúmenes, {count('SELECT COUNT(*) FROM messages')} mensajes")
             add("OK", "Diario y avisos", f"{count('SELECT COUNT(*) FROM diary')} entradas, {count('SELECT COUNT(*) FROM push_subs')} dispositivos con avisos")
-            add("OK" if (count("SELECT COUNT(*) FROM docs") or 0) else "AVISO", "Documentos", f"{count('SELECT COUNT(*) FROM docs')} archivos, {count('SELECT COUNT(*) FROM doc_chunks')} fragmentos")
-            add("OK", "Inventario", f"{count('SELECT COUNT(*) FROM inventory')} filas")
+            # counting doc_chunks walks the whole full-text index (248 s on the server, 2026-11-07); docs keeps the count
+            nd, nc = count("SELECT COUNT(*) FROM docs"), count("SELECT COALESCE(SUM(chunks), 0) FROM docs")
+            add("OK" if nd else "AVISO", "Documentos", f"{nd} archivos, {nc} fragmentos")
+            inv = inventory_summary_cached()                         # the panel's own count, at most a minute old
+            add("OK", "Inventario", "aún contando" if inv is None else f"{sum(r['entries'] for r in inv)} filas")
             gb = lambda b: f"{b / 1e9:.0f} GB"
             for n in db.nodes():
                 if n["simulated"] or "inventory" not in n["modules"] or not wanted(n["id"]):

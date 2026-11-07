@@ -208,7 +208,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.42.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.42.5", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -373,7 +373,8 @@ def create_app(
         if not node or not node.get("disks"):
             return {"roots": []}
         on = [d["mount"] for d in node["disks"] if d.get("present") and pol.get(d["key"], False)]
-        off = [d["mount"] for d in node["disks"] if d.get("present") and not pol.get(d["key"], False)]
+        # not walked: switched off, or away right now (an absent disk inside a chosen one must keep its rows too)
+        off = [d["mount"] for d in node["disks"] if not (d.get("present") and pol.get(d["key"], False))]
 
         def inside(m: str, r: str) -> bool:
             a, b = m.replace("\\", "/").rstrip("/").lower(), r.replace("\\", "/").rstrip("/").lower()
@@ -559,7 +560,9 @@ def create_app(
         if batch.reset:
             # clear only the disks this scan walks; rows of disks switched off stay (0.40.10)
             pl = db.running_task_payload(node["id"], "inventory") or {}
-            db.inventory_reset(node["id"], pl.get("roots") if "roots" in pl else None, pl.get("exclude"))
+            t0 = time.monotonic()
+            gone = db.inventory_reset(node["id"], pl.get("roots") if "roots" in pl else None, pl.get("exclude"))
+            db.log(clock(), node["id"], "inventory_reset", {"rows": gone, "s": round(time.monotonic() - t0, 1)})
             progress[node["id"]] = {"entries": 0}
         n = db.inventory_add(node["id"], [r.model_dump() for r in batch.rows])
         p = progress.setdefault(node["id"], {"entries": 0})
@@ -657,7 +660,8 @@ def create_app(
                         headers={"Cache-Control": "public, max-age=86400"})
 
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
-                   "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem"}
+                   "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem",
+                   "inventory_reset"}
 
     # --- full self-test: runs the checks and a real question to every local model, returns one plain-text report ---
     selftest = {"running": False, "report": None, "started": 0.0, "checks": []}

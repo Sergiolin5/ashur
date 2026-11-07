@@ -27,6 +27,7 @@ def describe(event: str, d: dict) -> str:
         "task_done": f"terminó tarea {t}",
         "task_failed": f"FALLÓ tarea {t}: {d.get('error') or 'sin detalle'}",
         "task_late_result": f"entregó tarde la tarea {t} ({m}) que ya había vuelto a la cola; se guardó su resultado",
+        "inventory_reset": f"borró {d.get('rows')} filas viejas de su inventario en {d.get('s')} s",
         "task_yielded": f"pausó tarea {t} ({m}) para liberar el equipo",
         "revoked": "acceso revocado",
         "chat": ("invitado " + str(d["guest"]) + ": " if d.get("guest") else "") +

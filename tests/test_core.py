@@ -925,6 +925,49 @@ def test_reset_with_roots_spares_nested_switched_off_disks(tmp_path):
     assert db.inventory_reset("mac", ["/"]) == 1                    # "/" covers everything
 
 
+def test_reset_leaps_over_excluded_disks_and_lets_go_of_the_lock(tmp_path):
+    """2026-11-07: chunks that re-read every kept row from the start held the lock 35-58 s; every device looked
+    disconnected, its task went back to the queue and the rescan wiped again."""
+    from core.db import DB
+    db = DB(str(tmp_path / "r.db"))
+    usb = [f"/host/DATA/.media/USB/{i:05d}" for i in range(3000)]
+    mine = [f"/host/DATA/.media/Z/{i:05d}" for i in range(1200)] + ["/host/DATA/a", "/host/DATA/.media/USB"]
+    db.inventory_add("zima", [{"path": p, "size": 1} for p in usb + mine + ["/host/DATA/ok"]])
+    db.conn.execute("UPDATE inventory SET approved = 1 WHERE path = '/host/DATA/ok'")
+    class Counting:                                                  # counts how many times the lock is taken
+        def __init__(self, inner): self.inner, self.n = inner, 0
+        def __enter__(self): self.n += 1; return self.inner.__enter__()
+        def __exit__(self, *a): return self.inner.__exit__(*a)
+    reads, db.lock = [], Counting(db.lock)
+    db.conn.set_trace_callback(lambda q: reads.append(q) if q.startswith("SELECT rowid, path") else None)
+    db.RESET_HOLD_S = 0.0                                           # one batch per hold
+    try:
+        assert db.inventory_reset("zima", ["/host/DATA"], ["/host/DATA/.media/USB"]) == 1201
+    finally:
+        db.conn.set_trace_callback(None)
+    left = {r["path"] for r in db.inventory_rows("zima", False, 10000, 0)}
+    assert left == set(usb) | {"/host/DATA/.media/USB", "/host/DATA/ok"}     # excluded disk and approvals stay
+    assert len(reads) <= 6            # 1200 rows to clear in batches of 500, the 3000 excluded ones never read
+    assert db.lock.n >= 4             # the lock was let go between batches
+
+
+def test_an_absent_disk_inside_a_chosen_one_is_excluded(env):
+    c, clock = env
+    h = register(c, simulated=False)
+    beat(c, h)
+    first = c.get("/nodes/mac/tasks/next", headers=h).json()
+    c.post(f"/tasks/{first['id']}/result", headers=h, json={"ok": True})
+    usb = {"device": "b", "mount": "/host/DATA/.media/USB", "fstype": "ntfs", "total": 500, "used": 1, "scanned": True}
+    data = {"device": "a", "mount": "/host/DATA", "fstype": "ext4", "total": 900, "used": 1, "scanned": True}
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "full", "disks": [data, usb]})
+    for d in c.get("/api/disks", headers=A).json()["nodes"][0]["disks"]:
+        c.post("/api/disks/scan", headers=A, json={"node_id": "mac", "key": d["key"], "scan": True})
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "full", "disks": [data]})           # the USB is unplugged
+    c.post("/api/inventory/refresh", headers=A)
+    p = c.get("/nodes/mac/tasks/next", headers=h).json()["payload"]
+    assert p == {"roots": ["/host/DATA"], "exclude": ["/host/DATA/.media/USB"]}             # its rows are kept
+
+
 def test_the_longest_lock_hold_survives_a_flood_of_its_victims():
     """2026-11-02: a 7-minute stall showed only the requests that waited for it; the holder had been pushed out."""
     from core.db import TimedLock

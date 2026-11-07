@@ -210,6 +210,7 @@ class DB:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA busy_timeout=5000")
             self.conn.execute("PRAGMA synchronous=NORMAL")      # in WAL this is safe against a crash of the program and about 10x cheaper per commit
+            self.conn.execute("PRAGMA cache_size=-65536")       # 64 MB instead of SQLite's 2 MB: the base passed 1.5 GB
         except sqlite3.DatabaseError:
             pass
         self.slow: list = []
@@ -536,6 +537,8 @@ class DB:
         return {r["status"]: r["n"] for r in rows}
 
     # --- inventory ---------------------------------------------------------
+    RESET_HOLD_S = 0.25          # longest an inventory reset keeps the shared lock before letting others in
+
     def inventory_reset(self, node_id: str, roots: Optional[list[str]] = None,
                         exclude: Optional[list[str]] = None) -> int:
         """A fresh scan starts clean, except files Sergio approved: those keep their approval.
@@ -544,33 +547,53 @@ class DB:
         since 0.40.3 a scan walks only the disks switched on, and clearing the whole device wiped the rows of every
         disk switched off (1.44 M rows fell to 210 k on 2026-11-02). Without `roots` (scans queued before disks
         were chosen, which walk everything) the whole device is cleared as before.
-        Deletes go in chunks and release the shared lock between them, so heartbeats never wait behind a big wipe."""
-        def under(p: str) -> tuple[str, list]:
+        Each disk is walked once in path order, jumping over excluded disks, and the shared lock is let go every
+        RESET_HOLD_S whatever the rows cost: chunks that re-read every kept row from the start held it 35-58 s on
+        2026-11-07, long enough for every device to look disconnected and its task to be queued again."""
+        def under(p: str) -> tuple[str, str, str]:            # the disk's own row, then everything below it
             base = p if p.endswith(("/", "\\")) else p + ("\\" if "\\" in p or p.endswith(":") else "/")
-            return "(path = ? OR (path >= ? AND path < ?))", [p.rstrip("/\\") or p, base, base + "\U0010ffff"]
+            return p.rstrip("/\\") or p, base, base + "\U0010ffff"
 
-        where, args = "node_id = ? AND approved = 0", [node_id]
-        if roots is not None:
-            if not roots:
-                return 0
-            parts = [under(r) for r in roots]
-            where += " AND (" + " OR ".join(s for s, _ in parts) + ")"
-            for _, a in parts:
-                args += a
-            for x in exclude or []:
-                s, a = under(x)
-                where += f" AND NOT {s}"
-                args += a
+        if roots is not None and not roots:
+            return 0
+        spans = [under(r) for r in roots] if roots is not None else [(None, "", "\U0010ffff")]
+        skips = [under(x) for x in exclude or []]
         total = 0
-        while True:
-            with self.lock:
-                n = self.conn.execute(
-                    f"DELETE FROM inventory WHERE rowid IN (SELECT rowid FROM inventory WHERE {where} LIMIT 5000)",
-                    args).rowcount
-                self.conn.commit()
-            total += n
-            if n < 5000:
-                return total
+        for own, lo, hi in spans:
+            if own is not None:
+                with self.lock:
+                    total += self.conn.execute("DELETE FROM inventory WHERE node_id = ? AND path = ? AND approved = 0",
+                                               (node_id, own)).rowcount
+                    self.conn.commit()
+            cursor, done = lo, False
+            while not done:
+                with self.lock:
+                    t0 = time.monotonic()
+                    while True:
+                        rows = self.conn.execute(
+                            "SELECT rowid, path, approved FROM inventory WHERE node_id = ? AND path >= ? AND path < ?"
+                            " ORDER BY path LIMIT 500", (node_id, cursor, hi)).fetchall()
+                        if not rows:
+                            done = True
+                            break
+                        cursor, gone = rows[-1][1] + "\x00", []
+                        for rid, path, approved in rows:
+                            if any(path == s_own for s_own, _, _ in skips):
+                                continue                      # an excluded disk's own folder row stays
+                            jump = next((s_hi for _, s_lo, s_hi in skips if s_lo <= path < s_hi), None)
+                            if jump is not None:              # inside an excluded disk: leap past all of it
+                                cursor = jump
+                                break
+                            if not approved:
+                                gone.append((rid,))
+                        self.conn.executemany("DELETE FROM inventory WHERE rowid = ?", gone)
+                        total += len(gone)
+                        if time.monotonic() - t0 >= self.RESET_HOLD_S:
+                            break
+                    self.conn.commit()
+                if not done:
+                    time.sleep(0.02)                          # a plain Lock is not fair: give the waiting requests a turn
+        return total
 
     def running_task_payload(self, node_id: str, module: str) -> Optional[dict]:
         with self.lock:

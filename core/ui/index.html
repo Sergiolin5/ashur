@@ -1023,6 +1023,19 @@
     if (text !== undefined && text !== null) n.textContent = String(text);
     return n;
   }
+  // anything that deletes asks with a second tap, not a dialog; the first tap arms it for 3 s, then it lets go
+  function twice(b, armedText, fn) {
+    const idle = b.textContent;
+    b.addEventListener("click", async () => {
+      clearTimeout(b._arm);
+      if (!b.classList.contains("sure")) {
+        b.classList.add("sure"); b.textContent = armedText;
+        b._arm = setTimeout(() => { b.classList.remove("sure"); b.textContent = idle; }, 3000);
+        return;
+      }
+      b.classList.remove("sure"); b.textContent = idle; await fn();
+    });
+  }
   const num = (v) => (typeof v === "number" ? v : null);
   function row(opts) {
     const r = el("div", "row" + (opts.dot ? " indent" : ""));
@@ -1436,7 +1449,7 @@
         }
         const a = el("div", "acts");
         const t1 = el("button", null, n.status === "open" ? "Resuelto" : "Reabrir"); t1.onclick = async () => { await api("api/notes/" + n.id + "/status", { method: "POST", body: JSON.stringify({ status: n.status === "open" ? "done" : "open" }) }); loadNotes(); };
-        const t2 = el("button", null, "Borrar"); t2.onclick = async () => { if (t2.dataset.s) { await api("api/notes/" + n.id, { method: "DELETE" }); loadNotes(); } else { t2.dataset.s = 1; t2.textContent = "Toca otra vez"; setTimeout(() => { delete t2.dataset.s; t2.textContent = "Borrar"; }, 2500); } };
+        const t2 = el("button", null, "Borrar"); twice(t2, "Toca otra vez", async () => { await api("api/notes/" + n.id, { method: "DELETE" }); loadNotes(); });
         a.append(t1, t2); m.append(a); r.append(m); return r;
       });
       put($("notes-open"), draw(open).length ? draw(open) : [row({ title: "Nada pendiente." })]);
@@ -2139,8 +2152,7 @@
     fill("time-recent", d.recent.filter((e) => !e.running).map((e) => {
       const x = row({ title: e.task, detail: e.category + " · " + new Date(e.start_ts * 1000).toLocaleString("es-CO", { weekday: "short", hour: "numeric", minute: "2-digit" }), value: mins(e.minutes) });
       const del = el("button", "forget", "Borrar"); del.type = "button";
-      del.addEventListener("click", async () => { if (del.dataset.sure) drawTime(await (await api("api/time/" + e.id, { method: "DELETE" })).json());
-                                                  else { del.dataset.sure = "1"; del.textContent = "¿Seguro?"; } });
+      twice(del, "¿Seguro?", async () => drawTime(await (await api("api/time/" + e.id, { method: "DELETE" })).json()));
       x.append(del); return x;
     }), "Sin registros todavía.", 8);
     clearInterval(timeTick);
@@ -2296,12 +2308,7 @@
     unlocked = false;
     refresh();
   });
-  $("signout").addEventListener("click", () => {          // far from the thumb and two taps: it is easy to hit by accident
-    const b = $("signout");
-    if (b.dataset.sure) { delete b.dataset.sure; showSignin(); return; }
-    b.dataset.sure = 1; b.textContent = "Toca otra vez para olvidar la clave";
-    setTimeout(() => { delete b.dataset.sure; b.textContent = "Olvidar la clave en este navegador"; }, 3000);
-  });
+  twice($("signout"), "Toca otra vez para olvidar la clave", showSignin);   // far from the thumb and two taps: it is easy to hit by accident
 
 
   // --- commands: what has to be typed on each machine, one tap to copy ---
@@ -2502,14 +2509,7 @@
       }
       const item = el("div", "entry");
       const del = el("button", "link del", "Borrar"); del.type = "button";
-      del.addEventListener("click", async () => {
-        if (!del.classList.contains("sure")) {           // no alarming dialog: ask once, inline, then let it go
-          del.classList.add("sure"); del.textContent = "Toca otra vez para borrar";
-          setTimeout(() => { del.classList.remove("sure"); del.textContent = "Borrar"; }, 3500);
-          return;
-        }
-        await api("api/diary/" + e.id, { method: "DELETE" }); loadDiary();
-      });
+      twice(del, "Toca otra vez para borrar", async () => { await api("api/diary/" + e.id, { method: "DELETE" }); loadDiary(); });
       const hhmm = new Date(e.ts * 1000).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
       const w = el("div", "when", hhmm); w.append(del);
       item.append(w, el("div", "txt", e.text));

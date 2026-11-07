@@ -569,6 +569,7 @@ def test_selftest_builds_a_plain_report_without_secrets(env):
         _t.sleep(0.1)
     r = j["report"]
     assert r.startswith("INFORME ASHUR") and "[OK] Núcleo" in r and "Equipo" in r
+    assert r.splitlines()[0].endswith(" s")                     # how long the whole test took
     assert ADMIN not in r and ENROLL not in r
 
 

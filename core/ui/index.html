@@ -2410,19 +2410,20 @@
       const scope = $("st-scope").value;
       const start = await api("api/selftest" + (scope ? "?only=" + encodeURIComponent(scope) : ""), { method: "POST" });
       if (!start.ok) throw new Error("HTTP " + start.status);
-      for (let i = 0; i < 80; i++) {
+      let last = "";                                     // wait while the core says it is still testing, up to 10 min
+      for (const t0 = Date.now(); Date.now() - t0 < 600000;) {
         await new Promise((r) => setTimeout(r, 2000));
         let j;
         try { const r = await api("api/selftest"); if (!r.ok) throw new Error("HTTP " + r.status); j = await r.json(); }
         catch (e) { note.textContent = "Probando… (el núcleo tarda en contestar, sigo esperando)"; continue; }   // a busy core is not the end of the test
         if (!j.running && j.report) { stText = j.report; break; }
-        if (j.progress) note.textContent = "Probando… " + j.progress;
+        if (j.progress) note.textContent = "Probando… " + (last = j.progress);
       }
       if (stText) {
         $("st-out").textContent = stText; $("st-out").hidden = false; $("st-copy").hidden = false;
         note.textContent = stText.split("\n")[0];
         try { await navigator.clipboard.writeText(stText); note.textContent += ". Copiado: pégamelo en el chat."; } catch (e) { note.textContent += ". Toca «Copiar informe»."; showCopy(stText); }
-      } else { note.textContent = "La prueba no terminó. Inténtalo otra vez."; }
+      } else { note.textContent = "La prueba no terminó en 10 minutos." + (last ? " Se quedó en: " + last : ""); }
     } catch (e) { note.textContent = "No pude lanzar la prueba (" + (e && e.message ? e.message : "sin respuesta") + "). Si dice «sin respuesta», es la conexión del teléfono; si dice HTTP, dime el número."; }
     b.disabled = false; b.textContent = "Probar";
   });

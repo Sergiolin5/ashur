@@ -208,7 +208,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.42.5", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.42.6", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -673,10 +673,13 @@ def create_app(
         def wanted(node_id: Optional[str]) -> bool:
             return not only or (node_id is not None and only == node_id)
         checks: list[tuple[str, str, str]] = []                      # (state OK/FALLA/AVISO/APAGADO/OCUPADO, name, detail)
+        t_start, t_last = time.monotonic(), [time.monotonic()]
 
         def add(state: str, name: str, detail: str = "") -> None:
-            checks.append((state, name, detail))
-            selftest["progress"] = f"{len(checks)} revisiones listas; la última: {name}"
+            took = time.monotonic() - t_last[0]                       # a slow step says so, to find what holds the test
+            t_last[0] = time.monotonic()
+            checks.append((state, name, detail + (f" · tardó {took:.0f} s" if took >= 2 else "")))
+            selftest["progress"] = f"{len(checks)} revisiones listas en {time.monotonic() - t_start:.0f} s; la última: {name}"
 
         def count(sql: str, *args) -> Optional[int]:
             # own read-only connection: a count over 1.4 M inventory rows held the shared lock for seconds
@@ -763,7 +766,8 @@ def create_app(
                 + (", ".join(n["id"] for n in db.nodes() if "voice" in n["modules"]) or "ningún equipo"))
             # a real question to every local model, in parallel
             results: dict = {}
-            selftest["progress"] = f"{len(checks)} revisiones listas; esperando a los modelos locales (hasta 90 s)"
+            selftest["progress"] = (f"{len(checks)} revisiones listas en {time.monotonic() - t_start:.0f} s; "
+                                    "esperando a los modelos locales (hasta 90 s)")
 
             def ask(node_id: str) -> None:
                 t0 = time.monotonic()
@@ -813,14 +817,14 @@ def create_app(
         bad = sum(1 for c in checks if c[0] == "FALLA")
         warn = sum(1 for c in checks if c[0] == "AVISO")
         stamp = dt.datetime.fromtimestamp(clock(), BOGOTA).strftime("%Y-%m-%d %H:%M")
-        lines = [f"INFORME ASHUR {stamp} (hora de Bogotá) — {bad} fallas, {warn} avisos"]
+        lines = [f"INFORME ASHUR {stamp} (hora de Bogotá) — {bad} fallas, {warn} avisos, {time.monotonic() - t_start:.0f} s"]
         lines += [f"[{st}] {name}: {detail}" if detail else f"[{st}] {name}" for st, name, detail in checks]
         selftest.update(report="\n".join(lines), running=False, checks=[{"state": a, "name": n, "detail": d} for a, n, d in checks])
 
     @app.post("/api/selftest", dependencies=[Depends(require_admin)])
     def selftest_start(only: str = Query(default="", max_length=40, pattern=r"^(|nucleo|[a-z0-9][a-z0-9-]{0,30})$")):
         with selftest_lock:
-            if selftest["running"] and time.time() - selftest["started"] < 180:
+            if selftest["running"] and time.time() - selftest["started"] < 600:
                 return {"started": False}
             selftest.update(running=True, started=time.time(), report=None, checks=[], progress="empezando")
         threading.Thread(target=run_selftest, args=(only,), daemon=True).start()

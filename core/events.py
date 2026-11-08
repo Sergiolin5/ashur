@@ -27,6 +27,8 @@ def describe(event: str, d: dict) -> str:
         "task_done": f"terminó tarea {t}",
         "task_failed": f"FALLÓ tarea {t}: {d.get('error') or 'sin detalle'}",
         "task_late_result": f"entregó tarde la tarea {t} ({m}) que ya había vuelto a la cola; se guardó su resultado",
+        "inventory_sweep": f"terminó su inventario y quitó {d.get('rows')} filas de archivos que ya no están, en {d.get('s')} s",
+        "inventory_sweep_failed": f"no pude limpiar su inventario viejo: {d.get('error')}",
         "inventory_reset": f"borró {d.get('rows')} filas viejas de su inventario en {d.get('s')} s",
         "task_yielded": f"pausó tarea {t} ({m}) para liberar el equipo",
         "revoked": "acceso revocado",

@@ -208,7 +208,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.42.8", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.42.9", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -549,22 +549,53 @@ def create_app(
             db.finish_task(task_id, res.ok, res.model_dump(), now)
         db.log(now, t["node_id"], "task_done" if res.ok else "task_failed",
                {"task_id": task_id, "module": t["module"], "error": res.error})
+        if t["module"] == "inventory" and res.ok and not (res.result or {}).get("stopped"):
+            inventory_sweep(t)
         if t["module"] == "voice":
             voice_received(task_id, res)
         if t["module"] == "llm" and res.ok:
             remember_llm_run(t["node_id"], res.result or {}, now)
         return {"ok": True}
 
+    sweeping: set = set()
+
+    def inventory_sweep(task: dict) -> None:
+        """After a full scan, remove in the background the rows of its disks it did not see (files gone since). A scan
+        that failed or stopped early removes nothing: stale rows are better than an index wiped halfway."""
+        node_id = task["node_id"]
+        try:
+            pl = json.loads(task["payload"] or "{}") if isinstance(task["payload"], str) else (task["payload"] or {})
+        except ValueError:
+            return
+        if node_id in sweeping:
+            return
+
+        def run() -> None:
+            t0 = time.monotonic()
+            try:
+                gone = db.inventory_reset(node_id, pl.get("roots") if "roots" in pl else None, pl.get("exclude"),
+                                          keep_scan=task["id"])
+                db.log(clock(), node_id, "inventory_sweep", {"rows": gone, "s": round(time.monotonic() - t0, 1)})
+            except Exception as e:
+                db.log(clock(), node_id, "inventory_sweep_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+            finally:
+                sweeping.discard(node_id)
+
+        sweeping.add(node_id)
+        if inventory_in_background:
+            threading.Thread(target=run, daemon=True, name=f"inventory-sweep-{node_id}").start()
+        else:
+            run()
+
     @app.post("/nodes/{node_id}/inventory")
     def inventory_upload(batch: InventoryBatch, node: dict = Depends(require_node)):
+        # Nothing is deleted here any more: clearing the old rows before a scan took 123 s for 351 k rows on the
+        # server, the node gives up after 30 s and the scan failed with the rows already gone (2026-11-07). Each row
+        # remembers the scan that saw it; when the scan finishes, inventory_sweep removes the ones it did not see.
+        cur = db.current_task(node["id"], "inventory")
         if batch.reset:
-            # clear only the disks this scan walks; rows of disks switched off stay (0.40.10)
-            pl = db.running_task_payload(node["id"], "inventory") or {}
-            t0 = time.monotonic()
-            gone = db.inventory_reset(node["id"], pl.get("roots") if "roots" in pl else None, pl.get("exclude"))
-            db.log(clock(), node["id"], "inventory_reset", {"rows": gone, "s": round(time.monotonic() - t0, 1)})
             progress[node["id"]] = {"entries": 0}
-        n = db.inventory_add(node["id"], [r.model_dump() for r in batch.rows])
+        n = db.inventory_add(node["id"], [r.model_dump() for r in batch.rows], scan=cur["id"] if cur else None)
         p = progress.setdefault(node["id"], {"entries": 0})
         p["entries"] += n
         p["updated"] = clock()
@@ -661,7 +692,7 @@ def create_app(
 
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
                    "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem",
-                   "inventory_reset"}
+                   "inventory_reset", "inventory_sweep", "inventory_sweep_failed"}
 
     # --- full self-test: runs the checks and a real question to every local model, returns one plain-text report ---
     selftest = {"running": False, "report": None, "started": 0.0, "checks": []}

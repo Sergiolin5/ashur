@@ -236,7 +236,7 @@ def test_inventory_upload_reset_and_keeps_approval(env):
     r = c.get("/inventory/mac", headers=A).json()[0]
     assert r["size"] == 11 and r["approved"] == 1        # rescan without reset keeps approval
     c.post("/nodes/mac/inventory", headers=h, json={"reset": True, "rows": []})
-    assert [r["path"] for r in c.get("/inventory/mac", headers=A).json()] == ["C:/a.exe"]   # approvals survive a rescan
+    assert len(c.get("/inventory/mac", headers=A).json()) == 2   # a new scan deletes nothing up front (0.42.9)
     assert c.post("/nodes/mac/inventory", json={"rows": []}).status_code == 401
 
 
@@ -932,8 +932,31 @@ def test_scanning_some_disks_keeps_the_rows_of_disks_switched_off(env):
     task = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
     assert task["payload"]["roots"] == ["S:\\"]
     c.post("/nodes/ryzen9/inventory", headers=h, json={"reset": True, "rows": [{"path": "S:\\nuevo.txt", "size": 1}]})
-    paths = sorted(r["path"] for r in c.get("/inventory/ryzen9", headers=A).json())
-    assert paths == ["S:\\b.txt", "S:\\nuevo.txt", "SS:\\no-es-S.txt", "X:\\fotos\\c.jpg"]   # X: and approvals survive
+    paths = lambda: sorted(r["path"] for r in c.get("/inventory/ryzen9", headers=A).json())
+    assert "S:\\juegos\\a.zip" in paths()                     # nothing goes while the scan runs (0.42.9)
+    c.post(f"/tasks/{task['id']}/result", headers=h, json={"ok": True, "result": {"entries": 1}})
+    assert paths() == ["S:\\b.txt", "S:\\nuevo.txt", "SS:\\no-es-S.txt", "X:\\fotos\\c.jpg"]   # X: and approvals survive
+    assert any(e["event"] == "inventory_sweep" for e in c.app.state.db.log_rows(50))
+
+
+def test_a_scan_that_fails_or_stops_removes_nothing(env):
+    """2026-11-07: scans that timed out had already wiped their disks; the inventory fell from 886 k rows to 683 k."""
+    c, _ = env
+    h = register(c, device_id="ryzen9", simulated=False)
+    beat(c, h, device_id="ryzen9")
+    first = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+    c.post(f"/tasks/{first['id']}/result", headers=h, json={"ok": True})
+    c.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "disks": [
+        {"device": "s", "mount": "S:\\", "fstype": "NTFS", "total": 9, "used": 1, "scanned": True}]})
+    s = c.get("/api/disks", headers=A).json()["nodes"][0]["disks"][0]
+    c.post("/api/disks/scan", headers=A, json={"node_id": "ryzen9", "key": s["key"], "scan": True})
+    c.app.state.db.inventory_add("ryzen9", [{"path": "S:\\viejo.txt", "size": 1}])
+    for result in ({"ok": False, "error": "ReadTimeout"}, {"ok": True, "result": {"stopped": True}}):
+        c.post("/api/inventory/refresh", headers=A)
+        task = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+        c.post("/nodes/ryzen9/inventory", headers=h, json={"reset": True, "rows": [{"path": "S:\\nuevo.txt", "size": 1}]})
+        c.post(f"/tasks/{task['id']}/result", headers=h, json=result)
+        assert "S:\\viejo.txt" in [r["path"] for r in c.get("/inventory/ryzen9", headers=A).json()]
 
 
 def test_reset_with_roots_spares_nested_switched_off_disks(tmp_path):

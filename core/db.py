@@ -261,6 +261,9 @@ class DB:
             self.conn.execute("ALTER TABLE notes ADD COLUMN done_ts REAL")
         if "author" not in ncols2:
             self.conn.execute("ALTER TABLE notes ADD COLUMN author TEXT")
+        icols = {r["name"] for r in self.conn.execute("PRAGMA table_info(inventory)")}
+        if "scan" not in icols:                        # which inventory task last saw the row (see inventory_sweep)
+            self.conn.execute("ALTER TABLE inventory ADD COLUMN scan INTEGER")
         dcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(docs)")}
         if "first_rowid" not in dcols:                 # where a document's chunks start in doc_chunks (see docs_apply)
             self.conn.execute("ALTER TABLE docs ADD COLUMN first_rowid INTEGER")
@@ -540,8 +543,9 @@ class DB:
     RESET_HOLD_S = 0.25          # longest an inventory reset keeps the shared lock before letting others in
 
     def inventory_reset(self, node_id: str, roots: Optional[list[str]] = None,
-                        exclude: Optional[list[str]] = None) -> int:
-        """A fresh scan starts clean, except files Sergio approved: those keep their approval.
+                        exclude: Optional[list[str]] = None, keep_scan: Optional[int] = None) -> int:
+        """A fresh scan starts clean, except files Sergio approved: those keep their approval. With keep_scan, rows
+        that scan (or a later one: task ids only grow) saw stay too: that is the sweep after a scan finished (inventory_sweep in app.py, 0.42.9).
 
         With `roots`, only rows on those disks are cleared (minus `exclude`, switched-off disks nested inside one):
         since 0.40.3 a scan walks only the disks switched on, and clearing the whole device wiped the rows of every
@@ -562,8 +566,10 @@ class DB:
         for own, lo, hi in spans:
             if own is not None:
                 with self.lock:
-                    total += self.conn.execute("DELETE FROM inventory WHERE node_id = ? AND path = ? AND approved = 0",
-                                               (node_id, own)).rowcount
+                    total += self.conn.execute(
+                        "DELETE FROM inventory WHERE node_id = ? AND path = ? AND approved = 0"
+                        + (" AND (scan IS NULL OR scan < ?)" if keep_scan is not None else ""),
+                        (node_id, own) + ((keep_scan,) if keep_scan is not None else ())).rowcount
                     self.conn.commit()
             cursor, done = lo, False
             while not done:
@@ -571,20 +577,20 @@ class DB:
                     t0 = time.monotonic()
                     while True:
                         rows = self.conn.execute(
-                            "SELECT rowid, path, approved FROM inventory WHERE node_id = ? AND path >= ? AND path < ?"
+                            "SELECT rowid, path, approved, scan FROM inventory WHERE node_id = ? AND path >= ? AND path < ?"
                             " ORDER BY path LIMIT 500", (node_id, cursor, hi)).fetchall()
                         if not rows:
                             done = True
                             break
                         cursor, gone = rows[-1][1] + "\x00", []
-                        for rid, path, approved in rows:
+                        for rid, path, approved, scan in rows:
                             if any(path == s_own for s_own, _, _ in skips):
                                 continue                      # an excluded disk's own folder row stays
                             jump = next((s_hi for _, s_lo, s_hi in skips if s_lo <= path < s_hi), None)
                             if jump is not None:              # inside an excluded disk: leap past all of it
                                 cursor = jump
                                 break
-                            if not approved:
+                            if not approved and (keep_scan is None or scan is None or scan < keep_scan):
                                 gone.append((rid,))
                         self.conn.executemany("DELETE FROM inventory WHERE rowid = ?", gone)
                         total += len(gone)
@@ -594,6 +600,20 @@ class DB:
                 if not done:
                     time.sleep(0.02)                          # a plain Lock is not fair: give the waiting requests a turn
         return total
+
+    def current_task(self, node_id: str, module: str) -> Optional[dict]:
+        """The task this node is working on for module: running, or put back in the queue while the node kept going
+        (the core thought it silent). id and payload."""
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT id, payload FROM tasks WHERE node_id = ? AND module = ? AND status IN ('running', 'queued')"
+                " ORDER BY id DESC LIMIT 1", (node_id, module)).fetchone()
+        if not r:
+            return None
+        try:
+            return {"id": r["id"], "payload": json.loads(r["payload"] or "{}")}
+        except ValueError:
+            return {"id": r["id"], "payload": {}}
 
     def running_task_payload(self, node_id: str, module: str) -> Optional[dict]:
         with self.lock:
@@ -1000,17 +1020,17 @@ class DB:
                 break
         return out
 
-    def inventory_add(self, node_id: str, rows: list[dict]) -> int:
-        """Upsert a batch; the approved flag survives rescans."""
+    def inventory_add(self, node_id: str, rows: list[dict], scan: Optional[int] = None) -> int:
+        """Upsert a batch; the approved flag survives rescans. scan: the inventory task that saw these rows."""
         with self.lock:
             self.conn.executemany(
-                """INSERT INTO inventory (node_id, path, size, kind, modified, hash, runnable, approved)
-                   VALUES (:node_id, :path, :size, :kind, :modified, :hash, :runnable, 0)
+                """INSERT INTO inventory (node_id, path, size, kind, modified, hash, runnable, approved, scan)
+                   VALUES (:node_id, :path, :size, :kind, :modified, :hash, :runnable, 0, :scan)
                    ON CONFLICT(node_id, path) DO UPDATE SET size=:size, kind=:kind,
-                     modified=:modified, hash=:hash, runnable=:runnable""",
+                     modified=:modified, hash=:hash, runnable=:runnable, scan=:scan""",
                 [{"node_id": node_id, "path": r["path"], "size": r.get("size"),
                   "kind": r.get("kind"), "modified": r.get("modified"), "hash": r.get("hash"),
-                  "runnable": int(bool(r.get("runnable")))} for r in rows],
+                  "runnable": int(bool(r.get("runnable"))), "scan": scan} for r in rows],
             )
             self.conn.commit()
         return len(rows)

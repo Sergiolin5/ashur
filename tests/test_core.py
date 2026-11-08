@@ -608,6 +608,29 @@ def test_docs_replace_deletes_only_that_documents_chunks_and_never_scans_for_new
     assert [r[0] for r in db.conn.execute("SELECT content FROM doc_chunks WHERE path='c'")] == ["nuevo"]
 
 
+def test_docs_apply_scans_the_chunks_table_at_most_once_per_call(tmp_path):
+    """2026-11-07: a batch of 1000 deletes held the lock 3000 s, one full-table scan per document; empty documents
+    (no text, so no first_rowid) took the slow road every time."""
+    from core.db import DB
+    db = DB(str(tmp_path / "d.db"))
+    db.docs_apply("n", [{"path": f"e{i}", "modified": 1, "chunks": []} for i in range(20)]
+                  + [{"path": "t", "modified": 1, "chunks": ["texto"]}], [])
+    for i in range(3):                                                              # indexed before first_rowid
+        db.conn.execute("INSERT INTO doc_chunks (content,node_id,path,seq) VALUES ('viejo','n',?,0)", (f"old{i}",))
+        db.conn.execute("INSERT INTO docs (node_id,path,modified,chunks,first_rowid) VALUES ('n',?,1,1,NULL)", (f"old{i}",))
+    scans = []
+    db.conn.set_trace_callback(lambda q: scans.append(q) if q.startswith("DELETE FROM doc_chunks WHERE node_id") else None)
+    try:
+        db.docs_apply("n", [{"path": "old0", "modified": 2, "chunks": ["nuevo"]}],
+                      [f"e{i}" for i in range(20)] + ["t", "old1", "old2"])
+    finally:
+        db.conn.set_trace_callback(None)
+    assert len(scans) == 1                                    # the three old ones together; empty ones never
+    left = sorted(r[0] for r in db.conn.execute("SELECT path || ':' || content FROM doc_chunks"))
+    assert left == ["old0:nuevo"]
+    assert db.conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0] == 1
+
+
 
 def test_disks_reach_diagnostics_and_unscanned_ones_are_visible(env):
     from node import disks

@@ -910,30 +910,35 @@ class DB:
         return [dict(r) for r in rows]
 
     # --- documents: the text Sergio's files contain, searchable (SQLite FTS5) ----------
-    def _drop_doc_chunks(self, node_id: str, path: str) -> None:
-        """Delete one document's chunks. doc_chunks has no index on node_id/path (they are UNINDEXED FTS columns), so a
-        delete by them scans the whole table: ~0.1 s at 190k chunks, per document, inside the global lock, which made
-        heartbeats time out. docs remembers where each document's chunks start, so those are deleted by rowid."""
+    def _drop_doc_chunks(self, node_id: str, path: str) -> bool:
+        """Delete one document's chunks by rowid. doc_chunks has no index on node_id/path (they are UNINDEXED FTS
+        columns), so a delete by them reads the whole table: docs remembers where each document's chunks start.
+        Returns True for a document indexed before that column existed: the caller deletes those together."""
         row = self.conn.execute("SELECT first_rowid, chunks FROM docs WHERE node_id = ? AND path = ?",
                                 (node_id, path)).fetchone()
-        if row is None:
-            return                                     # never indexed: nothing to delete, no scan
-        if row["first_rowid"] is not None:
-            if row["chunks"]:
-                self.conn.execute("DELETE FROM doc_chunks WHERE rowid BETWEEN ? AND ?",
-                                  (row["first_rowid"], row["first_rowid"] + row["chunks"] - 1))
-        else:                                          # indexed before this column existed: one slow delete, then it is tracked
-            self.conn.execute("DELETE FROM doc_chunks WHERE node_id = ? AND path = ?", (node_id, path))
+        if row is None or not row["chunks"]:
+            return False                               # never indexed, or no text: nothing to delete, no scan
+        if row["first_rowid"] is None:
+            return True
+        self.conn.execute("DELETE FROM doc_chunks WHERE rowid BETWEEN ? AND ?",
+                          (row["first_rowid"], row["first_rowid"] + row["chunks"] - 1))
+        return False
 
     def docs_apply(self, node_id: str, upserts: list[dict], deletes: list[str]) -> dict:
-        """upserts: [{path, modified, chunks:[text]}]. A document's old chunks are replaced whole."""
+        """upserts: [{path, modified, chunks:[text]}]. A document's old chunks are replaced whole.
+        At most one full-table delete per call: one per document (empty ones included) held the lock 3000 s with a
+        batch of 1000 deletes on 2026-11-07."""
         n_chunks = 0
         with self.lock:
+            paths = list(deletes) + [d["path"] for d in upserts]
+            old = [p for p in paths if self._drop_doc_chunks(node_id, p)]
+            for i in range(0, len(old), 500):
+                part = old[i:i + 500]
+                self.conn.execute(f"DELETE FROM doc_chunks WHERE node_id = ? AND path IN ({','.join('?' * len(part))})",
+                                  [node_id, *part])
             for path in deletes:
-                self._drop_doc_chunks(node_id, path)
                 self.conn.execute("DELETE FROM docs WHERE node_id = ? AND path = ?", (node_id, path))
             for d in upserts:
-                self._drop_doc_chunks(node_id, d["path"])
                 self.conn.executemany(
                     "INSERT INTO doc_chunks (content, node_id, path, seq) VALUES (?, ?, ?, ?)",
                     [(c, node_id, d["path"], i) for i, c in enumerate(d["chunks"])])

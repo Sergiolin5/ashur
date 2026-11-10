@@ -1,5 +1,20 @@
 """Claude connector: the requests table and its DB methods."""
+import datetime as dt
+import json
+import threading
+import time
+
+import pytest
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from core.app import create_app
+from core.brain import BOGOTA
 from core.db import DB
+from core.events import describe
+from core.mcp import PROTOCOL_VERSIONS, McpDeps, Tool, ToolError, mount_mcp
+from sim.scenario import VirtualClock
 
 
 def make(tmp_path):
@@ -49,12 +64,6 @@ def test_list_puts_pending_first(tmp_path):
 
 
 # --- the /mcp protocol endpoint ----------------------------------------------------------
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-from core.app import create_app
-from core.mcp import PROTOCOL_VERSIONS, McpDeps, Tool, ToolError, mount_mcp
-from sim.scenario import VirtualClock
 
 GOOD = {"Authorization": "Bearer good"}
 
@@ -182,9 +191,9 @@ def test_calls_logged_without_arguments():
 
 # --- through create_app on the public door -----------------------------------------------
 
-def pub_app(tmp_path):
+def pub_app(tmp_path, **kw):
     clock = VirtualClock()
-    app = create_app(str(tmp_path / "x.db"), "e", "a", clock=clock, sweep_every_s=None, public_port=8001)
+    app = create_app(str(tmp_path / "x.db"), "e", "a", clock=clock, sweep_every_s=None, public_port=8001, **kw)
     pub = TestClient(app, base_url="http://testserver:8001")
     pub.tailnet = TestClient(app)                     # port 80: the tailnet door, where the key is made
     return pub, clock
@@ -261,7 +270,6 @@ def test_mcp_lockout_does_not_lock_panel(tmp_path):
 
 
 def test_mcp_events_described():
-    from core.events import describe
     assert describe("mcp_call", {"tool": "ashur_estado"}) == "Claude usó ashur_estado"
     assert "conector" in describe("mcp_locked", {"minutes": 15}).lower()
     assert describe("mcp_key", {"action": "created"}) != describe("mcp_key", {"action": "revoked"})
@@ -274,8 +282,8 @@ def tool_text(c, name, args=None):
     return r["content"][0]["text"], r.get("isError", False)
 
 
-def tools_app(tmp_path):
-    c, clock = pub_app(tmp_path)
+def tools_app(tmp_path, **kw):
+    c, clock = pub_app(tmp_path, **kw)
     c.key = new_key(c)
     c.db = c.app.state.db
     return c, clock
@@ -340,18 +348,23 @@ def test_ver_pedido_states(tmp_path):
     want = {"pending": "pendiente", "running": "en curso", "approved": "aprobado: hecho", "rejected": "rechazado",
             "not_done": "no se hizo: ya no aplica"}
     for s, word in want.items():
-        assert tool_text(c, "ashur_ver_pedido", {"id": ids[s]})[0] == f"Pedido #{ids[s]} (pausar_cola): {word}"
+        assert tool_text(c, "ashur_ver_pedido", {"id": ids[s]})[0] == f"Pedido #{ids[s]} (pausar la cola): {word}"
+    rid = c.db.claude_request_add(clock(), "cancelar_tarea", {"tarea": 7}, "r")
+    assert tool_text(c, "ashur_ver_pedido", {"id": rid})[0] == f"Pedido #{rid} (cancelar la tarea #7): pendiente"
     assert tool_text(c, "ashur_ver_pedido", {"id": 99}) == ("No existe el pedido #99.", True)
     assert tool_text(c, "ashur_ver_pedido", {"id": "1"})[1] is True
 
 
 # --- ashur_preguntar_local (Task 4) ---------------------------------------------------------
 
-import json
-import threading
+
+@pytest.fixture
+def fast_local(monkeypatch):
+    """A broken fake node fails the test in seconds, not after the real 120 s wait."""
+    monkeypatch.setenv("ASHUR_LOCAL_TIMEOUT_S", "5")
 
 
-def llm_node(c, reply="Respuesta local.", device="mac-m1"):
+def llm_node(c, reply="Respuesta local.", device="mac-m1", error=None):
     """A node with the llm module that answers one chat task through the real protocol; captures its payload."""
     token = c.tailnet.post("/nodes/register", headers={"X-Enroll-Key": "e"},
                            json={"device_id": device, "os": "macos", "modules": ["llm"], "simulated": True}).json()["token"]
@@ -363,14 +376,15 @@ def llm_node(c, reply="Respuesta local.", device="mac-m1"):
         t = c.tailnet.get(f"/nodes/{device}/tasks/next", headers=h, params={"wait": 5, "modules": "llm"}).json()
         if t:
             seen["payload"] = t["payload"]
-            c.tailnet.post(f"/tasks/{t['id']}/result", headers=h, json={"ok": True, "result": {"text": reply}})
+            body = {"ok": False, "error": error} if error else {"ok": True, "result": {"text": reply}}
+            c.tailnet.post(f"/tasks/{t['id']}/result", headers=h, json=body)
 
     th = threading.Thread(target=serve, daemon=True)
     th.start()
     return th, seen
 
 
-def test_local_prompt_has_no_private_material(tmp_path):
+def test_local_prompt_has_no_private_material(tmp_path, fast_local):
     c, clock = tools_app(tmp_path)
     now = clock()
     c.db.add_memory(now, "CANARIO-LOCAL", "ashur", "local")
@@ -379,19 +393,20 @@ def test_local_prompt_has_no_private_material(tmp_path):
     c.db.docs_apply("mac-m1", [{"path": "/x/a.txt", "modified": 1, "chunks": ["CANARIO-DOC"]}], [])
     c.db.add_message(now, "panel", "user", "hola")
     c.db.add_summary(now, {"id": 1, "ts": now}, {"id": 1, "ts": now}, "CANARIO-RESUMEN", "claude")
+    c.app.state.brain.save_voice("mac-m1", "CANARIO-VOZ")
     th, seen = llm_node(c)
     text, err = tool_text(c, "ashur_preguntar_local", {"pregunta": "¿qué hora es?"})
     th.join(5)
     assert not err and text == "Respuesta local.\n\n(respondió mac-m1)"
     sent = json.dumps(seen["payload"], ensure_ascii=False)
-    for canary in ("CANARIO-LOCAL", "CANARIO-RESUMEN", "CANARIO-DIARIO", "CANARIO-DOC"):
+    for canary in ("CANARIO-LOCAL", "CANARIO-RESUMEN", "CANARIO-DIARIO", "CANARIO-DOC", "CANARIO-VOZ"):
         assert canary not in sent
     assert "CANARIO-CLAUDE" in seen["payload"]["system"]
     assert seen["payload"]["messages"] == [{"role": "user", "content": "¿qué hora es?"}]
     assert "Respondes a Claude" in seen["payload"]["system"]
 
 
-def test_local_answer_not_in_chat_history(tmp_path):
+def test_local_answer_not_in_chat_history(tmp_path, fast_local):
     c, clock = tools_app(tmp_path)
     before = c.db.recent_messages(50)
     th, _ = llm_node(c)
@@ -406,7 +421,162 @@ def test_local_unavailable_is_tool_error(tmp_path):
     assert err is True and "modelo local" in text
 
 
+def test_local_failure_hides_the_node_error(tmp_path, fast_local):
+    c, _ = tools_app(tmp_path)
+    th, _ = llm_node(c, error="RuntimeError: no pude abrir /Users/s/Diario/secreto.txt")
+    text, err = tool_text(c, "ashur_preguntar_local", {"pregunta": "hola"})
+    th.join(5)
+    assert (text, err) == ("El modelo local falló en mac-m1.", True)
+
+
 def test_local_question_is_validated(tmp_path):
     c, _ = tools_app(tmp_path)
     for bad in ({}, {"pregunta": ""}, {"pregunta": "x" * 2001}, {"pregunta": 5}):
         assert tool_text(c, "ashur_preguntar_local", bad)[1] is True
+
+
+# --- ashur_pedir and Sergio's approval (Task 5) ---------------------------------------------
+
+A = {"X-Admin-Key": "a"}
+SUB = {"endpoint": "https://push.example/abc", "keys": {"p256dh": "P", "auth": "Q"}}
+
+
+def pedir_app(tmp_path):
+    sent = []
+    c, clock = tools_app(tmp_path, push_fn=lambda sub, p: (sent.append(p), "ok")[1])
+    c.sent = sent
+    return c, clock
+
+
+def pedir(c, accion, motivo="porque sí", **extra):
+    return tool_text(c, "ashur_pedir", {"accion": accion, "motivo": motivo, **extra})
+
+
+def wait_for(cond, s=3.0):
+    end = time.monotonic() + s
+    while time.monotonic() < end and not cond():
+        time.sleep(0.02)
+    return cond()
+
+
+def test_pedir_creates_and_dedupes(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    text, err = pedir(c, "pausar_cola", "la Mac está caliente")
+    assert (text, err) == ("Pedido #1 enviado; Sergio lo aprueba en el panel.", False)
+    r = c.db.claude_request_get(1)
+    assert (r["action"], r["args"], r["reason"], r["status"]) == ("pausar_cola", {}, "la Mac está caliente", "pending")
+    assert pedir(c, "pausar_cola", "otra vez") == ("Ya estaba pedido: #1", False)
+    assert pedir(c, "cancelar_tarea", tarea=4)[0] == "Pedido #2 enviado; Sergio lo aprueba en el panel."
+    assert pedir(c, "cancelar_tarea", tarea=4)[0] == "Ya estaba pedido: #2"
+    assert pedir(c, "cancelar_tarea", tarea=5)[0] == "Pedido #3 enviado; Sergio lo aprueba en el panel."
+    assert c.db.claude_requests_pending_count() == 3
+    assert [d for e, d in [(r["event"], r["detail"]) for r in c.db.log_rows(50)] if e == "claude_request"]
+
+
+def test_pedir_cap_five(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    for n in range(1, 6):
+        assert not pedir(c, "subir_tarea", tarea=n)[1]
+    text, err = pedir(c, "subir_tarea", tarea=6)
+    assert (text, err) == ("Ya hay 5 pedidos esperando a Sergio; espera a que decida.", True)
+    assert pedir(c, "subir_tarea", tarea=1) == ("Ya estaba pedido: #1", False)    # the same one is still answered
+    assert c.db.claude_requests_pending_count() == 5
+
+
+def test_task_actions_need_tarea(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    for accion in ("cancelar_tarea", "subir_tarea", "bajar_tarea"):
+        assert pedir(c, accion)[1] is True
+        assert pedir(c, accion, tarea="3")[1] is True
+        assert pedir(c, accion, tarea=True)[1] is True
+    assert pedir(c, "pausar_cola", tarea=3)[1] is True
+    assert pedir(c, "borrar_todo")[1] is True
+    assert pedir(c, "pausar_cola", "no")[1] is True                        # motivo: 3 to 300 characters
+    assert pedir(c, "pausar_cola", "x" * 301)[1] is True
+    assert tool_text(c, "ashur_pedir", {"accion": "pausar_cola"})[1] is True
+    assert c.db.claude_requests_pending_count() == 0
+
+
+def test_approve_runs_the_panel_function(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    pedir(c, "pausar_cola")
+    assert c.get("/api/claude-requests", headers=A).json()[0]["status"] == "pending"
+    r = c.post("/api/claude-requests/1/approve", headers=A)
+    assert r.status_code == 200 and r.json()["status"] == "approved"
+    assert c.db.setting("queue_paused") == "1"
+    got = c.db.claude_request_get(1)
+    assert got["status"] == "approved" and got["decided_at"] is not None
+    assert tool_text(c, "ashur_ver_pedido", {"id": 1})[0].startswith("Pedido #1 (pausar la cola): aprobado")
+    assert c.get("/api/claude-requests").status_code == 401
+    assert c.post("/api/claude-requests/1/approve").status_code == 401
+
+
+def test_approve_twice_runs_once(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    tid = c.db.add_task("inventory", {}, "light", 0.0)
+    pedir(c, "cancelar_tarea", tarea=tid)
+    assert c.post("/api/claude-requests/1/approve", headers=A).json()["status"] == "approved"
+    r = c.post("/api/claude-requests/1/approve", headers=A)
+    assert r.status_code == 404 and r.json()["detail"] == "Ya se decidió o no existe."
+    assert c.post("/api/claude-requests/99/approve", headers=A).status_code == 404
+    assert [e["event"] for e in c.db.log_rows(100)].count("task_cancelled") == 1
+
+
+def test_not_done_when_it_no_longer_applies(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    tid = c.db.add_task("inventory", {}, "light", 0.0)
+    pedir(c, "cancelar_tarea", tarea=tid)
+    c.db.claim_task("mac-m1", ["inventory"], ["light", "heavy"], now=1.0)
+    assert c.db.get_task(tid)["status"] == "running"
+    r = c.post("/api/claude-requests/1/approve", headers=A).json()
+    assert r == {"status": "not_done", "result": "Ya la tomó mac-m1; se terminará sola."}
+    assert c.db.get_task(tid)["status"] == "running"
+    assert c.db.claude_request_get(1)["status"] == "not_done"
+    pedir(c, "reanudar_cola")                                             # the queue was never paused
+    assert c.post("/api/claude-requests/2/approve", headers=A).json() == {"status": "not_done", "result": "La cola no estaba pausada."}
+    pedir(c, "repasar_inventario")                                        # no device can do it
+    assert c.post("/api/claude-requests/3/approve", headers=A).json() == {"status": "not_done", "result": "Ningún equipo puede hacerlo ahora."}
+
+
+def test_reject_runs_nothing(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    pedir(c, "pausar_cola")
+    assert c.post("/api/claude-requests/1/reject", headers=A).json() == {"ok": True}
+    assert c.db.setting("queue_paused", "0") == "0"
+    assert c.db.claude_request_get(1)["status"] == "rejected"
+    assert c.post("/api/claude-requests/1/reject", headers=A).status_code == 404
+    assert c.post("/api/claude-requests/1/approve", headers=A).status_code == 404
+    assert c.db.setting("queue_paused", "0") == "0"
+
+
+def test_push_sent_even_in_quiet_hours(tmp_path):
+    c, clock = pedir_app(tmp_path)
+    clock.now = dt.datetime(2026, 11, 10, 2, 0, tzinfo=BOGOTA).timestamp()
+    c.tailnet.post("/api/push/subscribe", headers=A, json=SUB)
+    assert c.tailnet.get("/api/notify", headers=A).json()["quiet"]["enabled"] is True
+    pedir(c, "pausar_cola", "la Mac está caliente")
+    assert wait_for(lambda: c.sent)
+    assert c.sent == [{"title": "Claude pide: pausar la cola", "body": "la Mac está caliente", "url": "/#pedidos",
+                       "tag": "claude-1"}]
+    pedir(c, "bajar_tarea", "m" * 300, tarea=9)
+    assert wait_for(lambda: len(c.sent) == 2)
+    assert c.sent[1]["title"] == "Claude pide: bajar la tarea #9" and c.sent[1]["body"] == "m" * 180
+
+
+def test_push_respects_notify_claude_switch(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    c.tailnet.post("/api/push/subscribe", headers=A, json=SUB)
+    labels = c.tailnet.get("/api/notify", headers=A).json()["labels"]
+    assert labels["claude"] == "Claude te pide algo (llega aunque sea de noche)"
+    c.tailnet.put("/api/notify", headers=A, json={"cats": {"claude": False}})
+    assert not pedir(c, "pausar_cola")[1]
+    time.sleep(0.3)
+    assert c.sent == []
+    c.tailnet.put("/api/notify", headers=A, json={"cats": {"claude": True}})
+    assert not pedir(c, "reanudar_cola")[1]
+    assert wait_for(lambda: c.sent)
+
+
+def test_request_events_described():
+    assert "pausar la cola" in describe("claude_request", {"id": 1, "action": "pausar_cola", "label": "pausar la cola"})
+    assert "#1" in describe("claude_request_decided", {"id": 1, "status": "approved"})

@@ -161,6 +161,14 @@ class LocalUnavailable(Exception):
     """No device with a local model can answer right now; the message says why, in Spanish."""
 
 
+class LocalFailed(LocalUnavailable):
+    """A device took the question and failed. The message carries the device's own error text; .node is the device."""
+
+    def __init__(self, message: str, node: str):
+        super().__init__(message)
+        self.node = node
+
+
 def api_error_reason(e: Exception) -> str:
     """The human-readable reason Anthropic gives, e.g. a low credit balance. Never contains the key."""
     body = getattr(e, "body", None)

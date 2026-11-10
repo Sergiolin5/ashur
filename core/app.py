@@ -29,10 +29,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.brain import (SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
+from core.brain import (SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed, LocalUnavailable, api_error_reason,
                         looks_like_secret, month_start)
 from core.db import DB, hash_token
-from core.mcp import McpDeps, Tool, ToolError, hhmm, mount_mcp
+from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
 from shared.protocol import (
@@ -1104,7 +1104,7 @@ def create_app(
                     return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]
                 if t["status"] in ("failed", "cancelled"):
                     err = (t["result"] or {}).get("error") or "sin detalle"
-                    raise LocalUnavailable(f"El modelo local falló en {t['node_id']}: {err}")
+                    raise LocalFailed(f"El modelo local falló en {t['node_id']}: {err}", t["node_id"])
                 time.sleep(0.2)
             db.cancel_task(tid, "timeout", clock())
             raise LocalUnavailable("El modelo local no respondió a tiempo. Puede estar ocupado o recién despertando.")
@@ -1883,7 +1883,8 @@ def create_app(
                    "update": "Hay una versión nueva de Ashur", "budget": "El gasto con Claude llega al 80% del mes",
                    "proposals": "Ashur tiene recuerdos nuevos por revisar",
                    "daily": "Revisión del día: cómo está todo, una vez al día",
-                   "hour": "Una tarea lleva una hora con su equipo a tope"}
+                   "hour": "Una tarea lleva una hora con su equipo a tope",
+                   "claude": "Claude te pide algo (llega aunque sea de noche)"}
     NOTIFY_WATCHED = ("inventory", "docs")                       # background jobs worth a tap on the shoulder
 
     def notify_settings() -> dict:
@@ -2348,6 +2349,59 @@ def create_app(
     def mcp_key_ok(key: str) -> bool:
         return bool(mcp_key_hash[0]) and _same(hash_token(key), mcp_key_hash[0])
 
+    # --- requests Claude files and Sergio approves (ashur_pedir) ---
+    request_lock = threading.Lock()
+
+    def run_request(req: dict) -> tuple[str, str]:
+        """Do an approved request with the panel's own functions. Checked again now: requests never expire, so what was
+        true when Claude asked may not be anymore; then nothing runs and the reason comes back as not_done."""
+        action, tarea = req["action"], req["args"].get("tarea")
+        try:
+            if action in ("pausar_cola", "reanudar_cola"):
+                pause = action == "pausar_cola"
+                if queue_paused() == pause:
+                    return "not_done", "La cola ya estaba pausada." if pause else "La cola no estaba pausada."
+                set_queue_pause(QueuePause(paused=pause))
+                return "approved", "Cola pausada." if pause else "Cola reanudada."
+            if action == "cancelar_tarea":
+                cancel_waiting_task(tarea)
+                return "approved", f"Tarea #{tarea} cancelada."
+            if action in ("subir_tarea", "bajar_tarea"):
+                up = action == "subir_tarea"
+                move_waiting_task(tarea, MoveTask(to="up" if up else "down"))
+                return "approved", f"Tarea #{tarea} {'subida' if up else 'bajada'} en la cola."
+            if action in ("repasar_inventario", "releer_documentos"):
+                queued = (inventory_refresh if action == "repasar_inventario" else docs_refresh)()["queued"]
+                if not queued:
+                    return "not_done", "Ningún equipo puede hacerlo ahora."
+                return "approved", "En cola en: " + ", ".join(queued) + "."
+        except HTTPException as e:
+            return "not_done", str(e.detail)
+        return "not_done", "Acción desconocida."
+
+    @app.get("/api/claude-requests", dependencies=[Depends(require_admin)])
+    def claude_requests_list():
+        return db.claude_requests()
+
+    @app.post("/api/claude-requests/{rid}/approve", dependencies=[Depends(require_admin)])
+    def claude_request_approve(rid: int):
+        if not db.claude_request_decide(rid, "running", clock(), ""):       # claimed once: a double tap gets 404
+            raise HTTPException(404, "Ya se decidió o no existe.")
+        try:
+            status, result = run_request(db.claude_request_get(rid))
+        except Exception as e:                  # never leave it «en curso» forever
+            status, result = "not_done", f"Error interno en Ashur ({type(e).__name__})."
+        db.claude_request_decide(rid, status, clock(), result, expect="running")
+        db.log(clock(), None, "claude_request_decided", {"id": rid, "status": status, "result": result})
+        return {"status": status, "result": result}
+
+    @app.post("/api/claude-requests/{rid}/reject", dependencies=[Depends(require_admin)])
+    def claude_request_reject(rid: int):
+        if not db.claude_request_decide(rid, "rejected", clock(), ""):
+            raise HTTPException(404, "Ya se decidió o no existe.")
+        db.log(clock(), None, "claude_request_decided", {"id": rid, "status": "rejected"})
+        return {"ok": True}
+
     def mcp_tools() -> list[Tool]:
         """The connector's tools. Every one builds its text from an allowlist of fields (see the constraints of 0.45.0)."""
         NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -2429,7 +2483,7 @@ def create_app(
             word = {"pending": "pendiente", "running": "en curso", "rejected": "rechazado",
                     "approved": "aprobado" + (f": {res}" if res else ""),
                     "not_done": "no se hizo" + (f": {res}" if res else "")}.get(r["status"], r["status"])
-            return f"Pedido #{rid} ({r['action']}): {word}"
+            return f"Pedido #{rid} ({action_label(r['action'], r['args'])}): {word}"
 
         def preguntar_local(args: dict) -> str:
             q = args.get("pregunta")
@@ -2437,9 +2491,40 @@ def create_app(
                 raise ToolError("«pregunta» debe ser un texto de 1 a 2000 caracteres.")
             try:
                 text, node = local_complete(brain.connector_system(), [{"role": "user", "content": q}])
-            except LocalUnavailable as e:
+            except LocalFailed as e:            # the device's own error text may hold paths or content: not for Claude
+                raise ToolError(f"El modelo local falló en {e.node}.")
+            except LocalUnavailable as e:       # fixed text written by Ashur
                 raise ToolError(str(e))
             return f"{text}\n\n(respondió {node})"
+
+        def pedir(args: dict) -> str:
+            accion, motivo, tarea = args.get("accion"), args.get("motivo"), args.get("tarea")
+            if accion not in ACTIONS:
+                raise ToolError("«accion» debe ser una de: " + ", ".join(ACTIONS) + ".")
+            if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
+                raise ToolError("«motivo» debe ser un texto de 3 a 300 caracteres.")
+            if "{tarea}" in ACTIONS[accion]:
+                if not isinstance(tarea, int) or isinstance(tarea, bool) or tarea < 1:
+                    raise ToolError(f"«tarea» (el número de la tarea) es obligatorio para {accion}.")
+                req_args = {"tarea": tarea}
+            elif tarea is not None:
+                raise ToolError("«tarea» solo va con cancelar_tarea, subir_tarea o bajar_tarea.")
+            else:
+                req_args = {}
+            with request_lock:                  # check, count and add as one step: two calls cannot both slip in
+                same = db.claude_request_pending_same(accion, req_args)
+                if same:
+                    return f"Ya estaba pedido: #{same}"
+                if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                    raise ToolError("Ya hay 5 pedidos esperando a Sergio; espera a que decida.")
+                rid = db.claude_request_add(clock(), accion, req_args, motivo.strip())
+            label = action_label(accion, req_args)
+            db.log(clock(), None, "claude_request", {"id": rid, "action": accion, "label": label})
+            # its own switch and no quiet hours: a request waits for Sergio, so he hears of it even at night
+            if db.setting("notify_claude", "1") == "1" and db.push_subs():
+                payload = {"title": f"Claude pide: {label}", "body": motivo.strip()[:180], "url": "/#pedidos", "tag": f"claude-{rid}"}
+                threading.Thread(target=_push_all, args=(payload,), daemon=True, name="claude-push").start()
+            return f"Pedido #{rid} enviado; Sergio lo aprueba en el panel."
 
         return [
             Tool("ashur_estado", "Estado de los equipos de Sergio, la cola de tareas y la versión de Ashur.", NO_ARGS, estado),
@@ -2455,6 +2540,13 @@ def create_app(
                  "Puede tardar si el equipo está dormido.",
                  {"type": "object", "properties": {"pregunta": {"type": "string", "minLength": 1, "maxLength": 2000}},
                   "required": ["pregunta"], "additionalProperties": False}, preguntar_local, local=True),
+            Tool("ashur_pedir", "Pide a Sergio que apruebe una acción en Ashur. Nada se hace hasta que él la aprueba en el panel; "
+                 "consulta cómo va con ashur_ver_pedido. «tarea» solo para cancelar_tarea, subir_tarea y bajar_tarea.",
+                 {"type": "object", "properties": {"accion": {"type": "string", "enum": list(ACTIONS)},
+                                                   "motivo": {"type": "string", "minLength": 3, "maxLength": 300,
+                                                              "description": "Por qué lo pides, para Sergio"},
+                                                   "tarea": {"type": "integer", "minimum": 1, "description": "Número de la tarea"}},
+                  "required": ["accion", "motivo"], "additionalProperties": False}, pedir),
         ]
 
     mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,

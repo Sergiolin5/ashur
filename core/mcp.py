@@ -22,6 +22,16 @@ LIMIT_WINDOW_S = 3600
 MAX_CALLS = 60             # tools/call per rolling hour
 MAX_LOCAL_CALLS = 20       # of those, calls to tools that run on the local model
 
+# What Claude may ask for (always as a request Sergio approves), with the words the panel and the push show.
+ACTIONS = {"pausar_cola": "pausar la cola", "reanudar_cola": "reanudar la cola", "cancelar_tarea": "cancelar la tarea #{tarea}",
+           "subir_tarea": "subir la tarea #{tarea}", "bajar_tarea": "bajar la tarea #{tarea}",
+           "repasar_inventario": "repasar el inventario", "releer_documentos": "releer los documentos"}
+MAX_PENDING_REQUESTS = 5
+
+
+def action_label(action: str, args: dict) -> str:
+    return ACTIONS.get(action, action).format(tarea=(args or {}).get("tarea", "?"))
+
 
 class ToolError(Exception):
     """A failure the user should read (the result comes back with isError: true)."""

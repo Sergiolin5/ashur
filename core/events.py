@@ -83,6 +83,10 @@ def describe(event: str, d: dict) -> str:
                                                     " (falló)" if d.get("failed") else
                                                     f" (error interno: {d['error']})" if d.get("error") else ""),
         "mcp_locked": f"CONECTOR DE CLAUDE BLOQUEADO {d.get('minutes', 15)} min por claves incorrectas",
+        "claude_request": f"Claude pidió {d.get('label') or d.get('action')} (pedido #{d.get('id')})",
+        "claude_request_decided": f"pedido #{d.get('id')} de Claude: "
+                                  + {"approved": "aprobado", "rejected": "rechazado", "not_done": "no se hizo"}.get(d.get("status"), str(d.get("status")))
+                                  + (f" ({d['result']})" if d.get("result") else ""),
         "mcp_key": "creaste una clave nueva para el conector de Claude" if d.get("action") == "created"
                    else "revocaste la clave del conector de Claude",
     }.get(event, f"{event} {d}" if d else event)

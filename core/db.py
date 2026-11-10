@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
     source      TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'pending'
 );
+CREATE TABLE IF NOT EXISTS claude_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, action TEXT NOT NULL,
+    args TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending', decided_at REAL, result TEXT
+);
 CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          REAL NOT NULL,
@@ -1240,6 +1245,54 @@ class DB:
         with self.lock:
             self.conn.execute("UPDATE memory_proposals SET status = ? WHERE id = ?", (status, pid))
             self.conn.commit()
+
+    # --- claude requests: actions Claude (via the connector) asks for, until Sergio decides ---
+    _CR_COLS = "id, ts, action, args, reason, status, decided_at, result"
+
+    @staticmethod
+    def _cr_row(r) -> dict:
+        d = dict(r)
+        d["args"] = json.loads(d["args"])
+        return d
+
+    def claude_request_add(self, ts: float, action: str, args: dict, reason: str) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO claude_requests (ts, action, args, reason) VALUES (?, ?, ?, ?)",
+                (ts, action, json.dumps(args, sort_keys=True), reason))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def claude_request_pending_same(self, action: str, args: dict) -> Optional[int]:
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT id FROM claude_requests WHERE status = 'pending' AND action = ? AND args = ? ORDER BY id LIMIT 1",
+                (action, json.dumps(args, sort_keys=True))).fetchone()
+        return r[0] if r else None
+
+    def claude_requests_pending_count(self) -> int:
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) FROM claude_requests WHERE status = 'pending'").fetchone()[0]
+
+    def claude_request_get(self, rid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(f"SELECT {self._CR_COLS} FROM claude_requests WHERE id = ?", (rid,)).fetchone()
+        return self._cr_row(r) if r else None
+
+    def claude_request_decide(self, rid: int, status: str, ts: float, result: str, expect: str = "pending") -> bool:
+        with self.lock:
+            cur = self.conn.execute(
+                "UPDATE claude_requests SET status = ?, decided_at = ?, result = ? WHERE id = ? AND status = ?",
+                (status, ts, result, rid, expect))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def claude_requests(self, limit: int = 50) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT {self._CR_COLS} FROM claude_requests "
+                "ORDER BY (status = 'pending') DESC, id DESC LIMIT ?", (limit,)).fetchall()
+        return [self._cr_row(r) for r in rows]
 
     def delete_memory(self, memory_id: int) -> bool:
         with self.lock:

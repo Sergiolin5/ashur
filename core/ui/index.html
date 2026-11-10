@@ -912,6 +912,7 @@
     <div class="page" data-page="claude-requests" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Pedidos de Claude</div></div>
       <section><h2>Por decidir</h2><div class="group" id="cr-pending"></div>
+        <div class="note" id="cr-status" hidden></div>
         <div class="note" id="cr-note">Claude no hace nada por su cuenta: lo que quiere hacer llega aquí y solo pasa si lo apruebas. Al aprobar, Ashur revisa otra vez si todavía aplica.</div></section>
       <section><h2>Historial</h2><div class="group" id="cr-done"></div></section>
     </div>
@@ -2080,7 +2081,9 @@
   async function detailOf(r, fallback) { try { return (await r.json()).detail || fallback; } catch (e) { return fallback; } }
   async function loadMcpKey() {
     try {
-      const k = await (await api("api/mcp/key")).json();
+      const resp = await api("api/mcp/key");
+      if (!resp.ok) { put($("mcp-state"), [row({ title: "No pude leer el estado del conector", detail: await detailOf(resp, "Error " + resp.status) })]); return; }
+      const k = await resp.json();
       const st = row({ title: k.active ? "Activa desde " + whenText(k.created) : "Sin clave", detail: k.active ? "Claude puede usar el conector" : "Claude no puede entrar" });
       if (k.active) {
         const rv = el("button", "forget", "Revocar"); rv.type = "button";
@@ -2094,6 +2097,8 @@
       $("mcp-actions").replaceChildren(b);
     } catch (e) {}
   }
+  const mcpAddress = () => location.protocol === "https:" ? "Dirección: " + location.origin + "/mcp"
+    : "Dirección: tu dirección pública de Funnel (https://….ts.net) seguida de /mcp — no la de este panel.";
   async function mcpChange(r, fallback) {
     const out = $("mcp-result");
     mcpKey = "";
@@ -2102,7 +2107,7 @@
       if (j.key) {
         mcpKey = j.key;
         out.textContent = "Clave del conector (cópiala ahora, no se vuelve a mostrar):\n" + j.key +
-          "\n\nDirección: " + new URL("mcp", location.href).href + "\nCabecera: Authorization: Bearer " + j.key;
+          "\n\n" + mcpAddress() + "\nCabecera: Authorization: Bearer " + j.key;
       } else out.textContent = "Clave revocada. Claude ya no puede usar el conector.";
     } else out.textContent = await detailOf(r, fallback);
     out.hidden = false; $("mcp-copy").hidden = !mcpKey;
@@ -2142,7 +2147,8 @@
   }
   async function decideRequest(id, what, buttons) {
     for (const b of buttons) b.disabled = true;
-    const note = $("cr-note");
+    const note = $("cr-status");
+    note.hidden = false;
     try {
       const r = await api("api/claude-requests/" + id + "/" + what, { method: "POST" });
       if (!r.ok) note.textContent = await detailOf(r, "No pude decidir el pedido.");

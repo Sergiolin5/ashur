@@ -591,7 +591,8 @@ def test_connector_never_returns_private_material(tmp_path, fast_local):
     c.db.docs_apply("mac-m1", [{"path": "/x/canario.txt", "modified": 1, "chunks": ["CANARIO-DOC"]}], [])
     c.db.add_memory(now, "CANARIO-LOCAL", "ashur", "local")
     c.db.add_summary(now, {"id": 1, "ts": now}, {"id": 1, "ts": now}, "CANARIO-RESUMEN", "claude")
-    c.db.inventory_add("mac-m1", [{"path": "/Users/s/Privado/CANARIO-SENSIBLE.pdf", "size": None, "kind": "sensitive"}])
+    c.db.inventory_add("mac-m1", [{"path": "/Users/s/Privado/CANARIO-SENSIBLE.pdf", "size": None, "kind": "sensitive"},
+                                  {"path": "/Users/s/Docs/CANARIO-VISIBLE.pdf", "size": 1 << 20, "kind": "file"}])
     c.db.note_add(now, "CANARIO-OPINION", "", [], author="Invitado")
     c.db.note_add(now, "CANARIO-PENDIENTE", "", [])
     c.app.state.brain.save_voice("mac-m1", "CANARIO-VOZ")
@@ -605,6 +606,7 @@ def test_connector_never_returns_private_material(tmp_path, fast_local):
     outputs = [tool_text(c, n, a)[0] for n, a in calls]
     th.join(5)
     assert outputs[4].startswith("Respuesta local.")                     # the local model really answered
+    assert "CANARIO-VISIBLE.pdf" in outputs[2]                         # the search really ran over the inventory
     joined = "\n".join(outputs).upper()
     for canary in ("CANARIO-DIARIO", "CANARIO-DOC", "CANARIO-LOCAL", "CANARIO-RESUMEN", "CANARIO-SENSIBLE",
                    "CANARIO-OPINION", "CANARIO-PENDIENTE", "CANARIO-VOZ"):

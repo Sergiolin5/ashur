@@ -343,3 +343,70 @@ def test_ver_pedido_states(tmp_path):
         assert tool_text(c, "ashur_ver_pedido", {"id": ids[s]})[0] == f"Pedido #{ids[s]} (pausar_cola): {word}"
     assert tool_text(c, "ashur_ver_pedido", {"id": 99}) == ("No existe el pedido #99.", True)
     assert tool_text(c, "ashur_ver_pedido", {"id": "1"})[1] is True
+
+
+# --- ashur_preguntar_local (Task 4) ---------------------------------------------------------
+
+import json
+import threading
+
+
+def llm_node(c, reply="Respuesta local.", device="mac-m1"):
+    """A node with the llm module that answers one chat task through the real protocol; captures its payload."""
+    token = c.tailnet.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+                           json={"device_id": device, "os": "macos", "modules": ["llm"], "simulated": True}).json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+    c.tailnet.post(f"/nodes/{device}/heartbeat", headers=h, json={"mode": "full"})
+    seen = {}
+
+    def serve():
+        t = c.tailnet.get(f"/nodes/{device}/tasks/next", headers=h, params={"wait": 5, "modules": "llm"}).json()
+        if t:
+            seen["payload"] = t["payload"]
+            c.tailnet.post(f"/tasks/{t['id']}/result", headers=h, json={"ok": True, "result": {"text": reply}})
+
+    th = threading.Thread(target=serve, daemon=True)
+    th.start()
+    return th, seen
+
+
+def test_local_prompt_has_no_private_material(tmp_path):
+    c, clock = tools_app(tmp_path)
+    now = clock()
+    c.db.add_memory(now, "CANARIO-LOCAL", "ashur", "local")
+    c.db.add_memory(now, "CANARIO-CLAUDE", "ashur", "claude")
+    c.db.diary_add(now, "2026-11-10", "CANARIO-DIARIO")
+    c.db.docs_apply("mac-m1", [{"path": "/x/a.txt", "modified": 1, "chunks": ["CANARIO-DOC"]}], [])
+    c.db.add_message(now, "panel", "user", "hola")
+    c.db.add_summary(now, {"id": 1, "ts": now}, {"id": 1, "ts": now}, "CANARIO-RESUMEN", "claude")
+    th, seen = llm_node(c)
+    text, err = tool_text(c, "ashur_preguntar_local", {"pregunta": "¿qué hora es?"})
+    th.join(5)
+    assert not err and text == "Respuesta local.\n\n(respondió mac-m1)"
+    sent = json.dumps(seen["payload"], ensure_ascii=False)
+    for canary in ("CANARIO-LOCAL", "CANARIO-RESUMEN", "CANARIO-DIARIO", "CANARIO-DOC"):
+        assert canary not in sent
+    assert "CANARIO-CLAUDE" in seen["payload"]["system"]
+    assert seen["payload"]["messages"] == [{"role": "user", "content": "¿qué hora es?"}]
+    assert "Respondes a Claude" in seen["payload"]["system"]
+
+
+def test_local_answer_not_in_chat_history(tmp_path):
+    c, clock = tools_app(tmp_path)
+    before = c.db.recent_messages(50)
+    th, _ = llm_node(c)
+    assert not tool_text(c, "ashur_preguntar_local", {"pregunta": "hola"})[1]
+    th.join(5)
+    assert c.db.recent_messages(50) == before == []
+
+
+def test_local_unavailable_is_tool_error(tmp_path):
+    c, _ = tools_app(tmp_path)
+    text, err = tool_text(c, "ashur_preguntar_local", {"pregunta": "hola"})
+    assert err is True and "modelo local" in text
+
+
+def test_local_question_is_validated(tmp_path):
+    c, _ = tools_app(tmp_path)
+    for bad in ({}, {"pregunta": ""}, {"pregunta": "x" * 2001}, {"pregunta": 5}):
+        assert tool_text(c, "ashur_preguntar_local", bad)[1] is True

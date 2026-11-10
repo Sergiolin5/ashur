@@ -2431,6 +2431,16 @@ def create_app(
                     "not_done": "no se hizo" + (f": {res}" if res else "")}.get(r["status"], r["status"])
             return f"Pedido #{rid} ({r['action']}): {word}"
 
+        def preguntar_local(args: dict) -> str:
+            q = args.get("pregunta")
+            if not isinstance(q, str) or not 1 <= len(q) <= 2000:
+                raise ToolError("«pregunta» debe ser un texto de 1 a 2000 caracteres.")
+            try:
+                text, node = local_complete(brain.connector_system(), [{"role": "user", "content": q}])
+            except LocalUnavailable as e:
+                raise ToolError(str(e))
+            return f"{text}\n\n(respondió {node})"
+
         return [
             Tool("ashur_estado", "Estado de los equipos de Sergio, la cola de tareas y la versión de Ashur.", NO_ARGS, estado),
             Tool("ashur_diagnostico", "Resumen del día y fallas de las últimas 24 horas, agrupadas.", NO_ARGS, diagnostico),
@@ -2441,6 +2451,10 @@ def create_app(
             Tool("ashur_ver_pedido", "Cómo va un pedido que Claude dejó para que Sergio lo apruebe.",
                  {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"],
                   "additionalProperties": False}, ver_pedido),
+            Tool("ashur_preguntar_local", "Hace una pregunta al modelo local de Sergio (sin acceso a su diario, documentos ni resúmenes). "
+                 "Puede tardar si el equipo está dormido.",
+                 {"type": "object", "properties": {"pregunta": {"type": "string", "minLength": 1, "maxLength": 2000}},
+                  "required": ["pregunta"], "additionalProperties": False}, preguntar_local, local=True),
         ]
 
     mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,

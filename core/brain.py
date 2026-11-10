@@ -253,7 +253,7 @@ class Brain:
             return True
         return False
 
-    def _system(self, voice: Optional[str] = None, local: bool = False) -> str:
+    def _memory_block(self, local: bool) -> str:
         # memories marked «solo local» never enter a prompt that goes to Claude
         notes = [m for m in self.db.memories() if local or m.get("tier", "claude") == "claude"]
         lines, size = [], 0
@@ -263,7 +263,22 @@ class Brain:
                 break
             lines.append(line)
             size += len(line)
-        memory = "\n".join(reversed(lines)) or "(todavía no hay recuerdos)"
+        return "\n".join(reversed(lines)) or "(todavía no hay recuerdos)"
+
+    def connector_system(self) -> str:
+        """Prompt for the local model when Claude asks it something through the connector: persona, memories that may
+        go to Claude, time and devices. No summaries, diary, documents, files or device voice."""
+        now = dt.datetime.fromtimestamp(self.clock(), BOGOTA)
+        net = json.dumps(self.network(), ensure_ascii=False, default=str)
+        return (f"{self.persona().strip()}\n\n"
+                f"Fecha y hora en Bogotá: {now:%Y-%m-%d %H:%M}.\n\n"
+                f"Tus recuerdos (número entre corchetes):\n{self._memory_block(False)}\n\n"
+                f"Estado actual de tus dispositivos: {net}\n\n"
+                "Respondes a Claude, que habla con Sergio desde su teléfono. No tienes herramientas. "
+                "Responde breve y en español.")
+
+    def _system(self, voice: Optional[str] = None, local: bool = False) -> str:
+        memory = self._memory_block(local)
         past, size = [], 0
         for sm in reversed(self.db.summaries()):
             day = dt.datetime.fromtimestamp(sm["ts_to"], BOGOTA).strftime("%Y-%m-%d")

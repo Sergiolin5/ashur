@@ -335,8 +335,8 @@ class DB:
     def set_node_mode(self, node_id: str, mode: str, last_seen: Optional[float] = None,
                       reason: Optional[str] = None):
         with self.lock:
-            if last_seen is None:
-                self.conn.execute("UPDATE nodes SET mode = ? WHERE id = ?", (mode, node_id))
+            if last_seen is None:   # the core's own verdict (offline): the reason is its guess of why, or none
+                self.conn.execute("UPDATE nodes SET mode = ?, mode_reason = ? WHERE id = ?", (mode, reason, node_id))
             else:
                 self.conn.execute("UPDATE nodes SET mode = ?, last_seen = ?, mode_reason = ? WHERE id = ?",
                                   (mode, last_seen, reason, node_id))

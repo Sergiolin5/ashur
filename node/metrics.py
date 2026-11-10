@@ -53,6 +53,10 @@ def read(cpu: Optional[float] = None) -> dict:
         import psutil
         out["cpu_pct"] = round(psutil.cpu_percent(None) if cpu is None else cpu, 1)
         out["ram_pct"] = round(psutil.virtual_memory().percent, 1)
+        batt = psutil.sensors_battery()      # None on machines without a battery
+        if batt is not None:
+            out["battery_pct"] = round(batt.percent, 1)
+            out["on_power"] = bool(batt.power_plugged)
     except Exception:
         pass
     g = gpu_pct()

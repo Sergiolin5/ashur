@@ -13,9 +13,12 @@ def describe(event: str, d: dict) -> str:
     return {
         "register": f"se unió ({d.get('os', '?')}, módulos {', '.join(d.get('modules', [])) or 'ninguno'})",
         "reregister": "volvió a registrarse",
-        "offline": f"se desconectó (sin señal {d.get('silent_s', '?')} s)"
+        "offline": f"se desconectó (sin señal {d.get('silent_s', '?')} s" + (f"; probablemente {d['cause']}" if d.get("cause") else "") + ")"
                    + (f", tareas devueltas a la cola: {d['requeued_tasks']}" if d.get("requeued_tasks") else ""),
-        "back_online": f"volvió ({MODES.get(d.get('mode'), d.get('mode'))})",
+        "asleep": "se volvió a dormir (había despertado hace poco)"
+                  + (f", tareas devueltas a la cola: {d['requeued_tasks']}" if d.get("requeued_tasks") else ""),
+        "back_online": f"volvió ({MODES.get(d.get('mode'), d.get('mode'))})"
+                       + (f" tras dormir {d['slept_s'] / 60:.0f} min" if d.get("slept_s") else ""),
         "mode_change": f"{MODES.get(d.get('from'), d.get('from'))} → {MODES.get(d.get('to'), d.get('to'))}"
                        + (f" ({d['reason']})" if d.get("reason") else ""),
         "modules_changed": f"capacidades: {', '.join(d.get('to', []))}",

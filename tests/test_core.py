@@ -1144,3 +1144,39 @@ def test_docs_search_does_not_take_the_shared_lock(tmp_path):
         t.start(); t.join(5)
     assert not t.is_alive()
     assert [h["path"] for h in got["hits"]] == ["/a.txt"]
+
+
+def test_laptop_back_to_sleep_is_told_apart_from_a_lost_device(env):
+    """mac-m1, lid closed on battery: wakes for a moment, beats, sleeps again. That is «dormido», not «sin señal»."""
+    c, clock = env
+    h = register(c)
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "light", "slept_s": 600, "battery_pct": 80, "on_power": False})
+    clock.now += 46
+    node = c.get("/status", headers=A).json()["nodes"][0]
+    assert node["mode"] == "offline" and node["reason"] == "dormido"
+    events = [r["event"] for r in c.get("/log", headers=A).json()]
+    assert "asleep" in events and "offline" not in events
+    d = c.get("/api/diagnostics", headers=A).json()
+    assert d["nodes"][0]["hint"].startswith("Dormido") and d["nodes"][0]["reason"] == "dormido"
+    assert not any(p["event"] in ("asleep", "offline") for p in d["problems"])    # not a problem: no line in Diagnóstico
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "light", "slept_s": 540})
+    back = [r for r in c.get("/log", headers=A).json() if r["event"] == "back_online"][0]
+    assert back["detail"]["slept_s"] == 540
+    from core.events import describe
+    assert describe("back_online", back["detail"]) == "volvió (uso ligero) tras dormir 9 min"
+
+
+def test_silent_on_an_empty_battery_says_so_and_plain_silence_stays_plain(env):
+    c, clock = env
+    h = register(c)
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "off", "battery_pct": 3, "on_power": False})
+    clock.now += 46
+    node = c.get("/status", headers=A).json()["nodes"][0]
+    assert node["reason"] == "sin batería (3%)"
+    off = [r for r in c.get("/log", headers=A).json() if r["event"] == "offline"][0]
+    assert off["detail"]["cause"] == "sin batería (3%)"
+    beat(c, h)                                       # back, plugged in, no sleep reported
+    clock.now += 600                                 # long silence, nothing pointing to sleep or battery
+    node = c.get("/status", headers=A).json()["nodes"][0]
+    assert node["mode"] == "offline" and node["reason"] is None
+    assert c.get("/api/diagnostics", headers=A).json()["nodes"][0]["hint"].startswith("Sin señal")

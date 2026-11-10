@@ -68,6 +68,7 @@ class Heartbeat(BaseModel):
     free_gpu_mem_gb: Optional[float] = None
     battery_pct: Optional[float] = None
     on_power: Optional[bool] = None
+    slept_s: Optional[float] = Field(default=None, ge=0)   # the agent was kept stopped this long (machine asleep) since the last beat that got through
     disks: Optional[list[dict]] = None     # disks and whether the inventory scans them (see node/disks.py), every ~10 min
     gpus: Optional[list[dict]] = None      # GPUs of this machine (see node/gpus.py), every ~10 min
     problems: Optional[list[str]] = None   # warnings/errors the agent logged since the last beat, so the panel can show them

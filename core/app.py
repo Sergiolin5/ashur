@@ -58,6 +58,15 @@ WEIGHTS_FOR_MODE = {
 }
 
 
+DEAD_BATTERY_PCT = 5        # last beat said this or less, unplugged: it most likely ran out
+BACK_TO_SLEEP_S = 300       # silent this soon after waking from sleep: it most likely went back to sleep (lid closed)
+
+
+def is_offline_cause(reason: Optional[str]) -> bool:
+    """The core's guess for a silent node («dormido», «sin batería (3%)»), as opposed to a stale reason from its last beat."""
+    return bool(reason) and (reason == "dormido" or reason.startswith("sin batería"))
+
+
 def _same(a: str, b: str) -> bool:
     return bool(a) and bool(b) and hmac.compare_digest(a, b)
 
@@ -154,6 +163,16 @@ def create_app(
 
     sweep_lock = threading.Lock()
     started_at = clock()
+    power: dict[str, dict] = {}     # per node, from its beats: battery_pct, on_power, woke_at (memory only; a restart forgets it)
+
+    def offline_cause(node_id: str, last_seen: float) -> Optional[str]:
+        """Best guess of why a node went silent, from what its last beats said. None: no evidence either way."""
+        p = power.get(node_id) or {}
+        if p.get("battery_pct") is not None and not p.get("on_power") and p["battery_pct"] <= DEAD_BATTERY_PCT:
+            return f"sin batería ({p['battery_pct']:.0f}%)"
+        if p.get("woke_at") is not None and last_seen - p["woke_at"] <= BACK_TO_SLEEP_S:
+            return "dormido"
+        return None
 
     def sweep() -> None:
         """Mark nodes offline after missed heartbeats and reroute their tasks.
@@ -167,10 +186,12 @@ def create_app(
                 if n["mode"] == Mode.OFFLINE.value or n["last_seen"] is None:
                     continue
                 if now - max(n["last_seen"], started_at) > OFFLINE_AFTER_S:
-                    db.set_node_mode(n["id"], Mode.OFFLINE.value)
+                    cause = offline_cause(n["id"], n["last_seen"])
+                    db.set_node_mode(n["id"], Mode.OFFLINE.value, reason=cause)
                     requeued = db.requeue_tasks_of(n["id"])
-                    db.log(now, n["id"], "offline", {"silent_s": round(now - n["last_seen"], 1),
-                                                     "requeued_tasks": requeued})
+                    db.log(now, n["id"], "asleep" if cause == "dormido" else "offline",
+                           {"silent_s": round(now - n["last_seen"], 1), "requeued_tasks": requeued,
+                            **({"cause": cause} if cause else {})})
         finally:
             sweep_lock.release()
 
@@ -208,7 +229,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.42.9", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.43.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -446,6 +467,10 @@ def create_app(
         reason = (hb.reason or "")[:120] or None
         db.set_node_mode(node["id"], hb.mode.value, last_seen=now, reason=reason)
         db.set_node_metrics(node["id"], hb.cpu_pct, hb.ram_pct, hb.gpu_pct)
+        p = power.setdefault(node["id"], {})
+        p.update(battery_pct=hb.battery_pct, on_power=bool(hb.on_power))      # None: no battery, or an agent too old to say
+        if hb.slept_s:
+            p["woke_at"] = now
         if hb.modules is not None and sorted(hb.modules) != sorted(node["modules"]):
             db.set_node_modules(node["id"], hb.modules)
             db.log(now, node["id"], "modules_changed", {"from": node["modules"], "to": sorted(hb.modules)})
@@ -464,7 +489,7 @@ def create_app(
             if lost:
                 db.log(now, node["id"], "restart_requeued", {"requeued_tasks": lost})
         if prev == Mode.OFFLINE.value:
-            db.log(now, node["id"], "back_online", {"mode": hb.mode.value})
+            db.log(now, node["id"], "back_online", {"mode": hb.mode.value, **({"slept_s": round(hb.slept_s)} if hb.slept_s else {})})
         elif prev != hb.mode.value:
             db.log(now, node["id"], "mode_change", {"from": prev, "to": hb.mode.value, "reason": reason})
         return {"ok": True, "code_version": node_code()[0]}
@@ -882,7 +907,12 @@ def create_app(
             behind = bool(core_v and n.code_version and n.code_version != core_v)
             off = n.mode == Mode.OFFLINE
             hint = None
-            if off:
+            if off and n.reason == "dormido":
+                hint = ("Dormido (probable): despertó un momento y volvió a dormirse, como un portátil con la tapa cerrada. "
+                        "No es una falla; vuelve solo al despertar.")
+            elif off and n.reason:
+                hint = (f"Se quedó {n.reason} (probable: estaba sin cargador). Conéctalo.")
+            elif off:
                 hint = ("Sin señal. Comprueba que el equipo esté encendido, con Tailscale activo y el servicio de Ashur corriendo "
                         "(Ajustes → Comandos).")
             elif behind:
@@ -891,7 +921,7 @@ def create_app(
             elif core_v and not n.code_version:
                 hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
-                          "code_label": n.code_label, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
+                          "code_label": n.code_label, "reason": n.reason, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
                           "gpus": gpus_text_of(n.device_id), "llm": llm_line(n.device_id)})
         problems = []
         for ev in db.log_rows(600):
@@ -1872,8 +1902,13 @@ def create_app(
                 if n["simulated"]:
                     continue
                 gone = n["mode"] == Mode.OFFLINE.value and n["last_seen"] is not None and now - n["last_seen"] > OFFLINE_AFTER_S + 600
+                why = n.get("mode_reason") if gone else None
+                if why == "dormido":
+                    continue                    # a laptop asleep is not news; it is told apart from a lost device
                 if gone and n["id"] not in told:
-                    told.add(n["id"]); items.append((f"{n['id']} sin señal", f"{n['id']} lleva un rato desconectado.", "/#diagnostico"))
+                    told.add(n["id"])
+                    items.append((f"{n['id']} sin batería", f"{n['id']} se quedó {why}.", "/#diagnostico") if why else
+                                 (f"{n['id']} sin señal", f"{n['id']} lleva un rato desconectado.", "/#diagnostico"))
                 elif n["mode"] != Mode.OFFLINE.value and n["id"] in told:
                     told.discard(n["id"]); items.append((f"{n['id']} volvió", f"{n['id']} volvió.", "/#estado"))
             db.set_setting("notify_offline", ",".join(sorted(told)))
@@ -2025,7 +2060,7 @@ def create_app(
             NodeStatus(
                 device_id=n["id"], persona=n["persona"], os=n["os"], mode=Mode(n["mode"]),
                 modules=n["modules"], simulated=n["simulated"], code_version=n.get("code_version"),
-                reason=n.get("mode_reason") if n["mode"] != Mode.OFFLINE.value else None,
+                reason=n.get("mode_reason") if n["mode"] != Mode.OFFLINE.value or is_offline_cause(n.get("mode_reason")) else None,
                 code_label=db.code_label(n.get("code_version")),
                 cpu_pct=n.get("cpu_pct") if n["mode"] != Mode.OFFLINE.value else None,
                 ram_pct=n.get("ram_pct") if n["mode"] != Mode.OFFLINE.value else None,

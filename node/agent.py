@@ -68,6 +68,7 @@ class ProblemBuffer(logging.Handler):
 PROBLEMS = ProblemBuffer()
 log.addHandler(PROBLEMS)
 REALTIME_MODULES = {"llm"}            # answered within seconds, outside the heartbeat cycle
+ASLEEP_AFTER_S = 30                   # a wait that overruns by this much: the machine slept (or the OS froze the agent)
 
 
 def state_dir() -> Path:
@@ -213,6 +214,7 @@ class Agent:
         self.worker: Optional[threading.Thread] = None
         self.mode: Optional[Mode] = None
         self.announced = False                # modules are re-announced once per start
+        self.slept_s = 0.0                    # time the machine kept the agent stopped, told on the next beat that gets through
         # self-update only under node.boot, which can restart the agent on new code
         self.self_update = (os.environ.get("ASHUR_BOOT") == "1" and os.environ.get("ASHUR_SELF_UPDATE", "1") != "0"
                             if self_update is None else self_update)
@@ -317,12 +319,15 @@ class Agent:
         problems = PROBLEMS.take()
         if problems:
             beat["problems"] = problems
+        if self.slept_s:
+            beat["slept_s"] = round(self.slept_s)
         try:
             reply = self.post(f"/nodes/{self.device_id}/heartbeat", beat)
         except Exception:
             PROBLEMS.give_back(problems)
             raise
         self.announced = True
+        self.slept_s = 0.0
         try:
             target = reply.json().get("code_version")
         except ValueError:
@@ -427,7 +432,11 @@ class Agent:
             except httpx.HTTPError as e:
                 log.warning("core unreachable (%s); retrying in %ss", e.__class__.__name__, backoff)
                 backoff = min(backoff * 2, 60)
+            t0 = time.time()
             self.stopping.wait(backoff)
+            late = time.time() - t0 - backoff     # wall clock: it keeps running while the machine sleeps
+            if late > ASLEEP_AFTER_S:
+                self.slept_s += late
         # finishing up: a running task notices `stopping`, checkpoints and reports itself paused
         for t in (self.worker, self.realtime):
             if t and t.is_alive():

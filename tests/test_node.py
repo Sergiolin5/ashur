@@ -397,3 +397,30 @@ def test_gpus_are_read_without_guessing(monkeypatch):
                             "vram_free_mb": 6728, "driver": "576.02"}]
     monkeypatch.setattr(gpus.shutil, "which", lambda exe: None)
     assert gpus.read() == []                                  # nothing readable: nothing reported
+
+
+def test_agent_tells_the_core_how_long_the_machine_slept(core, tmp_path, monkeypatch):
+    """A wait that overruns by minutes means the machine slept; the next beat that gets through says so, once."""
+    import time as real_time
+    import types
+    c, clock = core
+    agent = make_agent(c, tmp_path)
+    agent.register(ENROLL)
+    wall = [1000.0]
+    monkeypatch.setattr("node.agent.time", types.SimpleNamespace(time=lambda: wall[0], monotonic=real_time.monotonic,
+                                                                 sleep=real_time.sleep))
+    waits = []
+
+    def wait(s):
+        waits.append(s)
+        if len(waits) == 1:
+            wall[0] += s + 600                     # lid closed for 10 min
+            clock.now += s + 600
+            c.get("/status", headers=A)            # the core's 5-second sweep: marks it silent meanwhile
+        else:
+            agent.stopping.set()
+    monkeypatch.setattr(agent.stopping, "wait", wait)
+    agent.run_forever()
+    back = [r for r in c.get("/log", headers=A).json() if r["event"] == "back_online"]
+    assert back and back[0]["detail"]["slept_s"] == 600
+    assert agent.slept_s == 0.0

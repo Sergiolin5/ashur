@@ -1099,6 +1099,7 @@
       case "register": return "Se unió a Ashur";
       case "reregister": return "Volvió a registrarse";
       case "offline": return "Se desconectó";
+      case "asleep": return "Se volvió a dormir";
       case "back_online": return "Volvió a conectarse";
       case "mode_change": return ({ full: "Quedó disponible", light: "Pasó a uso ligero",
                                     busy: "Se ocupó", off: "Se pausó" })[d.to] || ("Cambió a " + d.to);
@@ -1216,7 +1217,7 @@
                 : n.code_version === data.node_code_version ? ", v" + (n.code_label || data.node_code_label || "?")
                 : ", " + (n.code_label ? "v" + n.code_label : "versión anterior") +
                   " → v" + (data.node_code_label || "?") + " pendiente") +
-              (n.reason && n.mode !== "full" && n.mode !== "offline" ? " · " + n.reason : ""),
+              (n.reason && n.mode !== "full" ? " · " + n.reason : ""),
       meters: n.mode === "offline" ? null : [["CPU", num(n.cpu_pct)], ["RAM", num(n.ram_pct)], ["GPU", num(n.gpu_pct)]],
       value: ago(n.last_seen_s_ago)
     })), "Aún no hay dispositivos. Se irán sumando cuando los conectes.");
@@ -2346,7 +2347,7 @@
       const lines = [];
       const trouble = (n) => n.mode === "offline" ? 2 : (n.behind || n.hint) ? 1 : 0;   // problems first: that is what this page is for
       fill("diag-nodes", [...d.nodes].sort((a, b) => trouble(b) - trouble(a)).map((n) => {
-        const state = n.mode === "offline" ? "desconectado" : n.behind ? "código atrasado (v" + (n.code_label || "?") + " → v" + d.core_code_label + ")" : "al día";
+        const state = n.mode === "offline" ? (n.reason || "desconectado") : n.behind ? "código atrasado (v" + (n.code_label || "?") + " → v" + d.core_code_label + ")" : "al día";
         lines.push(n.device_id + ": " + state + (n.hint ? ". " + n.hint : ""));
         const mods = (n.modules || []).join(", ") || "ninguno";
         lines.push("  módulos: " + mods);
@@ -2356,7 +2357,7 @@
         if (n.llm) lines.push("  modelo local: " + n.llm);
         // On screen: one short line per device; the rest folds away (tap to open). The copied text above stays complete.
         const off = (n.disks || []).filter((x) => x.present && !x.scanned).length;
-        const short = n.mode === "offline" ? "Sin señal" : n.behind ? "Atrasado · código v" + (n.code_label || "?") : "Al día";
+        const short = n.mode === "offline" ? (n.reason === "dormido" ? "Dormido" : n.reason ? "Sin batería" : "Sin señal") : n.behind ? "Atrasado · código v" + (n.code_label || "?") : "Al día";
         const r = row({ dot: n.mode, title: nm(n.device_id), detail: short + (off ? " · " + off + (off === 1 ? " disco sin escanear" : " discos sin escanear") : ""),
                         value: ago(n.last_seen_s_ago) });
         r.classList.add("dn");

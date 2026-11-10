@@ -64,21 +64,22 @@ def mount_mcp(app: FastAPI, deps: McpDeps) -> None:
     calls: list[float] = []
     local_calls: list[float] = []
 
-    def gate(request: Request):
+    async def gate(request: Request):
         """None when the key is good; otherwise the response to send."""
         now = deps.clock()
         if now < locked_until[0]:
             return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta en el conector. "
                                  f"Se desbloquea a las {hhmm(locked_until[0])}."}, status_code=429)
         auth = request.headers.get("authorization", "")
-        key = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        # claude.ai sends a request-header value verbatim, so the key may come bare or as «Bearer <key>»
+        key = (auth[7:] if auth[:7].lower() == "bearer " else auth).strip()
         if key and deps.key_ok(key):
             return None
         failures[:] = [t for t in failures if now - t < FAIL_WINDOW_S] + [now]
         if len(failures) >= MAX_FAILURES:
             locked_until[0] = now + LOCK_S
             failures.clear()
-            deps.log("mcp_locked", {"minutes": LOCK_S // 60})
+            await asyncio.to_thread(deps.log, "mcp_locked", {"minutes": LOCK_S // 60})   # the log takes the DB lock
         # no WWW-Authenticate: the connector uses a fixed bearer key, there is no OAuth to discover
         return JSONResponse({"detail": "clave del conector requerida"}, status_code=401)
 
@@ -123,7 +124,7 @@ def mount_mcp(app: FastAPI, deps: McpDeps) -> None:
         # checked and counted here on the event loop, so concurrent calls cannot both slip under the limit
         until = over_limit(tool, deps.clock())
         if until:
-            deps.log("mcp_call", {"tool": tool.name, "limited": True})
+            await asyncio.to_thread(deps.log, "mcp_call", {"tool": tool.name, "limited": True})
             return text_result(f"Límite alcanzado; vuelve a las {until}", True), None
         # the tool may touch the database or the local model: off the event loop
         return await asyncio.to_thread(run_tool, tool, args), None
@@ -138,7 +139,7 @@ def mount_mcp(app: FastAPI, deps: McpDeps) -> None:
 
     @app.post("/mcp")
     async def mcp_post(request: Request):
-        denied = gate(request)
+        denied = await gate(request)
         if denied is not None:
             return denied
         try:

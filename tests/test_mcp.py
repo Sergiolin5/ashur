@@ -617,3 +617,108 @@ def test_request_list_carries_the_panel_label(tmp_path):
     c, clock = pedir_app(tmp_path)
     c.db.claude_request_add(clock(), "cancelar_tarea", {"tarea": 7}, "r")
     assert c.get("/api/claude-requests", headers=A).json()[0]["label"] == "cancelar la tarea #7"
+
+
+# --- final review fixes ---------------------------------------------------------------------
+
+def test_bare_key_header_is_accepted_and_a_wrong_one_counts():
+    c, _, logged = bare()
+    assert rpc(c, "ping", headers={"Authorization": "good"}).status_code == 200       # claude.ai sends the value verbatim
+    assert rpc(c, "ping", headers={"Authorization": "Bearer good"}).status_code == 200
+    for _ in range(10):
+        assert rpc(c, "ping", headers={"Authorization": "bad"}).status_code in (401, 429)
+    assert rpc(c, "ping", headers={"Authorization": "good"}).status_code == 429       # 10 wrong bare keys lock it
+    assert [e for e, _ in logged].count("mcp_locked") == 1
+
+
+def test_diagnostico_type_is_only_a_class_name(tmp_path):
+    c, clock = tools_app(tmp_path)
+    for n, err in enumerate(("secreto_notas.txt: denied", "plan_privado: x", "dir.secreto: y", "FileNotFoundError: nada"), 1):
+        c.db.log(clock(), "mac-m1", "task_failed", {"task_id": n, "module": "docs", "error": err})
+    text, _ = tool_text(c, "ashur_diagnostico")
+    for bad in ("secreto", "notas", "plan_privado", "denied"):
+        assert bad not in text
+    assert "mac-m1 · task_failed · docs · FileNotFoundError · 1 vez" in text
+    assert "mac-m1 · task_failed · docs · 3 veces" in text
+
+
+def _queue(c, n=3):
+    return [c.db.add_task("inventory", {}, "light", float(i)) for i in range(n)]
+
+
+def _order(c):
+    return [t["id"] for t in c.db.queued_tasks(50)]
+
+
+def test_approve_subir_and_bajar_move_the_task(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    a, b, d = _queue(c)
+    assert _order(c) == [a, b, d]
+    pedir(c, "subir_tarea", tarea=d)
+    assert c.post("/api/claude-requests/1/approve", headers=A).json() == {
+        "status": "approved", "result": f"Tarea #{d} subida en la cola."}
+    assert _order(c) == [a, d, b]
+    pedir(c, "bajar_tarea", tarea=a)
+    assert c.post("/api/claude-requests/2/approve", headers=A).json()["status"] == "approved"
+    assert _order(c) == [d, a, b]
+
+
+def test_subir_bajar_not_done_when_order_does_not_change(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    a, b, d = _queue(c)
+    pedir(c, "subir_tarea", tarea=a)
+    assert c.post("/api/claude-requests/1/approve", headers=A).json() == {
+        "status": "not_done", "result": f"La tarea #{a} ya estaba arriba."}
+    pedir(c, "bajar_tarea", tarea=d)
+    assert c.post("/api/claude-requests/2/approve", headers=A).json() == {
+        "status": "not_done", "result": f"La tarea #{d} ya estaba abajo."}
+    assert _order(c) == [a, b, d]
+
+
+def test_approve_releer_documentos_queues_docs_tasks(tmp_path):
+    c, _ = pedir_app(tmp_path)
+    r = c.tailnet.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+                       json={"device_id": "mac-m1", "os": "macos", "modules": ["docs"]})
+    assert r.status_code == 200
+    pedir(c, "releer_documentos")
+    assert c.post("/api/claude-requests/1/approve", headers=A).json() == {
+        "status": "approved", "result": "En cola en: mac-m1."}
+    t = c.db.queued_tasks(10)
+    assert [(x["module"], x["target"]) for x in t] == [("docs", "mac-m1")]
+
+
+def test_request_list_carries_the_task_module(tmp_path):
+    c, clock = pedir_app(tmp_path)
+    tid = c.db.add_task("voice", {}, "light", 0.0)
+    c.db.claude_request_add(clock(), "cancelar_tarea", {"tarea": tid}, "r")
+    c.db.claude_request_add(clock(), "subir_tarea", {"tarea": 999}, "r")
+    c.db.claude_request_add(clock(), "pausar_cola", {}, "r")
+    rows = {r["id"]: r for r in c.get("/api/claude-requests", headers=A).json()}
+    assert rows[1]["module"] == "voice"
+    assert "module" not in rows[2] and "module" not in rows[3]
+
+
+def test_gate_logs_run_off_the_event_loop():
+    import asyncio
+
+    def on_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+
+    def run(drive):
+        seen = []
+        app = FastAPI()
+        mount_mcp(app, McpDeps(key_ok=lambda k: k == "good", clock=VirtualClock(),
+                               log=lambda e, d: seen.append((e, d, on_loop())),
+                               tools=[Tool("t", "t", {"type": "object"}, lambda a: "ok")]))
+        drive(TestClient(app))
+        return seen
+
+    locked = run(lambda cl: [rpc(cl, "ping", headers={"Authorization": "bad"}) for _ in range(10)])
+    assert [e for e, _, _ in locked] == ["mcp_locked"] and not locked[0][2]
+    limited = run(lambda cl: [call(cl, "t") for _ in range(61)])
+    over = [x for x in limited if x[1].get("limited")]
+    assert len(over) == 1 and not over[0][2]

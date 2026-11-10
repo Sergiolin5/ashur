@@ -969,7 +969,7 @@
         <p>Con esta clave, Claude puede ver el estado de Ashur, los diagnósticos, buscar archivos por nombre y preguntarle al modelo local. No lee tu diario, tus documentos, tus recuerdos locales ni tus pendientes. Lo que quiera hacer te llega como pedido en Ajustes → Pedidos de Claude.</p>
         <div id="mcp-actions"></div>
         <div id="mcp-result" class="note" style="margin:10px 0 0;white-space:pre-line;user-select:all" hidden></div>
-        <button type="button" id="mcp-copy" class="forget" style="margin-top:8px" hidden>Copiar clave</button>
+        <button type="button" id="mcp-copy" class="forget" style="margin-top:8px" hidden>Copiar valor</button>
       </div>
     </section>
 
@@ -2107,7 +2107,7 @@
       if (j.key) {
         mcpKey = j.key;
         out.textContent = "Clave del conector (cópiala ahora, no se vuelve a mostrar):\n" + j.key +
-          "\n\n" + mcpAddress() + "\nCabecera: Authorization: Bearer " + j.key;
+          "\n\n" + mcpAddress() + "\nNombre: Authorization · Valor: Bearer " + j.key;
       } else out.textContent = "Clave revocada. Claude ya no puede usar el conector.";
     } else out.textContent = await detailOf(r, fallback);
     out.hidden = false; $("mcp-copy").hidden = !mcpKey;
@@ -2115,8 +2115,8 @@
   }
   $("mcp-copy").addEventListener("click", async () => {
     const b = $("mcp-copy");
-    try { await navigator.clipboard.writeText(mcpKey); b.textContent = "Copiada"; } catch (e) { b.textContent = "No pude copiar"; showCopy(mcpKey); }
-    setTimeout(() => { b.textContent = "Copiar clave"; }, 2500);
+    try { await navigator.clipboard.writeText("Bearer " + mcpKey); b.textContent = "Copiada"; } catch (e) { b.textContent = "No pude copiar"; showCopy("Bearer " + mcpKey); }
+    setTimeout(() => { b.textContent = "Copiar valor"; }, 2500);
   });
   const CR_STATUS = { running: "En curso", approved: "Aprobado", rejected: "Rechazado", not_done: "No se hizo" };
   async function loadClaudeRequests() {
@@ -2126,13 +2126,13 @@
       $("cr-sub").textContent = pending.length ? pending.length + (pending.length === 1 ? " pedido por decidir" : " pedidos por decidir") : "Lo que Claude te pide hacer";
       const draw = (q) => {
         const r = el("div", "row nrow"), m = el("div", "main");
-        const label = q.label.charAt(0).toUpperCase() + q.label.slice(1);
+        const label = q.label.charAt(0).toUpperCase() + q.label.slice(1) + (q.module ? " (" + q.module + ")" : "");
         if (q.status === "pending") {
           m.append(el("div", "title", label), el("div", "detail", (q.reason ? q.reason + " · " : "") + whenText(q.ts)));
           const a = el("div", "acts");
           const ok = el("button", null, "Aprobar"), no = el("button", null, "Rechazar");
           ok.type = no.type = "button";
-          ok.onclick = () => decideRequest(q.id, "approve", [ok, no]);
+          twice(ok, "Toca otra vez para aprobar", () => decideRequest(q.id, "approve", [ok, no]));
           no.onclick = () => decideRequest(q.id, "reject", [ok, no]);
           a.append(ok, no); m.append(a);
         } else {

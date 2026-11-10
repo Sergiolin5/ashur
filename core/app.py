@@ -2368,7 +2368,10 @@ def create_app(
                 return "approved", f"Tarea #{tarea} cancelada."
             if action in ("subir_tarea", "bajar_tarea"):
                 up = action == "subir_tarea"
-                move_waiting_task(tarea, MoveTask(to="up" if up else "down"))
+                before = [t["id"] for t in db.queued_tasks(10 ** 6)]
+                order = move_waiting_task(tarea, MoveTask(to="up" if up else "down"))["order"]
+                if order == before:
+                    return "not_done", f"La tarea #{tarea} ya estaba {'arriba' if up else 'abajo'}."
                 return "approved", f"Tarea #{tarea} {'subida' if up else 'bajada'} en la cola."
             if action in ("repasar_inventario", "releer_documentos"):
                 queued = (inventory_refresh if action == "repasar_inventario" else docs_refresh)()["queued"]
@@ -2381,7 +2384,14 @@ def create_app(
 
     @app.get("/api/claude-requests", dependencies=[Depends(require_admin)])
     def claude_requests_list():
-        return [dict(r, label=action_label(r["action"], r["args"])) for r in db.claude_requests()]
+        out = []
+        for r in db.claude_requests():
+            row = dict(r, label=action_label(r["action"], r["args"]))
+            tid = r["args"].get("tarea")
+            if isinstance(tid, int) and (t := db.get_task(tid)):
+                row["module"] = t["module"]
+            out.append(row)
+        return out
 
     @app.post("/api/claude-requests/{rid}/approve", dependencies=[Depends(require_admin)])
     def claude_request_approve(rid: int):
@@ -2447,8 +2457,8 @@ def create_app(
                 module = d.get("module") if isinstance(d.get("module"), str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", d["module"]) else None
                 raw = d.get("error") or d.get("reason")
                 head, sep, rest = raw.partition(":") if isinstance(raw, str) else ("", "", "")
-                kind = head if sep and len(head) > 1 and not rest.startswith(("/", "\\")) \
-                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", head) else None      # «C:/…» is a drive, not an exception
+                kind = head if sep and not rest.startswith(("/", "\\")) \
+                    and re.fullmatch(r"[A-Z][A-Za-z0-9]*", head) else None      # a class name; «C:/…» is a drive, file names never match
                 g = groups.setdefault((ev["node_id"], ev["event"], module, kind), {"count": 0, "last": ev["ts"]})
                 g["count"] += 1
                 g["last"] = max(g["last"], ev["ts"])

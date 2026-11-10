@@ -232,7 +232,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.44.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.44.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2082,39 +2082,39 @@ def create_app(
                 continue
             off = n["mode"] == Mode.OFFLINE.value or (n["last_seen"] is not None and now - n["last_seen"] > 86400)
             if off and n["last_seen"] is not None and now - n["last_seen"] > 86400:
-                d = int((now - n["last_seen"]) // 86400)
-                issues.append(f"{n['id']} sin señal hace {d} día{'s' if d != 1 else ''}")
+                issues.append(f"{n['id']} sin señal {int((now - n['last_seen']) // 86400)} d")
             if not off:
                 if core_v and n.get("code_version") and n["code_version"] != core_v:
-                    issues.append(f"{n['id']} con código atrasado")
+                    issues.append(f"{n['id']} código viejo")
                 if gpu_unused(n["id"]):
-                    issues.append(f"{n['id']} con el modelo en CPU teniendo tarjeta NVIDIA")
+                    issues.append(f"{n['id']} modelo en CPU")
             if "inventory" in n["modules"] and n.get("disks"):
                 pol = disk_policy(n["id"])
                 unscanned += sum(1 for x in n["disks"] if x.get("present") and not pol.get(x["key"], False))
         fails = sum(1 for e in db.log_rows(600) if e["event"] in ("task_failed", "node_problem", "chat_error") and now - e["ts"] < 86400)
         if fails:
-            issues.append(f"{fails} falla{'s' if fails != 1 else ''} en 24 h")
+            issues.append(f"{fails} falla{'s' if fails != 1 else ''}")
         if unscanned:
             issues.append(f"{unscanned} disco{'s' if unscanned != 1 else ''} sin escanear")
         props = len(db.proposals())
         if props:
-            issues.append(f"{props} recuerdo{'s' if props != 1 else ''} por revisar")
-        info = []
+            issues.append(f"{props} recuerdo{'s' if props != 1 else ''}")
+        # 0.44.1: Sergio, «muy larga»: the push says only what needs him; size and spend appear when they are news
         try:
             kb = os.path.getsize(db_path) // 1024
             prev = db.setting("notify_daily_db_kb", "")
-            grew = "" if not prev else f" ({'+' if kb >= int(prev) else '−'}{abs(kb - int(prev)) / 1e6:.2f} GB desde ayer)"
-            info.append(f"Base {kb / 1e6:.2f} GB{grew}".replace(".", ","))
+            if prev and kb - int(prev) >= 200_000:
+                issues.append(f"base +{(kb - int(prev)) / 1e6:.1f} GB".replace(".", ","))
             if remember:
                 db.set_setting("notify_daily_db_kb", str(kb))
         except (OSError, ValueError):
             pass
         b = brain.budget()
-        info.append(f"Claude US$ {b['spent_usd']:.2f} de {b['budget_usd']:.0f} este mes".replace(".", ","))
+        if b["budget_usd"] and b["spent_usd"] >= 0.5 * b["budget_usd"]:
+            issues.append(f"Claude {b['spent_usd'] / b['budget_usd']:.0%} del mes")
         k = len(issues)
-        title = "Revisión del día: todo en orden" if not k else f"Revisión del día: {k} cosa{'s' if k != 1 else ''} por mirar"
-        body = ("; ".join(issues) + ". " if issues else "") + ". ".join(info) + "."
+        title = "Ashur: todo en orden" if not k else f"Ashur: {k} por mirar"
+        body = " · ".join(issues[:4]) + (f" · +{k - 4}" if k > 4 else "") if issues else "Equipos, tareas y base sin novedad."
         return title, body, k                          # no capital: a device name may lead
 
     def daily_due(sync: bool = False, force: bool = False) -> Optional[str]:

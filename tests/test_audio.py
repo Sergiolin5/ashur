@@ -76,6 +76,7 @@ def test_if_the_notes_cannot_be_made_the_text_is_kept_only_until_retry(tmp_path)
     c, h, app = make(tmp_path)
     def down(system, msgs): raise LocalUnavailable("sin modelo")
     app.state.brain.local = down
+    app.state.brain.notes_retry_wait_s = 0          # tries each chunk 3 times (0.43.4), no pause in tests
     jid = up(c, kind="conversation", consent="true").json()["id"]
     node_takes(c, h, "algo importante")
     for _ in range(50):

@@ -229,7 +229,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.43.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.43.4", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -843,6 +843,8 @@ def create_app(
                             results[node_id] = ("OK", f"respondió «{(r.get('text') or '').strip()[:30]}» con {r.get('model')} en {total:.1f} s"
                                                 + (f" (esperó {queued:.0f} s a que el equipo la tomara)" if queued >= 5 else "")
                                                 + ("" if r.get("gpu_share") is None else f"; modelo {r['gpu_share']:.0%} en GPU"))
+                            if warn := gpu_unused(node_id):
+                                results[node_id] = ("AVISO", results[node_id][1] + ". " + warn)
                             return
                         if t["status"] in ("failed", "cancelled"):
                             results[node_id] = ("FALLA", f"falló: {(t['result'] or {}).get('error') or 'sin detalle'}"[:200])
@@ -921,6 +923,8 @@ def create_app(
                         "o vuelve a correr el instalador (Ajustes → Comandos).")
             elif core_v and not n.code_version:
                 hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
+            if not off and (warn := gpu_unused(n.device_id)):
+                hint = (hint + " " if hint else "") + warn
             ds = disks_of.get(n.device_id)
             pol, now = (disk_policy(n.device_id), clock()) if ds else ({}, 0)    # one settings read per device, not per disk
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
@@ -1021,6 +1025,22 @@ def create_app(
     def gpus_text_of(node_id: str) -> Optional[list[str]]:
         node = db.get_node(node_id) or {}
         return None if node.get("gpus") is None else [gpu_text(g) for g in node["gpus"]]
+
+    def gpu_unused(node_id: str) -> Optional[str]:
+        """An NVIDIA card is plugged in but Ollama ran the model on the CPU: Ollama did not see the card (0.43.4).
+        On the Ryzen 9 it went unseen for four days after an Ollama update was cut off halfway (2026-11-06)."""
+        node = db.get_node(node_id) or {}
+        if "llm" not in node.get("modules", []) or not any(g.get("vendor") == "nvidia" and g.get("present") for g in node.get("gpus") or []):
+            return None
+        try:
+            p = json.loads(db.setting(f"llm_perf:{node_id}", "") or "null")
+        except ValueError:
+            return None
+        if not p or p.get("share") is None or p["share"] > 0.1:
+            return None
+        return ("Tiene una tarjeta NVIDIA pero su modelo corre en CPU: Ollama no la está viendo. Lo más común es una "
+                "actualización de Ollama cortada a mitad; reinstala Ollama desde ollama.com (no borra los modelos) y "
+                "comprueba con «ollama ps» que diga GPU.")
 
     def llm_line(node_id: str) -> Optional[str]:
         """«qwen2.5:7b en GPU (100%), 1.2 s», from the last answer of that device's model; None if never measured."""

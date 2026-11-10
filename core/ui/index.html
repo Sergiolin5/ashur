@@ -909,7 +909,8 @@
     </div>
 
     <div class="page" data-page="diag" hidden>
-      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Diagnóstico</div></div>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title" id="diag-title">Diagnóstico</div></div>
+      <button type="button" id="diag-copy" class="link">Copiar todo para pegárselo a Claude</button>
       <section><h2>Prueba completa</h2>
         <div class="group"><div class="row"><div class="main"><div class="title">Probar todo y sacar un informe</div>
           <div class="detail" id="st-note" style="white-space:normal">Revisa núcleo, equipos, tareas, memoria y le hace una pregunta real a cada modelo local. Tarda hasta un minuto y medio.</div></div></div>
@@ -919,8 +920,7 @@
       <section><h2>Equipos</h2><div class="group" id="diag-nodes"></div><div class="note" id="diag-note"></div></section>
       <section><h2>Fallas (últimas 24 h)</h2><div class="group" id="diag-errors"></div></section>
       <section><h2>Conexiones y mantenimiento (últimas 24 h)</h2><div class="group" id="diag-conn"></div>
-        <button type="button" id="diag-old-btn" class="link" hidden></button><div class="group" id="diag-old" hidden></div>
-        <button type="button" id="diag-copy" class="link">Copiar todo para pegárselo a Claude</button></section>
+        <button type="button" id="diag-old-btn" class="link" hidden></button><div class="group" id="diag-old" hidden></div></section>
     </div>
 
     <div class="page" data-page="cmds" hidden>
@@ -2392,7 +2392,8 @@
         r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
         return r;
       }), "Sin equipos.");
-      $("diag-note").textContent = "Núcleo v" + d.version + ", código de nodos v" + d.core_code_label + ".";
+      $("diag-title").textContent = "Diagnóstico · v" + d.version;
+      $("diag-note").textContent = "Código de nodos v" + d.core_code_label + ".";
       lines.push("Núcleo v" + d.version);
       const probe = el("div"); probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
       document.body.append(probe); const cs = getComputedStyle(probe); const safe = [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].join("/"); probe.remove();

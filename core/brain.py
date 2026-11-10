@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -108,6 +109,8 @@ Escribe cada tema como una línea que empiece con "## " y un título corto, y de
 con "- ". Conserva TODAS las notas: solo junta las que dicen exactamente lo mismo. No inventes temas ni notas que no estén
 en la lista, no interpretes emociones. Máximo 8 temas."""
 NOTES_TOPICS_FROM = 10          # fewer notes than this stay a plain list
+NOTES_TRIES = 3                 # tries per chunk before the notes give up (the transcript stays for «Reintentar»)
+NOTES_RETRY_WAIT_S = 30         # pause between tries: a busy or waking device gets a moment
 NOTES_BATCH_CHARS = 5000        # notes handed to the topic pass at a time, so a long talk's end is never cut off
 
 MAX_TOOL_ROUNDS = 4
@@ -529,7 +532,7 @@ class Brain:
         step, size, where = [], 5000, []
         chunks = [transcript[i:i + size] for i in range(0, len(transcript), size)] or [""]
         for i, ch in enumerate(chunks, 1):
-            text, node = self.local(NOTER.format(who=label or "otra persona"), [{"role": "user", "content": ch}])
+            text, node = self._note_chunk(NOTER.format(who=label or "otra persona"), ch)
             where.append(node)
             step += [ln.strip() for ln in text.splitlines() if ln.strip().startswith(("-", "•", "*")) and not looks_like_secret(ln)
                      and not DIARY_SECRET.search(ln)]
@@ -538,6 +541,18 @@ class Brain:
         devices = ", ".join(f"{d} ({where.count(d)})" for d in dict.fromkeys(x for x in where if x)) or "?"
         # which device (so which model) made them, to judge their quality without guessing (0.43.3)
         return body + f"\n\n({len(step)} notas de {len(chunks)} trozos, hechas en {devices})"
+
+    def _note_chunk(self, system: str, chunk: str) -> tuple[str, str]:
+        """One chunk, tried up to NOTES_TRIES times with a pause between: until 0.43.4 one slow chunk (a model on the
+        CPU, a device busy for a moment) threw away every chunk already done. Fails only if every try fails."""
+        for attempt in range(1, NOTES_TRIES + 1):
+            try:
+                return self.local(system, [{"role": "user", "content": chunk}])
+            except LocalUnavailable:
+                if attempt == NOTES_TRIES:
+                    raise
+                time.sleep(getattr(self, "notes_retry_wait_s", NOTES_RETRY_WAIT_S))
+        raise LocalUnavailable("sin intentos")
 
     def _notes_by_topic(self, notes: list[str]) -> str:
         """Group every note under a topic, batch by batch. Until 0.42.1 a second pass kept at most 12 notes and read only

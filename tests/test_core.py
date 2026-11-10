@@ -1118,6 +1118,25 @@ def test_chat_prefers_the_device_whose_model_ran_on_its_gpu(env):
     assert c.app.state.best_llm_node(nodes) is None
 
 
+def test_an_nvidia_card_left_unused_by_ollama_is_flagged(env):
+    """0.43.4: the Ryzen 9 ran its model on the CPU for four days (Ollama update cut off halfway) and nothing said so."""
+    c, _ = env
+    h = register(c, device_id="ryzen9", modules=("llm",))
+    rtx = {"name": "NVIDIA GeForce RTX 3060", "vendor": "nvidia", "vram_total_mb": 12288, "vram_free_mb": 11000}
+    c.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "gpus": [rtx]})
+    db = c.app.state.db
+
+    def answer(share):
+        db.add_task("llm", {}, "light", 0, target="ryzen9")
+        t = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+        c.post(f"/tasks/{t['id']}/result", headers=h,
+               json={"ok": True, "result": {"text": "listo", "model": "qwen2.5:7b", "seconds": 1.0, "gpu_share": share}})
+        return [x for x in c.get("/api/diagnostics", headers=A).json()["nodes"] if x["device_id"] == "ryzen9"][0]
+
+    assert "NVIDIA" in (answer(0.0)["hint"] or "")
+    assert "NVIDIA" not in (answer(1.0)["hint"] or "")   # back on the GPU: no warning
+
+
 def test_a_late_result_after_the_core_requeued_the_task_is_kept(env):
     """0.42.2: the core marked a node silent (e.g. while the core itself was frozen) and put its task back in the queue;
     the node kept working and reported. The result used to be refused (404) and the finished task came back to the queue."""

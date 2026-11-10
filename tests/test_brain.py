@@ -748,3 +748,32 @@ def test_topic_pass_that_drops_notes_falls_back_to_the_original_notes():
 def test_short_talk_stays_a_plain_list():
     out = _notes_brain(lambda s, m: ("- una\n- dos", "mac-m1")).conversation_notes("hola", "Ana")
     assert out == "- una\n- dos\n\n(2 notas de 1 trozos, hechas en mac-m1 (1))"
+
+
+def test_one_slow_chunk_is_tried_again_instead_of_losing_the_whole_talk():
+    from core.brain import LocalUnavailable
+    fails = {"left": 2}
+
+    def local(system, msgs):
+        if system.startswith("Estás leyendo") and msgs[0]["content"].startswith("y") and fails["left"]:
+            fails["left"] -= 1
+            raise LocalUnavailable("no respondió a tiempo")
+        return "- algo", "ryzen9"
+
+    b = _notes_brain(local)
+    b.notes_retry_wait_s = 0
+    out = b.conversation_notes("x" * 5000 + "y" * 5000, "Ana")
+    assert fails["left"] == 0 and out.startswith("- algo")
+
+
+def test_a_chunk_that_always_fails_still_fails_the_notes():
+    import pytest
+    from core.brain import LocalUnavailable
+
+    def local(system, msgs):
+        raise LocalUnavailable("nadie disponible")
+
+    b = _notes_brain(local)
+    b.notes_retry_wait_s = 0
+    with pytest.raises(LocalUnavailable):
+        b.conversation_notes("hola", "Ana")

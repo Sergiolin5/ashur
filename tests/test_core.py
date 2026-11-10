@@ -496,6 +496,24 @@ def test_diagnostics_folds_the_same_warning_into_one_row_with_a_count(env):
     assert rep["count"] == 20 and rep["first_ts"] == clock.now and rep["ts"] == clock.now + 19
 
 
+def test_diagnostics_folds_failures_by_kind_and_splits_connection_from_failures(env):
+    c, clock = env
+    register(c)
+    db = c.app.state.db
+    for i, tid in enumerate((263, 264, 265)):
+        db.log(clock.now + i, "mac", "task_failed", {"task_id": tid, "module": "inventory", "error": "disco lleno"})
+    db.log(clock.now + 5, "mac", "task_failed", {"task_id": 266, "module": "inventory", "error": "otra cosa"})
+    for i, s in enumerate((45, 47, 49)):
+        db.log(clock.now + 10 + i, "mac", "offline", {"silent_s": s})
+    d = c.get("/api/diagnostics", headers=A).json()
+    fails = [p for p in d["problems"] if p["kind"] == "falla"]
+    conns = [p for p in d["problems"] if p["kind"] == "conexion"]
+    full = next(p for p in fails if p["count"] == 3)
+    assert "disco lleno" in full["text"] and "263" not in full["text"] and full["first_ts"] == clock.now
+    assert len(fails) == 2 and any("266" in p["text"] for p in fails)    # a one-off keeps its task number
+    assert len(conns) == 1 and conns[0]["count"] == 3 and conns[0]["text"] == "se desconectó"
+
+
 def test_diagnostics_lists_problems_and_hints_for_offline_nodes(env):
     c, clock = env
     h = register(c)

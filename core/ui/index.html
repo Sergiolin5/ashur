@@ -917,7 +917,9 @@
         <pre id="st-out" class="note" hidden style="white-space:pre-wrap;font-size:12px;user-select:all"></pre>
       </section>
       <section><h2>Equipos</h2><div class="group" id="diag-nodes"></div><div class="note" id="diag-note"></div></section>
-      <section><h2>Errores recientes</h2><div class="group" id="diag-errors"></div>
+      <section><h2>Fallas (últimas 24 h)</h2><div class="group" id="diag-errors"></div></section>
+      <section><h2>Conexiones y mantenimiento (últimas 24 h)</h2><div class="group" id="diag-conn"></div>
+        <button type="button" id="diag-old-btn" class="link" hidden></button><div class="group" id="diag-old" hidden></div>
         <button type="button" id="diag-copy" class="link">Copiar todo para pegárselo a Claude</button></section>
     </div>
 
@@ -2400,12 +2402,22 @@
       lines.push("Efectos en ESTE dispositivo: reducir movimiento=" + mq("(prefers-reduced-motion: reduce)") + ", reducir transparencia=" + mq("(prefers-reduced-transparency: reduce)") +
                  ", puntero fino=" + mq("(pointer: fine)") + ", hover=" + mq("(hover: hover)") + ", desenfoque=" + (CSS.supports("backdrop-filter", "blur(1px)") || CSS.supports("-webkit-backdrop-filter", "blur(1px)") ? "sí" : "no") +
                  ", animación ligada al scroll=" + (CSS.supports("animation-timeline", "scroll()") ? "sí" : "no") + ", ahorro de batería: no se puede leer desde la web");
-      fill("diag-errors", d.problems.map((p) => {
-        const times = p.count > 1 ? " (" + p.count + " veces desde " + clock(p.first_ts) + ")" : "";
-        lines.push(clock(p.ts) + " " + (p.node_id || "núcleo") + " " + p.text + times);
-        return row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + clock(p.ts) + times });
-      }), "Sin errores recientes.", 8);
-      for (const x of $("diag-errors").querySelectorAll(".title")) x.style.whiteSpace = "normal";
+      // one row per kind of problem; only the last 24 h in view, the rest folded under «N más antiguos»
+      const recent = (p) => d.now - p.ts < 86400, times = (p) => p.count > 1 ? p.count + " veces, la última " : "";
+      const probRow = (p) => row({ title: p.text, detail: (p.node_id || "Núcleo") + " · " + times(p) + clock(p.ts) });
+      const fails = d.problems.filter((p) => recent(p) && p.kind !== "conexion"), conns = d.problems.filter((p) => recent(p) && p.kind === "conexion");
+      const old = d.problems.filter((p) => !recent(p));
+      for (const [title, list] of [["Fallas (últimas 24 h)", fails], ["Conexiones y mantenimiento (últimas 24 h)", conns], ["Más antiguos", old]]) {
+        lines.push(title + ": " + (list.length ? "" : "ninguno"));
+        for (const p of list) lines.push("  " + clock(p.ts) + " " + (p.node_id || "núcleo") + " " + p.text + (p.count > 1 ? " (" + p.count + " veces desde " + clock(p.first_ts) + ")" : ""));
+      }
+      fill("diag-errors", fails.map(probRow), "Sin fallas en las últimas 24 h.", 8);
+      fill("diag-conn", conns.map(probRow), "Sin desconexiones en las últimas 24 h.", 5);
+      const ob = $("diag-old-btn"), og = $("diag-old");
+      ob.hidden = !old.length; ob.textContent = (og.hidden ? "Ver " : "Ocultar ") + old.length + " más antiguos";
+      if (old.length) put(og, old.map(probRow)); else og.hidden = true;
+      ob.onclick = () => { og.hidden = !og.hidden; ob.textContent = (og.hidden ? "Ver " : "Ocultar ") + old.length + " más antiguos"; };
+      for (const id of ["diag-errors", "diag-conn", "diag-old"]) for (const x of $(id).querySelectorAll(".title")) x.style.whiteSpace = "normal";
       if ((d.slow || []).length) { lines.push("Momentos lentos del núcleo (desde que arrancó):"); for (const x of d.slow) lines.push(clock(x.ts) + " " + x.text); }
       else lines.push("Momentos lentos del núcleo: ninguno desde que arrancó");
       for (const x of (d.slow_longest || [])) lines.push(clock(x.ts) + " " + x.text);

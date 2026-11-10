@@ -229,7 +229,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.43.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.43.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -718,6 +718,7 @@ def create_app(
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
                    "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem",
                    "inventory_reset", "inventory_sweep", "inventory_sweep_failed"}
+    CONN_EVENTS = {"offline", "restart_requeued", "inventory_reset", "inventory_sweep"}   # not failures: comings, goings, upkeep
 
     # --- full self-test: runs the checks and a real question to every local model, returns one plain-text report ---
     selftest = {"running": False, "report": None, "started": 0.0, "checks": []}
@@ -925,20 +926,30 @@ def create_app(
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
                           "code_label": n.code_label, "reason": n.reason, "battery_pct": n.battery_pct, "on_power": n.on_power, "behind": behind, "disks": None if ds is None else [dict(x, kind=disk_kind(x, now), scanned=bool(pol.get(x["key"], False))) for x in ds], "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
                           "gpus": gpus_text_of(n.device_id), "llm": llm_line(n.device_id)})
-        problems, same = [], {}                  # the same warning from the same device is one row with a count
+        # One row per kind of problem: same device, same event, same error, whatever the task number or how long the
+        # silence lasted («FALLÓ tarea 263: X» and «… 264: X» are one row). «kind» splits connection from failures.
+        problems, same = [], {}
         for ev in db.log_rows(600):
-            if ev["event"] in DIAG_EVENTS:
-                p = {"ts": ev["ts"], "node_id": ev["node_id"], "event": ev["event"],
-                     "text": describe(ev["event"], ev["detail"]), "count": 1, "first_ts": ev["ts"]}
-                k = (p["node_id"], p["event"], p["text"])
-                if k in same:
-                    same[k]["count"] += 1
-                    same[k]["first_ts"] = p["ts"]          # rows come newest first
-                    continue
-                if len(problems) >= 40:
-                    continue
-                same[k] = p
-                problems.append(p)
+            if ev["event"] not in DIAG_EVENTS:
+                continue
+            text = describe(ev["event"], ev["detail"])
+            if ev["event"] == "offline":
+                cause = (ev["detail"] or {}).get("cause")
+                group = "se desconectó" + (f" (probablemente {cause})" if cause else "")
+            else:
+                group = re.sub(r"\btarea \d+", "tarea", text)
+            k = (ev["node_id"], ev["event"], group)
+            if k in same:
+                g = same[k]
+                g["count"] += 1
+                g["first_ts"] = ev["ts"]                   # rows come newest first
+                g["text"] = group
+                continue
+            if len(problems) >= 40:
+                continue
+            same[k] = {"ts": ev["ts"], "first_ts": ev["ts"], "count": 1, "node_id": ev["node_id"], "event": ev["event"],
+                       "kind": "conexion" if ev["event"] in CONN_EVENTS else "falla", "text": text}
+            problems.append(same[k])
         slow = [{"ts": x["at"], "text": f"el candado de la base estuvo tomado {x['held_s']} s por «{x['who']}»"
                  + (f" (otra petición esperó {x['waited_s']} s)" if x["waited_s"] >= 0.5 else "")} for x in db.slow[-10:]]
         slow += [{"ts": x["at"], "text": f"{x['path']} tardó {x['s']} s en responder"} for x in slow_requests[-10:]]

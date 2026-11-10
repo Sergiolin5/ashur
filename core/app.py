@@ -233,7 +233,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.44.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.45.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2381,7 +2381,7 @@ def create_app(
 
     @app.get("/api/claude-requests", dependencies=[Depends(require_admin)])
     def claude_requests_list():
-        return db.claude_requests()
+        return [dict(r, label=action_label(r["action"], r["args"])) for r in db.claude_requests()]
 
     @app.post("/api/claude-requests/{rid}/approve", dependencies=[Depends(require_admin)])
     def claude_request_approve(rid: int):

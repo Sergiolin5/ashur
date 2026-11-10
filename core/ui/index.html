@@ -749,6 +749,7 @@
       <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="notes"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span><span class="mi-text"><b>Pendientes</b><small id="notes-sub">Problemas e ideas que anotaste</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="claude-requests"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8"/></svg></span><span class="mi-text"><b>Pedidos de Claude</b><small id="cr-sub">Lo que Claude te pide hacer</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="diag"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span><span class="mi-text"><b>Diagnóstico</b><small>Errores y por qué un equipo no está al día</small></span><span class="mi-go" aria-hidden="true">›</span></button>
     </nav>
 
@@ -908,6 +909,13 @@
       <section><h2>Resueltos</h2><div class="group" id="notes-done"></div></section>
     </div>
 
+    <div class="page" data-page="claude-requests" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Pedidos de Claude</div></div>
+      <section><h2>Por decidir</h2><div class="group" id="cr-pending"></div>
+        <div class="note" id="cr-note">Claude no hace nada por su cuenta: lo que quiere hacer llega aquí y solo pasa si lo apruebas. Al aprobar, Ashur revisa otra vez si todavía aplica.</div></section>
+      <section><h2>Historial</h2><div class="group" id="cr-done"></div></section>
+    </div>
+
     <div class="page" data-page="diag" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title" id="diag-title">Diagnóstico</div></div>
       <button type="button" id="diag-copy" class="link">Copiar todo para pegárselo a Claude</button>
@@ -951,6 +959,16 @@
           <button type="submit">Crear invitado</button>
         </form>
         <div id="guest-result" class="note" style="margin:10px 0 0;white-space:pre-line;user-select:all" hidden></div>
+      </div>
+    </section>
+    <section>
+      <h2>Conector de Claude</h2>
+      <div class="group" id="mcp-state"></div>
+      <div class="group signin" style="margin-top:12px">
+        <p>Con esta clave, Claude puede ver el estado de Ashur, los diagnósticos, buscar archivos por nombre y preguntarle al modelo local. No lee tu diario, tus documentos, tus recuerdos locales ni tus pendientes. Lo que quiera hacer te llega como pedido en Ajustes → Pedidos de Claude.</p>
+        <div id="mcp-actions"></div>
+        <div id="mcp-result" class="note" style="margin:10px 0 0;white-space:pre-line;user-select:all" hidden></div>
+        <button type="button" id="mcp-copy" class="forget" style="margin-top:8px" hidden>Copiar clave</button>
       </div>
     </section>
 
@@ -1618,7 +1636,8 @@
   }
   // a notification (or a link) says where it should land: a tab, or a page inside Ajustes
   const WHERE = { "#diario": ["diary"], "#estado": ["status"], "#memoria": ["settings", "memory"], "#diagnostico": ["settings", "diag"],
-                  "#actualizacion": ["settings", "update"], "#pendientes": ["settings", "notes"] };
+                  "#actualizacion": ["settings", "update"], "#pendientes": ["settings", "notes"],
+                  "#pedidos": ["settings", "claude-requests"] };
   function openWhere(h) { const w = WHERE[h]; if (!w) return; showTab(w[0]); if (w[1]) showPage(w[1]); }
   let startHash = location.hash;
   // --- tabs ---------------------------------------------------------------
@@ -1654,7 +1673,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
+    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -2054,6 +2073,85 @@
       loadGuests();
     } catch (err) { out.textContent = "No pude crear el invitado."; out.hidden = false; }
   });
+
+  // --- the Claude connector: its key (made and revoked only from the tailnet) and the requests Claude files ---
+  let mcpKey = "";
+  const whenText = (ts) => dayLabel(ts) + ", " + clock(ts);
+  async function detailOf(r, fallback) { try { return (await r.json()).detail || fallback; } catch (e) { return fallback; } }
+  async function loadMcpKey() {
+    try {
+      const k = await (await api("api/mcp/key")).json();
+      const st = row({ title: k.active ? "Activa desde " + whenText(k.created) : "Sin clave", detail: k.active ? "Claude puede usar el conector" : "Claude no puede entrar" });
+      if (k.active) {
+        const rv = el("button", "forget", "Revocar"); rv.type = "button";
+        twice(rv, "Toca otra vez", async () => { mcpChange(await api("api/mcp/key", { method: "DELETE" }), "No pude revocar la clave."); });
+        st.append(rv);
+      }
+      put($("mcp-state"), [st]);
+      const b = el("button", null, k.active ? "Crear otra clave" : "Crear clave"); b.type = "button";
+      const make = async () => mcpChange(await api("api/mcp/key", { method: "POST" }), "No pude crear la clave.");
+      if (k.active) twice(b, "Toca otra vez: la anterior deja de funcionar", make); else b.addEventListener("click", make);
+      $("mcp-actions").replaceChildren(b);
+    } catch (e) {}
+  }
+  async function mcpChange(r, fallback) {
+    const out = $("mcp-result");
+    mcpKey = "";
+    if (r.ok) {
+      const j = await r.json();
+      if (j.key) {
+        mcpKey = j.key;
+        out.textContent = "Clave del conector (cópiala ahora, no se vuelve a mostrar):\n" + j.key +
+          "\n\nDirección: " + new URL("mcp", location.href).href + "\nCabecera: Authorization: Bearer " + j.key;
+      } else out.textContent = "Clave revocada. Claude ya no puede usar el conector.";
+    } else out.textContent = await detailOf(r, fallback);
+    out.hidden = false; $("mcp-copy").hidden = !mcpKey;
+    loadMcpKey();
+  }
+  $("mcp-copy").addEventListener("click", async () => {
+    const b = $("mcp-copy");
+    try { await navigator.clipboard.writeText(mcpKey); b.textContent = "Copiada"; } catch (e) { b.textContent = "No pude copiar"; showCopy(mcpKey); }
+    setTimeout(() => { b.textContent = "Copiar clave"; }, 2500);
+  });
+  const CR_STATUS = { running: "En curso", approved: "Aprobado", rejected: "Rechazado", not_done: "No se hizo" };
+  async function loadClaudeRequests() {
+    try {
+      const list = await (await api("api/claude-requests")).json();
+      const pending = list.filter((q) => q.status === "pending"), done = list.filter((q) => q.status !== "pending");
+      $("cr-sub").textContent = pending.length ? pending.length + (pending.length === 1 ? " pedido por decidir" : " pedidos por decidir") : "Lo que Claude te pide hacer";
+      const draw = (q) => {
+        const r = el("div", "row nrow"), m = el("div", "main");
+        const label = q.label.charAt(0).toUpperCase() + q.label.slice(1);
+        if (q.status === "pending") {
+          m.append(el("div", "title", label), el("div", "detail", (q.reason ? q.reason + " · " : "") + whenText(q.ts)));
+          const a = el("div", "acts");
+          const ok = el("button", null, "Aprobar"), no = el("button", null, "Rechazar");
+          ok.type = no.type = "button";
+          ok.onclick = () => decideRequest(q.id, "approve", [ok, no]);
+          no.onclick = () => decideRequest(q.id, "reject", [ok, no]);
+          a.append(ok, no); m.append(a);
+        } else {
+          m.append(el("div", "title", label), el("div", "detail", (CR_STATUS[q.status] || q.status) + (q.result ? ": " + q.result : "") +
+            " · " + whenText(q.decided_at || q.ts)));
+        }
+        r.append(m); return r;
+      };
+      put($("cr-pending"), pending.length ? pending.map(draw) : [row({ title: "Nada por decidir." })]);
+      put($("cr-done"), done.length ? done.map(draw) : [row({ title: "Claude aún no ha pedido nada." })]);
+    } catch (e) {}
+  }
+  async function decideRequest(id, what, buttons) {
+    for (const b of buttons) b.disabled = true;
+    const note = $("cr-note");
+    try {
+      const r = await api("api/claude-requests/" + id + "/" + what, { method: "POST" });
+      if (!r.ok) note.textContent = await detailOf(r, "No pude decidir el pedido.");
+      else if (what === "reject") note.textContent = "Pedido #" + id + " rechazado.";
+      else { const j = await r.json(); note.textContent = "Pedido #" + id + ": " + (CR_STATUS[j.status] || j.status).toLowerCase() + (j.result ? ". " + j.result : ""); }
+    } catch (e) { note.textContent = "No pude decidir el pedido."; }
+    loadClaudeRequests();
+  }
+  document.querySelector('.menu-item[data-page="claude-requests"]').addEventListener("click", loadClaudeRequests);
 
   // --- space: duplicates and largest files (computed by the core, at most every 6 h) ---
   async function loadDocs(q) {

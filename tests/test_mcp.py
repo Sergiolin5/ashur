@@ -580,3 +580,38 @@ def test_push_respects_notify_claude_switch(tmp_path):
 def test_request_events_described():
     assert "pausar la cola" in describe("claude_request", {"id": 1, "action": "pausar_cola", "label": "pausar la cola"})
     assert "#1" in describe("claude_request_decided", {"id": 1, "status": "approved"})
+
+
+# --- privacy sweep (Task 6) ---------------------------------------------------------------
+
+def test_connector_never_returns_private_material(tmp_path, fast_local):
+    c, clock = tools_app(tmp_path)
+    now = clock()
+    c.db.diary_add(now, "2026-11-10", "CANARIO-DIARIO")
+    c.db.docs_apply("mac-m1", [{"path": "/x/canario.txt", "modified": 1, "chunks": ["CANARIO-DOC"]}], [])
+    c.db.add_memory(now, "CANARIO-LOCAL", "ashur", "local")
+    c.db.add_summary(now, {"id": 1, "ts": now}, {"id": 1, "ts": now}, "CANARIO-RESUMEN", "claude")
+    c.db.inventory_add("mac-m1", [{"path": "/Users/s/Privado/CANARIO-SENSIBLE.pdf", "size": None, "kind": "sensitive"}])
+    c.db.note_add(now, "CANARIO-OPINION", "", [], author="Invitado")
+    c.db.note_add(now, "CANARIO-PENDIENTE", "", [])
+    c.app.state.brain.save_voice("mac-m1", "CANARIO-VOZ")
+    th, _ = llm_node(c, reply="Respuesta local.")
+    calls = [("ashur_estado", {}), ("ashur_diagnostico", {}),
+             ("ashur_buscar_archivo", {"consulta": "CANARIO"}), ("ashur_buscar_archivo", {"consulta": "canario"}),
+             ("ashur_preguntar_local", {"pregunta": "¿qué dice mi diario?"}),
+             ("ashur_pedir", {"accion": "pausar_cola", "motivo": "prueba"}), ("ashur_ver_pedido", {"id": 1})]
+    assert {n for n, _ in calls} == {t["name"] for t in rpc(c, "tools/list", headers={
+        "Authorization": "Bearer " + c.key}).json()["result"]["tools"]}
+    outputs = [tool_text(c, n, a)[0] for n, a in calls]
+    th.join(5)
+    assert outputs[4].startswith("Respuesta local.")                     # the local model really answered
+    joined = "\n".join(outputs).upper()
+    for canary in ("CANARIO-DIARIO", "CANARIO-DOC", "CANARIO-LOCAL", "CANARIO-RESUMEN", "CANARIO-SENSIBLE",
+                   "CANARIO-OPINION", "CANARIO-PENDIENTE", "CANARIO-VOZ"):
+        assert canary not in joined
+
+
+def test_request_list_carries_the_panel_label(tmp_path):
+    c, clock = pedir_app(tmp_path)
+    c.db.claude_request_add(clock(), "cancelar_tarea", {"tarea": 7}, "r")
+    assert c.get("/api/claude-requests", headers=A).json()[0]["label"] == "cancelar la tarea #7"

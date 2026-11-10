@@ -718,6 +718,21 @@ def test_long_talk_notes_keep_the_end_and_group_by_topic():
     assert out.startswith("## Planes")
     assert "trozo 1\n" in out and "trozo 40" in out          # the end is no longer dropped
     assert out.count("\n- ") + out.startswith("- ") >= 80
+    assert out.endswith("(80 notas de 40 trozos, hechas en ryzen9 (40))")
+
+
+def test_notes_past_120_lines_are_all_kept():
+    calls = []
+
+    def local(system, msgs):
+        calls.append(1)
+        if system.startswith("Estás leyendo"):
+            n = len(calls)
+            return "\n".join(f"- nota {n}.{k}" for k in range(6)), "ryzen9"
+        return "## Tema " + str(len(calls)) + "\n" + msgs[0]["content"], "ryzen9"
+
+    out = _notes_brain(local).conversation_notes("x" * 5000 * 40, "Ana")       # 240 notes
+    assert "nota 1.0" in out and "nota 40.5" in out                             # the end survives
 
 
 def test_topic_pass_that_drops_notes_falls_back_to_the_original_notes():
@@ -732,4 +747,4 @@ def test_topic_pass_that_drops_notes_falls_back_to_the_original_notes():
 
 def test_short_talk_stays_a_plain_list():
     out = _notes_brain(lambda s, m: ("- una\n- dos", "mac-m1")).conversation_notes("hola", "Ana")
-    assert out == "- una\n- dos"
+    assert out == "- una\n- dos\n\n(2 notas de 1 trozos, hechas en mac-m1 (1))"

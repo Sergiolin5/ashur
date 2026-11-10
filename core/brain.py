@@ -109,7 +109,6 @@ con "- ". Conserva TODAS las notas: solo junta las que dicen exactamente lo mism
 en la lista, no interpretes emociones. Máximo 8 temas."""
 NOTES_TOPICS_FROM = 10          # fewer notes than this stay a plain list
 NOTES_BATCH_CHARS = 5000        # notes handed to the topic pass at a time, so a long talk's end is never cut off
-NOTES_MAX_LINES = 120
 
 MAX_TOOL_ROUNDS = 4
 MAX_MEMORY_CHARS = 6000
@@ -527,16 +526,18 @@ class Brain:
         """Notes (not a transcript) of a long conversation, with a LOCAL model only, chunk by chunk."""
         if self.local is None or self.s.brain == "claude":
             raise LocalUnavailable("No hay modelo local para sacar las notas.")
-        step, size = [], 5000
+        step, size, where = [], 5000, []
         chunks = [transcript[i:i + size] for i in range(0, len(transcript), size)] or [""]
         for i, ch in enumerate(chunks, 1):
-            text, _d = self.local(NOTER.format(who=label or "otra persona"), [{"role": "user", "content": ch}])
+            text, node = self.local(NOTER.format(who=label or "otra persona"), [{"role": "user", "content": ch}])
+            where.append(node)
             step += [ln.strip() for ln in text.splitlines() if ln.strip().startswith(("-", "•", "*")) and not looks_like_secret(ln)
                      and not DIARY_SECRET.search(ln)]
         step = list(dict.fromkeys("- " + ln.lstrip("-•* ").strip() for ln in step))
-        if len(step) < NOTES_TOPICS_FROM:
-            return "\n".join(step)
-        return self._notes_by_topic(step)
+        body = "\n".join(step) if len(step) < NOTES_TOPICS_FROM else self._notes_by_topic(step)
+        devices = ", ".join(f"{d} ({where.count(d)})" for d in dict.fromkeys(x for x in where if x)) or "?"
+        # which device (so which model) made them, to judge their quality without guessing (0.43.3)
+        return body + f"\n\n({len(step)} notas de {len(chunks)} trozos, hechas en {devices})"
 
     def _notes_by_topic(self, notes: list[str]) -> str:
         """Group every note under a topic, batch by batch. Until 0.42.1 a second pass kept at most 12 notes and read only
@@ -568,13 +569,7 @@ class Brain:
                 key = next((k for k in topics if k.casefold() == h.casefold()), h)
                 topics.setdefault(key, [])
                 topics[key] += [x for x in lines if x not in topics[key]]
-        out, count = [], 0
-        for h, lines in topics.items():
-            if count >= NOTES_MAX_LINES:
-                break
-            take = lines[:NOTES_MAX_LINES - count]
-            count += len(take)
-            out.append("## " + h + "\n" + "\n".join(take))
+        out = ["## " + h + "\n" + "\n".join(lines) for h, lines in topics.items()]   # all of them: until 0.43.2 a 120-line cap cut the end
         return "\n\n".join(out)
 
     def propose_memories(self) -> int:

@@ -4,6 +4,7 @@ Nodes always call in; the core never calls a node.
 Run locally:  ASHUR_ENROLL_KEY=... ASHUR_ADMIN_KEY=... uvicorn --factory core.app:from_env
 """
 import asyncio
+import collections
 import contextlib
 import datetime as dt
 import hmac
@@ -163,6 +164,7 @@ def create_app(
 
     sweep_lock = threading.Lock()
     started_at = clock()
+    load_hist: dict[str, Any] = {}  # per node, (ts, max of CPU and GPU %) for the last ~hour of beats (memory only)
     power: dict[str, dict] = {}     # per node, from its beats: battery_pct, on_power, woke_at (memory only; a restart forgets it)
 
     def offline_cause(node_id: str, last_seen: float) -> Optional[str]:
@@ -468,6 +470,11 @@ def create_app(
         reason = (hb.reason or "")[:120] or None
         db.set_node_mode(node["id"], hb.mode.value, last_seen=now, reason=reason)
         db.set_node_metrics(node["id"], hb.cpu_pct, hb.ram_pct, hb.gpu_pct)
+        if hb.cpu_pct is not None or hb.gpu_pct is not None:     # memory only, for «una hora a tope» (0.44.0)
+            h = load_hist.setdefault(node["id"], collections.deque())
+            h.append((now, max(hb.cpu_pct or 0.0, hb.gpu_pct or 0.0)))
+            while h and h[0][0] < now - 3900:
+                h.popleft()
         p = power.setdefault(node["id"], {})
         p.update(battery_pct=hb.battery_pct, on_power=bool(hb.on_power))      # None: no battery, or an agent too old to say
         if hb.slept_s:
@@ -1869,7 +1876,8 @@ def create_app(
     NOTIFY_CATS = {"tasks": "Tareas largas terminadas o fallidas (y las notas de una conversación grabada)", "devices": "Un equipo lleva rato desconectado (y cuando vuelve)",
                    "update": "Hay una versión nueva de Ashur", "budget": "El gasto con Claude llega al 80% del mes",
                    "proposals": "Ashur tiene recuerdos nuevos por revisar",
-                   "daily": "Revisión del día: cómo está todo, una vez al día"}
+                   "daily": "Revisión del día: cómo está todo, una vez al día",
+                   "hour": "Una tarea lleva una hora con su equipo a tope"}
     NOTIFY_WATCHED = ("inventory", "docs")                       # background jobs worth a tap on the shoulder
 
     def notify_settings() -> dict:
@@ -1912,6 +1920,34 @@ def create_app(
         a, b = q["from"], q["to"]
         return (a <= h < b) if a < b else (h >= a or h < b)
 
+    HOUR_NAMES = {"inventory": "El inventario", "docs": "La lectura de documentos", "voice": "La transcripción"}
+
+    def hour_at_full(now: float) -> list[tuple]:
+        """The project's «una hora a tope» rule, first step (0.44.0, Sergio's choices of 2026-11-10): a task running 60 min
+        or more while its device, in full mode, averaged 85 % or more of CPU or GPU over that hour. Told once per task.
+        Only a heads-up: what lasts an hour today (inventory, documents, transcription) can only run on his own
+        devices, so there is nothing to hand to Claude yet; conversation notes never go to Claude (his decision)."""
+        told = [x for x in db.setting("notify_hour_told", "").split(",") if x]
+        modes = {n["id"]: n["mode"] for n in db.nodes()}
+        out = []
+        for t in db.running_tasks():
+            if not t["started"] or now - t["started"] < 3600 or str(t["id"]) in told or modes.get(t["node_id"]) != Mode.FULL.value:
+                continue
+            h = [v for ts_, v in load_hist.get(t["node_id"], ()) if ts_ >= now - 3600]
+            first = next((ts_ for ts_, _ in load_hist.get(t["node_id"], ()) if ts_ >= now - 3600), None)
+            if len(h) < 10 or first is None or first > now - 3300:      # less than ~an hour seen (a restart): no verdict
+                continue
+            avg = sum(h) / len(h)
+            if avg < 85:
+                continue
+            told.append(str(t["id"]))
+            out.append((f"{t['node_id']} lleva una hora a tope",
+                        f"{HOUR_NAMES.get(t['module'], t['module'])} lleva {(now - t['started']) / 3600:.1f} h en {t['node_id']} con el equipo al {avg:.0f} %.".replace(".", ",", 1),
+                        "/#estado"))
+        if out:
+            db.set_setting("notify_hour_told", ",".join(told[-50:]))
+        return out
+
     def notify_due(sync: bool = False) -> list[str]:
         """Turn what happened in the log into taps on the shoulder. While he sleeps nothing is sent
         and nothing is skipped: the news waits and arrives as one message when quiet hours end."""
@@ -1942,6 +1978,8 @@ def create_app(
                 items.append((f"Terminó: {d['module']}", f"Terminó {d['module']} en {node}.", "/#estado"))
         if events:
             db.set_setting("notify_cursor", str(events[-1]["rid"]))
+        if cfg["cats"]["hour"]:
+            items += hour_at_full(now)
         if cfg["cats"]["devices"]:
             told = set(filter(None, db.setting("notify_offline", "").split(",")))
             for n in db.nodes():

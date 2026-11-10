@@ -173,3 +173,41 @@ def test_send_now_does_not_use_up_the_day_and_is_off_with_the_switch(tmp_path):
     c.put("/api/notify", headers=A, json={"cats": {"daily": False}})
     clock.now = ts(19, day=(2026, 11, 4)); assert app.state.daily_due(sync=True) is None
     assert c.put("/api/notify", headers=A, json={"daily_hour": 24}).status_code == 422
+
+
+def run_an_hour(c, clock, app, h, load, minutes=61):
+    c.post("/tasks", headers=A, json={"module": "docs", "weight": "heavy", "target": "ryzen9"})
+    c.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "cpu_pct": load})
+    assert c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+    app.state.notify_due(sync=True)
+    for _ in range(minutes * 2):                                                  # beats closer than 45 s, or it is «offline»
+        clock.now += 30
+        c.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "cpu_pct": load, "gpu_pct": 10})
+
+
+def test_a_task_an_hour_at_full_load_is_told_once(tmp_path):
+    """0.44.0, the project's «una hora a tope» rule, first step: a heads-up only (Sergio, 2026-11-10: 85 % and 60 min)."""
+    c, clock, sent, app = make(tmp_path)
+    h = join(c, "ryzen9", clock)
+    run_an_hour(c, clock, app, h, 95)
+    lines = app.state.notify_due(sync=True)
+    assert any("lleva 1,0 h en ryzen9 con el equipo al 95 %" in x for x in lines), lines
+    assert sent[-1]["title"] == "ryzen9 lleva una hora a tope"
+    clock.now += 30
+    c.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "cpu_pct": 95})
+    assert app.state.notify_due(sync=True) == []                                  # once per task
+
+
+def test_a_long_task_on_a_calm_device_or_after_a_restart_is_not_news(tmp_path):
+    c, clock, sent, app = make(tmp_path)
+    h = join(c, "ryzen9", clock)
+    run_an_hour(c, clock, app, h, 60)
+    assert app.state.notify_due(sync=True) == []
+    c, clock, sent, app = make(tmp_path / "b" if (tmp_path / "b").mkdir() is None else tmp_path)
+    h = join(c, "ryzen9", clock)
+    run_an_hour(c, clock, app, h, 95, minutes=50)
+    c2, clock2, sent2, app2 = make(tmp_path / "b", at=clock.now)                 # the core restarts: its memory of the load is gone
+    for _ in range(30):
+        clock2.now += 30
+        c2.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "cpu_pct": 95})
+    assert app2.state.notify_due(sync=True) == []

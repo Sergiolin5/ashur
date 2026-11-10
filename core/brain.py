@@ -420,14 +420,19 @@ class Brain:
     ubica localiza mis mi el la los las del de que qué para con""".split())
     PACKAGE_EXT = (".zip", ".rar", ".7z", ".tar", ".gz", ".tgz")
 
+    @classmethod
+    def file_words(cls, low: str) -> list[str]:
+        """The words of a lower-cased message worth looking for in file names, without repeats."""
+        return [w for w in dict.fromkeys(re.findall(r"[a-záéíóúñü0-9._-]{3,}", low))
+                if w not in cls.FILE_GENERIC and w not in STOPWORDS_ES]
+
     def files_context(self, text: str) -> str:
         """Where a file is, by NAME, from the inventory, for the local model. Only paths and devices: never contents,
         and sensitive entries (no size, never hashed) are not searched at all."""
         low = text.lower()
         if not self.FILE_FIND_CUES.search(low):
             return ""
-        words = [w for w in dict.fromkeys(re.findall(r"[a-záéíóúñü0-9._-]{3,}", low))
-                 if w not in self.FILE_GENERIC and w not in STOPWORDS_ES]
+        words = self.file_words(low)
         if not words:
             return ""
         wants_package = bool(re.search(r"paquete|comprimido|\bzip\b|export", low))

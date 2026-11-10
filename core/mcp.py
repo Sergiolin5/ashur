@@ -5,6 +5,7 @@ forgets them. What each tool may return is the tool's business; this module only
 import asyncio
 import datetime as dt
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -42,6 +43,21 @@ class McpDeps:
     clock: Callable[[], float]
     log: Callable[[str, dict], None]
     tools: list[Tool] = field(default_factory=list)
+
+
+_WIN_PATH = re.compile(r"[A-Za-z]:\\[^\s\"'<>|]+")
+_POSIX_PATH = re.compile(r"(?<![\w:/.])(?:/[^\s/\"'<>|]+){2,}")
+
+
+def trim_paths(text: str) -> str:
+    """Each file path becomes «…/<folder holding the last segment>»: enough to say where, never which file."""
+    def short(m: re.Match) -> str:
+        raw = m.group(0)
+        path = raw.rstrip(".,;:)")
+        tail = raw[len(path):]
+        parts = [p for p in re.split(r"[\\/]", path) if p]
+        return "…/" + parts[-2] + tail if len(parts) >= 2 else m.group(0)
+    return _POSIX_PATH.sub(short, _WIN_PATH.sub(short, text))
 
 
 def hhmm(ts: float) -> str:

@@ -265,3 +265,82 @@ def test_mcp_events_described():
     assert describe("mcp_call", {"tool": "ashur_estado"}) == "Claude usó ashur_estado"
     assert "conector" in describe("mcp_locked", {"minutes": 15}).lower()
     assert describe("mcp_key", {"action": "created"}) != describe("mcp_key", {"action": "revoked"})
+
+
+# --- read tools (Task 3) ------------------------------------------------------------------
+
+def tool_text(c, name, args=None):
+    r = call(c, name, args, headers={"Authorization": "Bearer " + c.key}).json()["result"]
+    return r["content"][0]["text"], r.get("isError", False)
+
+
+def tools_app(tmp_path):
+    c, clock = pub_app(tmp_path)
+    c.key = new_key(c)
+    c.db = c.app.state.db
+    return c, clock
+
+
+def enroll(c, device_id, **beat):
+    r = c.tailnet.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+                       json={"device_id": device_id, "os": "macos", "modules": ["inventory"]})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    c.tailnet.post(f"/nodes/{device_id}/heartbeat", headers=h, json={"mode": "full", **beat})
+
+
+def test_estado_lists_devices_queue_and_version(tmp_path):
+    c, _ = tools_app(tmp_path)
+    enroll(c, "mac-m1", cpu_pct=41.4, ram_pct=62, battery_pct=80, on_power=True)
+    c.db.add_task("inventory", {"secret_payload": "/Users/s/Diary/x.txt"}, "light", 0.0)
+    text, err = tool_text(c, "ashur_estado")
+    assert not err
+    assert "mac-m1: en línea, CPU 41%, RAM 62%, batería 80% (con cargador)" in text
+    assert "Cola: activa" in text and "En espera: #1 inventory" in text
+    assert text.splitlines()[-1] == f"Ashur v{c.app.version}"
+    assert "secret_payload" not in text and "/Users" not in text
+    c.db.set_setting("queue_paused", "1")
+    assert "Cola: pausada" in tool_text(c, "ashur_estado")[0]
+
+
+def test_trim_paths_examples():
+    from core.mcp import trim_paths
+    assert trim_paths("ver /Users/s/Docs/a.pdf ahora") == "ver …/Docs ahora"
+    assert trim_paths(r"falló C:\Users\s\x.txt.") == "falló …/s."
+    assert trim_paths("https://x.com/a/b y 12/05/2026") == "https://x.com/a/b y 12/05/2026"
+
+
+def test_diagnostico_trims_paths(tmp_path):
+    c, clock = tools_app(tmp_path)
+    for i in (1, 2):
+        c.db.log(clock(), "mac-m1", "task_failed", {"task_id": i, "module": "docs", "error": "no abre /Users/s/Secret/plan.docx"})
+    text, err = tool_text(c, "ashur_diagnostico")
+    assert not err
+    assert "…/Secret" in text and "plan.docx" not in text and "/Users" not in text
+    assert "mac-m1 · " in text and "2 veces" in text
+
+
+def test_buscar_archivo_skips_sensitive(tmp_path):
+    c, _ = tools_app(tmp_path)
+    c.db.inventory_add("mac-m1", [
+        {"path": "/Users/s/Docs/pasaporte-copia.pdf", "size": 3 << 20, "kind": "file"},
+        {"path": "/Users/s/Privado/pasaporte-real.pdf", "size": None, "kind": "sensitive"}])
+    text, err = tool_text(c, "ashur_buscar_archivo", {"consulta": "dónde está mi pasaporte"})
+    assert not err
+    assert text == "mac-m1: /Users/s/Docs/pasaporte-copia.pdf (3 MB)"
+    assert tool_text(c, "ashur_buscar_archivo", {"consulta": "zzzzz"})[0] == "No encontré archivos con ese nombre en el inventario."
+    assert tool_text(c, "ashur_buscar_archivo", {"consulta": "a"})[1] is True
+    assert tool_text(c, "ashur_buscar_archivo", {})[1] is True
+
+
+def test_ver_pedido_states(tmp_path):
+    c, clock = tools_app(tmp_path)
+    ids = {s: c.db.claude_request_add(clock(), "pausar_cola", {"n": i}, "r") for i, s in enumerate(
+        ["pending", "running", "approved", "rejected", "not_done"])}
+    for s, result in (("running", ""), ("approved", "hecho"), ("rejected", ""), ("not_done", "ya no aplica")):
+        c.db.claude_request_decide(ids[s], s, clock(), result)
+    want = {"pending": "pendiente", "running": "en curso", "approved": "aprobado: hecho", "rejected": "rechazado",
+            "not_done": "no se hizo: ya no aplica"}
+    for s, word in want.items():
+        assert tool_text(c, "ashur_ver_pedido", {"id": ids[s]})[0] == f"Pedido #{ids[s]} (pausar_cola): {word}"
+    assert tool_text(c, "ashur_ver_pedido", {"id": 99}) == ("No existe el pedido #99.", True)
+    assert tool_text(c, "ashur_ver_pedido", {"id": "1"})[1] is True

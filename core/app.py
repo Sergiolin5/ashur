@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from core.brain import (SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
                         looks_like_secret, month_start)
 from core.db import DB, hash_token
-from core.mcp import McpDeps, Tool, mount_mcp
+from core.mcp import McpDeps, Tool, ToolError, hhmm, mount_mcp, trim_paths
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
 from shared.protocol import (
@@ -2348,9 +2348,89 @@ def create_app(
     def mcp_key_ok(key: str) -> bool:
         return bool(mcp_key_hash[0]) and _same(hash_token(key), mcp_key_hash[0])
 
-    mcp_tools: list[Tool] = []          # every connector tool is added here
+    def mcp_tools() -> list[Tool]:
+        """The connector's tools. Every one builds its text from an allowlist of fields (see the constraints of 0.45.0)."""
+        NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
+
+        def state_of(n) -> str:
+            if n.mode != Mode.OFFLINE:
+                return "en línea"
+            reason = n.reason or ""
+            return "dormido" if reason == "dormido" else "sin batería" if reason.startswith("sin batería") else "sin señal"
+
+        def estado(_args: dict) -> str:
+            ov = overview()
+            lines = []
+            for n in ov["status"]["nodes"]:
+                bits = [state_of(n)]
+                if n.cpu_pct is not None:
+                    bits.append(f"CPU {n.cpu_pct:.0f}%")
+                if n.ram_pct is not None:
+                    bits.append(f"RAM {n.ram_pct:.0f}%")
+                if n.gpu_pct is not None:
+                    bits.append(f"GPU {n.gpu_pct:.0f}%")
+                if n.battery_pct is not None:
+                    bits.append(f"batería {n.battery_pct:.0f}%" + (" (con cargador)" if n.on_power else ""))
+                lines.append(f"{n.device_id}: " + ", ".join(bits))
+            lines.append("Cola: " + ("pausada" if ov["queue_paused"] else "activa"))
+            for t in ov["running"]:
+                lines.append(f"En curso: #{t['id']} {t['module']} en {t['node_id']}")
+            for t in ov["queued"]:
+                lines.append(f"En espera: #{t['id']} {t['module']}")
+            lines.append(f"Ashur v{ov['version']}")
+            return "\n".join(lines)
+
+        def diagnostico(_args: dict) -> str:
+            now = clock()
+            title, body, _k = daily_review(now)
+            lines = [title, body]
+            fails = [p for p in diagnostics()["problems"] if p["kind"] == "falla" and now - p["ts"] < 86400]
+            if fails:
+                lines.append("Fallas de las últimas 24 h:")
+                for p in fails:
+                    lines.append(f"{p['node_id'] or 'núcleo'} · {p['text'][:200]} · {p['count']} "
+                                 f"{'vez' if p['count'] == 1 else 'veces'} · última {hhmm(p['ts'])}")
+            return trim_paths("\n".join(lines))
+
+        def buscar_archivo(args: dict) -> str:
+            q = args.get("consulta")
+            if not isinstance(q, str) or not 2 <= len(q.strip()) <= 100:
+                raise ToolError("«consulta» debe ser un texto de 2 a 100 caracteres.")
+            words = Brain.file_words(q.lower())
+            if not words:
+                raise ToolError("Usa una palabra del nombre del archivo, no solo palabras generales.")
+            hits = db.inventory_find(words[:5], None, 8)
+            if not hits:
+                return "No encontré archivos con ese nombre en el inventario."
+            return "\n".join(f"{h['node_id']}: {h['path']} ({h['size'] // (1 << 20)} MB)" for h in hits)
+
+        def ver_pedido(args: dict) -> str:
+            rid = args.get("id")
+            if not isinstance(rid, int) or isinstance(rid, bool):
+                raise ToolError("«id» debe ser un número entero.")
+            r = db.claude_request_get(rid)
+            if not r:
+                raise ToolError(f"No existe el pedido #{rid}.")
+            res = r["result"] or ""
+            word = {"pending": "pendiente", "running": "en curso", "rejected": "rechazado",
+                    "approved": "aprobado" + (f": {res}" if res else ""),
+                    "not_done": "no se hizo" + (f": {res}" if res else "")}.get(r["status"], r["status"])
+            return f"Pedido #{rid} ({r['action']}): {word}"
+
+        return [
+            Tool("ashur_estado", "Estado de los equipos de Sergio, la cola de tareas y la versión de Ashur.", NO_ARGS, estado),
+            Tool("ashur_diagnostico", "Resumen del día y fallas de las últimas 24 horas, agrupadas.", NO_ARGS, diagnostico),
+            Tool("ashur_buscar_archivo", "Dónde está un archivo, buscando por nombre en el inventario (solo rutas, nunca contenido).",
+                 {"type": "object", "properties": {"consulta": {"type": "string", "minLength": 2, "maxLength": 100,
+                                                                 "description": "Parte del nombre del archivo"}},
+                  "required": ["consulta"], "additionalProperties": False}, buscar_archivo),
+            Tool("ashur_ver_pedido", "Cómo va un pedido que Claude dejó para que Sergio lo apruebe.",
+                 {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"],
+                  "additionalProperties": False}, ver_pedido),
+        ]
+
     mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,
-                           log=lambda event, d: db.log(clock(), None, event, d), tools=mcp_tools))
+                           log=lambda event, d: db.log(clock(), None, event, d), tools=mcp_tools()))
 
     return app
 

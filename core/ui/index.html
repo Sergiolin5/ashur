@@ -1032,8 +1032,8 @@
     if (opts.detail) m.append(el("div", "detail", opts.detail));
     if (opts.meters) {
       const w = el("div", "meters");
-      for (const [name, v] of opts.meters) {
-        const c = el("span", "meter" + (v !== null && v >= 90 ? " hot" : ""), name + " " + (v === null ? "sin dato" : Math.round(v) + "%"));
+      for (const [name, v, low] of opts.meters) {      // low: the meter warns when it falls (battery), not when it climbs
+        const c = el("span", "meter" + (v !== null && (low ? v <= 20 : v >= 90) ? " hot" : ""), name + " " + (v === null ? "sin dato" : Math.round(v) + "%"));
         c.style.setProperty("--v", v === null ? 0 : Math.min(100, Math.max(0, v)));
         w.append(c);
       }
@@ -1218,7 +1218,8 @@
                 : ", " + (n.code_label ? "v" + n.code_label : "versión anterior") +
                   " → v" + (data.node_code_label || "?") + " pendiente") +
               (n.reason && n.mode !== "full" ? " · " + n.reason : ""),
-      meters: n.mode === "offline" ? null : [["CPU", num(n.cpu_pct)], ["RAM", num(n.ram_pct)], ["GPU", num(n.gpu_pct)]],
+      meters: n.mode === "offline" ? null : [["CPU", num(n.cpu_pct)], ["RAM", num(n.ram_pct)], ["GPU", num(n.gpu_pct)]]
+        .concat(n.battery_pct == null ? [] : [[n.on_power ? "Carga" : "Bat.", n.battery_pct, !n.on_power]]),   // «Carga»: on the charger
       value: ago(n.last_seen_s_ago)
     })), "Aún no hay dispositivos. Se irán sumando cuando los conectes.");
 
@@ -2354,6 +2355,7 @@
         const dl = (n.disks || []).map((x) => x.mount + " " + gbs(x.total) + (x.present ? " (" + gbs(x.used) + " usados" + (x.kind !== "nuevo" ? ", " + x.kind : "") + ")" : " (ausente)") + (x.present && !x.scanned ? " SIN ESCANEAR" : ""));
         lines.push("  discos: " + (n.disks ? dl.join("; ") || "ninguno visible" : "sin informar"));
         lines.push("  GPU: " + (n.gpus ? n.gpus.join("; ") || "ninguna visible" : "sin informar (hace falta el código v0.42.0 y unos 10 min)"));
+        if (n.battery_pct != null) lines.push("  batería: " + Math.round(n.battery_pct) + "% " + (n.on_power ? "con cargador" : "sin cargador"));
         if (n.llm) lines.push("  modelo local: " + n.llm);
         // On screen: one short line per device; the rest folds away (tap to open). The copied text above stays complete.
         const off = (n.disks || []).filter((x) => x.present && !x.scanned).length;

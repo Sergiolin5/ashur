@@ -141,3 +141,5 @@ class NodeStatus(BaseModel):
     cpu_pct: Optional[float] = None       # None = no reading (offline, or not readable on that OS)
     ram_pct: Optional[float] = None
     gpu_pct: Optional[float] = None
+    battery_pct: Optional[float] = None   # None: no battery, offline, or not reported since the core started
+    on_power: Optional[bool] = None

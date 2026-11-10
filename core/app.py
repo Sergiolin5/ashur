@@ -921,7 +921,7 @@ def create_app(
             elif core_v and not n.code_version:
                 hint = "No ha informado su versión de código: es un agente muy viejo. Vuelve a correr el instalador."
             nodes.append({"device_id": n.device_id, "mode": n.mode.value, "os": n.os, "modules": n.modules,
-                          "code_label": n.code_label, "reason": n.reason, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
+                          "code_label": n.code_label, "reason": n.reason, "battery_pct": n.battery_pct, "on_power": n.on_power, "behind": behind, "disks": [dict(x, kind=disk_kind(x, clock()), scanned=bool(disk_policy(n.device_id).get(x["key"], False))) for x in disks_of.get(n.device_id) or []] if disks_of.get(n.device_id) is not None else None, "last_seen_s_ago": n.last_seen_s_ago, "hint": hint,
                           "gpus": gpus_text_of(n.device_id), "llm": llm_line(n.device_id)})
         problems = []
         for ev in db.log_rows(600):
@@ -2065,6 +2065,8 @@ def create_app(
                 cpu_pct=n.get("cpu_pct") if n["mode"] != Mode.OFFLINE.value else None,
                 ram_pct=n.get("ram_pct") if n["mode"] != Mode.OFFLINE.value else None,
                 gpu_pct=n.get("gpu_pct") if n["mode"] != Mode.OFFLINE.value else None,
+                battery_pct=(power.get(n["id"]) or {}).get("battery_pct") if n["mode"] != Mode.OFFLINE.value else None,
+                on_power=(power.get(n["id"]) or {}).get("on_power") if n["mode"] != Mode.OFFLINE.value else None,
                 last_seen_s_ago=None if n["last_seen"] is None else round(max(0.0, now - n["last_seen"]), 1),
             )
             for n in db.nodes()

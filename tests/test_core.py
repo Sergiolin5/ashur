@@ -1180,3 +1180,17 @@ def test_silent_on_an_empty_battery_says_so_and_plain_silence_stays_plain(env):
     node = c.get("/status", headers=A).json()["nodes"][0]
     assert node["mode"] == "offline" and node["reason"] is None
     assert c.get("/api/diagnostics", headers=A).json()["nodes"][0]["hint"].startswith("Sin señal")
+
+
+def test_battery_is_shown_while_online_and_dropped_when_silent(env):
+    c, clock = env
+    h = register(c)
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "light", "battery_pct": 64.5, "on_power": False})
+    node = c.get("/status", headers=A).json()["nodes"][0]
+    assert node["battery_pct"] == 64.5 and node["on_power"] is False
+    assert c.get("/api/diagnostics", headers=A).json()["nodes"][0]["battery_pct"] == 64.5
+    beat(c, h)                                       # a machine without battery says nothing: no meter
+    assert c.get("/status", headers=A).json()["nodes"][0]["battery_pct"] is None
+    c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "light", "battery_pct": 64.5, "on_power": True})
+    clock.now += 46
+    assert c.get("/status", headers=A).json()["nodes"][0]["battery_pct"] is None   # offline: no number, like CPU

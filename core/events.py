@@ -79,6 +79,12 @@ def describe(event: str, d: dict) -> str:
         "memory_imported": f"importó {d.get('count')} recuerdos ({d.get('source')})",
         "inventory_summary_failed": f"no pude contar el inventario: {d.get('error')}",
         "public_locked": f"PUERTA PÚBLICA BLOQUEADA {d.get('minutes', 15)} min por claves incorrectas",
+        "mcp_call": f"Claude usó {d.get('tool')}" + (" (límite alcanzado)" if d.get("limited") else
+                                                    " (falló)" if d.get("failed") else
+                                                    f" (error interno: {d['error']})" if d.get("error") else ""),
+        "mcp_locked": f"CONECTOR DE CLAUDE BLOQUEADO {d.get('minutes', 15)} min por claves incorrectas",
+        "mcp_key": "creaste una clave nueva para el conector de Claude" if d.get("action") == "created"
+                   else "revocaste la clave del conector de Claude",
     }.get(event, f"{event} {d}" if d else event)
 
 

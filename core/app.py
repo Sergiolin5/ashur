@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 from core.brain import (SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
                         looks_like_secret, month_start)
 from core.db import DB, hash_token
+from core.mcp import McpDeps, Tool, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
 from shared.protocol import (
@@ -267,7 +268,8 @@ def create_app(
         public = on_public_port(request.scope)
         if public:
             path = request.url.path
-            allowed = path in ("/", "/health") + APP_FILES or path.startswith("/api/")
+            # /mcp has its own key, lockout and limits (core/mcp.py); the admin-key check below is for /api only
+            allowed = path in ("/", "/health", "/mcp") + APP_FILES or path.startswith("/api/")
             if not allowed:
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             if path.startswith("/api/totp") and request.method != "GET":
@@ -2310,6 +2312,38 @@ def create_app(
     @app.get("/log", dependencies=[Depends(require_admin)])
     def log(limit: int = 200):
         return db.log_rows(limit)
+
+    # --- the Claude connector (/mcp) -------------------------------------
+    # Its own key, shown once; only its hash is kept. It opens /mcp and nothing under /api.
+    @app.get("/api/mcp/key", dependencies=[Depends(require_admin)])
+    def mcp_key_state():
+        created = db.setting("mcp_key_created")
+        active = bool(db.setting("mcp_key_hash"))
+        return {"active": active, "created": float(created) if active and created else None}
+
+    @app.post("/api/mcp/key", dependencies=[Depends(require_admin)])
+    def mcp_key_create():
+        key = secrets.token_urlsafe(32)
+        now = clock()
+        db.set_setting("mcp_key_hash", hash_token(key))
+        db.set_setting("mcp_key_created", str(now))
+        db.log(now, None, "mcp_key", {"action": "created"})
+        return {"key": key}
+
+    @app.delete("/api/mcp/key", dependencies=[Depends(require_admin)])
+    def mcp_key_revoke():
+        db.set_setting("mcp_key_hash", "")
+        db.set_setting("mcp_key_created", "")
+        db.log(clock(), None, "mcp_key", {"action": "revoked"})
+        return {"ok": True}
+
+    def mcp_key_ok(key: str) -> bool:
+        stored = db.setting("mcp_key_hash")
+        return bool(stored) and _same(hash_token(key), stored)
+
+    mcp_tools: list[Tool] = []          # every connector tool is added here
+    mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,
+                           log=lambda event, d: db.log(clock(), None, event, d), tools=mcp_tools))
 
     return app
 

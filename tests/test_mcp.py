@@ -302,21 +302,20 @@ def test_estado_lists_devices_queue_and_version(tmp_path):
     assert "Cola: pausada" in tool_text(c, "ashur_estado")[0]
 
 
-def test_trim_paths_examples():
-    from core.mcp import trim_paths
-    assert trim_paths("ver /Users/s/Docs/a.pdf ahora") == "ver …/Docs ahora"
-    assert trim_paths(r"falló C:\Users\s\x.txt.") == "falló …/s."
-    assert trim_paths("https://x.com/a/b y 12/05/2026") == "https://x.com/a/b y 12/05/2026"
-
-
-def test_diagnostico_trims_paths(tmp_path):
+def test_diagnostico_sends_no_paths_or_text(tmp_path):
     c, clock = tools_app(tmp_path)
-    for i in (1, 2):
-        c.db.log(clock(), "mac-m1", "task_failed", {"task_id": i, "module": "docs", "error": "no abre /Users/s/Secret/plan.docx"})
+    c.db.log(clock(), "mac-m1", "task_failed", {"task_id": 1, "module": "docs", "error":
+             "FileNotFoundError: [Errno 2] No such file or directory: '/Users/s/Mis Documentos/diario privado.docx'"})
+    c.db.log(clock(), "mac-m1", "task_failed", {"task_id": 2, "module": "docs", "error":
+             "FileNotFoundError: [Errno 2] No such file or directory: 'C:/Users/s/Docs/plan.docx'"})
+    c.db.log(clock(), "mac-m1", "task_failed", {"task_id": 3, "module": "docs", "error": "C:/Users/s/Docs/plan.docx falló"})
+    c.db.log(clock() - 90000, "mac-m1", "task_failed", {"task_id": 4, "module": "docs", "error": "FileNotFoundError: viejo"})
     text, err = tool_text(c, "ashur_diagnostico")
     assert not err
-    assert "…/Secret" in text and "plan.docx" not in text and "/Users" not in text
-    assert "mac-m1 · " in text and "2 veces" in text
+    for bad in ("diario", "Mis Documentos", "plan.docx", "Docs", "falló", "/Users"):
+        assert bad not in text
+    assert "mac-m1 · task_failed · docs · FileNotFoundError · 2 veces · última" in text
+    assert "mac-m1 · task_failed · docs · 1 vez · última" in text
 
 
 def test_buscar_archivo_skips_sensitive(tmp_path):

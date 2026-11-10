@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from core.brain import (SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalUnavailable, api_error_reason,
                         looks_like_secret, month_start)
 from core.db import DB, hash_token
-from core.mcp import McpDeps, Tool, ToolError, hhmm, mount_mcp, trim_paths
+from core.mcp import McpDeps, Tool, ToolError, hhmm, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
 from shared.protocol import (
@@ -2384,13 +2384,27 @@ def create_app(
             now = clock()
             title, body, _k = daily_review(now)
             lines = [title, body]
-            fails = [p for p in diagnostics()["problems"] if p["kind"] == "falla" and now - p["ts"] < 86400]
-            if fails:
+            # No free log text ever leaves here: only device, event name, module and the exception class name.
+            groups: dict[tuple, dict] = {}
+            for ev in db.log_rows(600):
+                if ev["event"] not in DIAG_EVENTS or ev["event"] in CONN_EVENTS or now - ev["ts"] >= 86400:
+                    continue
+                d = ev["detail"] or {}
+                module = d.get("module") if isinstance(d.get("module"), str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", d["module"]) else None
+                raw = d.get("error") or d.get("reason")
+                head, sep, rest = raw.partition(":") if isinstance(raw, str) else ("", "", "")
+                kind = head if sep and len(head) > 1 and not rest.startswith(("/", "\\")) \
+                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", head) else None      # «C:/…» is a drive, not an exception
+                g = groups.setdefault((ev["node_id"], ev["event"], module, kind), {"count": 0, "last": ev["ts"]})
+                g["count"] += 1
+                g["last"] = max(g["last"], ev["ts"])
+            if groups:
                 lines.append("Fallas de las últimas 24 h:")
-                for p in fails:
-                    lines.append(f"{p['node_id'] or 'núcleo'} · {p['text'][:200]} · {p['count']} "
-                                 f"{'vez' if p['count'] == 1 else 'veces'} · última {hhmm(p['ts'])}")
-            return trim_paths("\n".join(lines))
+                for (node, event, module, kind), g in sorted(groups.items(), key=lambda kv: -kv[1]["last"]):
+                    parts = [node or "núcleo", event] + [x for x in (module, kind) if x]
+                    parts += [f"{g['count']} {'vez' if g['count'] == 1 else 'veces'}", f"última {hhmm(g['last'])}"]
+                    lines.append(" · ".join(parts))
+            return "\n".join(lines)
 
         def buscar_archivo(args: dict) -> str:
             q = args.get("consulta")

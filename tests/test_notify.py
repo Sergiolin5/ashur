@@ -137,3 +137,39 @@ def test_conversation_notes_ready_or_failed_are_announced(tmp_path):
     db.log(clock(), None, "audio_failed", {"kind": "conversation"})                 # transcription: task_failed already tells
     db.log(clock(), None, "audio_failed", {"kind": "conversation", "step": "notes"})
     assert app.state.notify_due(sync=True) == ["No pude terminar las notas de tu conversación grabada; mira Diario → Voz."]
+
+
+def test_the_daily_review_goes_out_once_at_the_chosen_hour_even_in_quiet_hours(tmp_path):
+    """0.44.0: Sergio pasted «Probar» every evening at 19:00; Ashur now sends the review itself."""
+    c, clock, sent, app = make(tmp_path, at=ts(18, 59))
+    assert app.state.daily_due(sync=True) is None and sent == []
+    clock.now = ts(19, 0)
+    body = app.state.daily_due(sync=True)
+    assert sent[-1]["title"] == "Revisión del día: todo en orden" and sent[-1]["url"] == "/#diagnostico"
+    assert "Base " in body and "Claude US$ 0,00 de 10 este mes" in body
+    clock.now = ts(22, 0); assert app.state.daily_due(sync=True) is None          # once a day
+    c.put("/api/notify", headers=A, json={"daily_hour": 23})
+    clock.now = ts(23, 30, day=(2026, 11, 4)); assert app.state.daily_due(sync=True)  # quiet hours do not hold it
+    assert "desde ayer" in sent[-1]["body"]
+
+
+def test_the_daily_review_names_what_to_look_at(tmp_path):
+    c, clock, sent, app = make(tmp_path, at=ts(19))
+    h = join(c, "legion-go", clock)
+    c.post("/nodes/legion-go/heartbeat", headers=h, json={"mode": "full"})
+    clock.now = ts(19, day=(2026, 11, 6))                                           # silent three days
+    app.state.db.log(clock(), "mac-m1", "task_failed", {"module": "docs"})
+    app.state.db.log(clock(), "mac-m1", "task_failed", {"module": "docs"})
+    app.state.daily_due(sync=True)
+    t, b = sent[-1]["title"], sent[-1]["body"]
+    assert t == "Revisión del día: 2 cosas por mirar"
+    assert "legion-go sin señal hace 3 días" in b and "2 fallas en 24 h" in b
+
+
+def test_send_now_does_not_use_up_the_day_and_is_off_with_the_switch(tmp_path):
+    c, clock, sent, app = make(tmp_path, at=ts(10))
+    assert c.post("/api/notify/daily/now", headers=A).status_code == 200 and len(sent) == 1
+    clock.now = ts(19); assert app.state.daily_due(sync=True) and len(sent) == 2
+    c.put("/api/notify", headers=A, json={"cats": {"daily": False}})
+    clock.now = ts(19, day=(2026, 11, 4)); assert app.state.daily_due(sync=True) is None
+    assert c.put("/api/notify", headers=A, json={"daily_hour": 24}).status_code == 422

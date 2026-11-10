@@ -2565,6 +2565,20 @@
       for (const [k, label] of Object.entries(n.labels)) {
         const rw = row({ title: label }), sw = el("input"); sw.type = "checkbox"; sw.checked = n.cats[k];
         sw.setAttribute("aria-label", label); sw.addEventListener("change", () => put({ cats: { [k]: sw.checked } }));
+        if (k === "daily") {                     // its own hour, and a way to see it without waiting
+          rw.querySelector(".main").append(el("div", "detail", n.cats.daily ? "Cada día a las " + n.daily_hour + ":00 (aunque sea descanso nocturno)" : "Apagada"));
+          const sel = document.createElement("select"); sel.setAttribute("aria-label", "Hora de la revisión del día");
+          for (let h = 0; h < 24; h++) { const o = el("option", null, h + ":00"); o.value = h; if (h === n.daily_hour) o.selected = true; sel.append(o); }
+          sel.addEventListener("change", () => put({ daily_hour: Number(sel.value) }));
+          const now = el("button", null, "Enviar ahora"); now.type = "button";
+          now.addEventListener("click", async () => {
+            now.disabled = true;
+            try { const r = await api("api/notify/daily/now", { method: "POST" }); now.textContent = r.ok ? "Enviada" : "Sin dispositivos con avisos"; }
+            catch (e) { now.textContent = "Sin conexión"; }
+            setTimeout(() => { now.textContent = "Enviar ahora"; now.disabled = false; }, 3000);
+          });
+          rw.append(sel, now);
+        }
         rw.append(sw); nodes.push(rw);
       }
       const q = row({ title: "Descanso nocturno", detail: n.quiet.enabled ? "Sin avisos de " + n.quiet.from + ":00 a " + n.quiet.to + ":00" : "Apagado" });

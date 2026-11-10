@@ -212,6 +212,7 @@ def create_app(
                         app.state.docs_due()
                         app.state.diary_due()
                         app.state.notify_due()
+                        app.state.daily_due()
                         app.state.propose_due()
 
                 while True:
@@ -229,7 +230,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.43.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.44.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1867,13 +1868,15 @@ def create_app(
     # --- system notifications: tasks, devices, updates and spending, read from the session log ---
     NOTIFY_CATS = {"tasks": "Tareas largas terminadas o fallidas (y las notas de una conversación grabada)", "devices": "Un equipo lleva rato desconectado (y cuando vuelve)",
                    "update": "Hay una versión nueva de Ashur", "budget": "El gasto con Claude llega al 80% del mes",
-                   "proposals": "Ashur tiene recuerdos nuevos por revisar"}
+                   "proposals": "Ashur tiene recuerdos nuevos por revisar",
+                   "daily": "Revisión del día: cómo está todo, una vez al día"}
     NOTIFY_WATCHED = ("inventory", "docs")                       # background jobs worth a tap on the shoulder
 
     def notify_settings() -> dict:
         return {"cats": {k: db.setting("notify_" + k, "1") == "1" for k in NOTIFY_CATS},
                 "quiet": {"enabled": db.setting("notify_quiet", "1") == "1",
                           "from": int(db.setting("notify_quiet_from", "23")), "to": int(db.setting("notify_quiet_to", "7"))},
+                "daily_hour": int(db.setting("notify_daily_hour", "19")),
                 "labels": NOTIFY_CATS}
 
     class NotifyIn(BaseModel):
@@ -1881,6 +1884,7 @@ def create_app(
         quiet_enabled: Optional[bool] = None
         quiet_from: Optional[int] = Field(default=None, ge=0, le=23)
         quiet_to: Optional[int] = Field(default=None, ge=0, le=23)
+        daily_hour: Optional[int] = Field(default=None, ge=0, le=23)
 
     @app.get("/api/notify", dependencies=[Depends(require_self)])
     def notify_get():
@@ -1897,6 +1901,8 @@ def create_app(
             db.set_setting("notify_quiet_from", str(body.quiet_from))
         if body.quiet_to is not None:
             db.set_setting("notify_quiet_to", str(body.quiet_to))
+        if body.daily_hour is not None:
+            db.set_setting("notify_daily_hour", str(body.daily_hour))
         return notify_settings()
 
     def _in_quiet(now: float, q: dict) -> bool:
@@ -2026,6 +2032,84 @@ def create_app(
         return which
 
     app.state.diary_due = diary_due
+
+    # --- the daily review (0.44.0): what Sergio pasted from «Probar» every evening, sent by Ashur itself ---
+    def daily_review(now: float, remember: bool = False) -> tuple[str, str, int]:
+        """(title, body, things to look at). Reads only what is cheap: no model questions, no big counts."""
+        issues: list[str] = []
+        core_v = node_code()[0]
+        unscanned = 0
+        for n in db.nodes():
+            if n["simulated"]:
+                continue
+            off = n["mode"] == Mode.OFFLINE.value or (n["last_seen"] is not None and now - n["last_seen"] > 86400)
+            if off and n["last_seen"] is not None and now - n["last_seen"] > 86400:
+                d = int((now - n["last_seen"]) // 86400)
+                issues.append(f"{n['id']} sin señal hace {d} día{'s' if d != 1 else ''}")
+            if not off:
+                if core_v and n.get("code_version") and n["code_version"] != core_v:
+                    issues.append(f"{n['id']} con código atrasado")
+                if gpu_unused(n["id"]):
+                    issues.append(f"{n['id']} con el modelo en CPU teniendo tarjeta NVIDIA")
+            if "inventory" in n["modules"] and n.get("disks"):
+                pol = disk_policy(n["id"])
+                unscanned += sum(1 for x in n["disks"] if x.get("present") and not pol.get(x["key"], False))
+        fails = sum(1 for e in db.log_rows(600) if e["event"] in ("task_failed", "node_problem", "chat_error") and now - e["ts"] < 86400)
+        if fails:
+            issues.append(f"{fails} falla{'s' if fails != 1 else ''} en 24 h")
+        if unscanned:
+            issues.append(f"{unscanned} disco{'s' if unscanned != 1 else ''} sin escanear")
+        props = len(db.proposals())
+        if props:
+            issues.append(f"{props} recuerdo{'s' if props != 1 else ''} por revisar")
+        info = []
+        try:
+            kb = os.path.getsize(db_path) // 1024
+            prev = db.setting("notify_daily_db_kb", "")
+            grew = "" if not prev else f" ({'+' if kb >= int(prev) else '−'}{abs(kb - int(prev)) / 1e6:.2f} GB desde ayer)"
+            info.append(f"Base {kb / 1e6:.2f} GB{grew}".replace(".", ","))
+            if remember:
+                db.set_setting("notify_daily_db_kb", str(kb))
+        except (OSError, ValueError):
+            pass
+        b = brain.budget()
+        info.append(f"Claude US$ {b['spent_usd']:.2f} de {b['budget_usd']:.0f} este mes".replace(".", ","))
+        k = len(issues)
+        title = "Revisión del día: todo en orden" if not k else f"Revisión del día: {k} cosa{'s' if k != 1 else ''} por mirar"
+        body = ("; ".join(issues) + ". " if issues else "") + ". ".join(info) + "."
+        return title, body, k                          # no capital: a device name may lead
+
+    def daily_due(sync: bool = False, force: bool = False) -> Optional[str]:
+        """Once a day, at the hour he chose (19:00 by default). It ignores quiet hours: he picked that hour himself.
+        If the core was down at that hour, it goes out when it is back, the same day."""
+        cfg = notify_settings()
+        if not db.push_subs() or not (cfg["cats"]["daily"] or force):
+            return None
+        now = clock()
+        local = dt.datetime.fromtimestamp(now, BOGOTA)
+        day = local.strftime("%Y-%m-%d")
+        if not force:
+            if local.hour < cfg["daily_hour"] or db.setting("notify_daily_day", "") == day:
+                return None
+            db.set_setting("notify_daily_day", day)                 # marked first: a slow send is never repeated
+        title, body, k = daily_review(now, remember=not force)
+        payload = {"title": title, "body": body, "url": "/#diagnostico", "tag": "daily-" + day}
+        if sync:
+            _push_all(payload)
+        else:
+            threading.Thread(target=_push_all, args=(payload,), daemon=True, name="daily-push").start()
+        db.log(now, None, "daily_review", {"issues": k, "manual": force})
+        return body
+
+    app.state.daily_due = daily_due
+
+    @app.post("/api/notify/daily/now", dependencies=[Depends(require_self)])
+    def daily_now():
+        """Send today's review now, to see it without waiting for the hour. Does not count as the day's review."""
+        body = daily_due(sync=True, force=True)
+        if body is None:
+            raise HTTPException(409, "Ningún dispositivo tiene los avisos activados.")
+        return {"body": body}
 
     @app.get("/api/push/key", dependencies=[Depends(require_self)])
     def push_key():

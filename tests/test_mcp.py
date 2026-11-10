@@ -185,11 +185,32 @@ def test_calls_logged_without_arguments():
 def pub_app(tmp_path):
     clock = VirtualClock()
     app = create_app(str(tmp_path / "x.db"), "e", "a", clock=clock, sweep_every_s=None, public_port=8001)
-    return TestClient(app, base_url="http://testserver:8001"), clock
+    pub = TestClient(app, base_url="http://testserver:8001")
+    pub.tailnet = TestClient(app)                     # port 80: the tailnet door, where the key is made
+    return pub, clock
 
 
 def new_key(c):
-    return c.post("/api/mcp/key", headers={"X-Admin-Key": "a"}).json()["key"]
+    return c.tailnet.post("/api/mcp/key", headers={"X-Admin-Key": "a"}).json()["key"]
+
+
+def test_key_is_made_and_revoked_only_from_the_tailnet(tmp_path):
+    c, _ = pub_app(tmp_path)
+    A = {"X-Admin-Key": "a"}
+    for method in (c.post, c.delete):
+        r = method("/api/mcp/key", headers=A)
+        assert r.status_code == 403 and "tailnet" in r.json()["detail"]
+    assert c.get("/api/mcp/key", headers=A).status_code == 200
+    k = new_key(c)
+    assert c.delete("/api/mcp/key", headers=A).status_code == 403
+    assert rpc(c, "ping", headers={"Authorization": f"Bearer {k}"}).status_code == 200
+
+
+def test_key_survives_a_restart(tmp_path):
+    c, _ = pub_app(tmp_path)
+    k = new_key(c)
+    again = TestClient(create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None))
+    assert rpc(again, "ping", headers={"Authorization": f"Bearer {k}"}).status_code == 200
 
 
 def test_key_endpoints(tmp_path):
@@ -201,7 +222,7 @@ def test_key_endpoints(tmp_path):
     st = c.get("/api/mcp/key", headers=A).json()
     assert st["active"] is True and st["created"] == 1_000_000.0
     assert rpc(c, "ping", headers={"Authorization": f"Bearer {k}"}).status_code == 200
-    assert c.delete("/api/mcp/key", headers=A).json() == {"ok": True}
+    assert c.tailnet.delete("/api/mcp/key", headers=A).json() == {"ok": True}
     assert c.get("/api/mcp/key", headers=A).json()["active"] is False
     assert rpc(c, "ping", headers={"Authorization": f"Bearer {k}"}).status_code == 401
     assert rpc(c, "ping", headers={"Authorization": "Bearer "}).status_code == 401

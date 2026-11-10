@@ -88,21 +88,7 @@ def mount_mcp(app: FastAPI, deps: McpDeps) -> None:
     def text_result(text: str, is_error: bool) -> dict:
         return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
-    def call_tool(params: dict):
-        """(result, None) or (None, (code, message))."""
-        tools = {t.name: t for t in deps.tools}
-        tool = tools.get(params.get("name"))
-        args = params.get("arguments")
-        args = {} if args is None else args
-        if tool is None:
-            return None, (-32602, f"Herramienta desconocida: {params.get('name')}")
-        if not isinstance(args, dict):
-            return None, (-32602, "arguments debe ser un objeto")
-        now = deps.clock()
-        until = over_limit(tool, now)
-        if until:
-            deps.log("mcp_call", {"tool": tool.name, "limited": True})
-            return text_result(f"Límite alcanzado; vuelve a las {until}", True), None
+    def run_tool(tool: Tool, args: dict) -> dict:
         try:
             out = text_result(tool.run(args), False)
             deps.log("mcp_call", {"tool": tool.name})
@@ -112,7 +98,25 @@ def mount_mcp(app: FastAPI, deps: McpDeps) -> None:
         except Exception as e:  # never the message: it may echo the arguments
             out = text_result("Error interno en Ashur", True)
             deps.log("mcp_call", {"tool": tool.name, "error": type(e).__name__})
-        return out, None
+        return out
+
+    async def call_tool(params: dict):
+        """(result, None) or (None, (code, message))."""
+        tools = {t.name: t for t in deps.tools}
+        tool = tools.get(params.get("name"))
+        args = params.get("arguments")
+        args = {} if args is None else args
+        if tool is None:
+            return None, (-32602, f"Herramienta desconocida: {params.get('name')}")
+        if not isinstance(args, dict):
+            return None, (-32602, "arguments debe ser un objeto")
+        # checked and counted here on the event loop, so concurrent calls cannot both slip under the limit
+        until = over_limit(tool, deps.clock())
+        if until:
+            deps.log("mcp_call", {"tool": tool.name, "limited": True})
+            return text_result(f"Límite alcanzado; vuelve a las {until}", True), None
+        # the tool may touch the database or the local model: off the event loop
+        return await asyncio.to_thread(run_tool, tool, args), None
 
     def reply(id_, result=None, error=None) -> JSONResponse:
         body = {"jsonrpc": "2.0", "id": id_}
@@ -151,8 +155,7 @@ def mount_mcp(app: FastAPI, deps: McpDeps) -> None:
             return reply(id_, {"tools": [{"name": t.name, "description": t.description, "inputSchema": t.schema}
                                          for t in deps.tools]})
         if method == "tools/call":
-            # tools may touch the database or the local model: off the event loop
-            result, error = await asyncio.to_thread(call_tool, params)
+            result, error = await call_tool(params)
             return reply(id_, result, error)
         return reply(id_, error=(-32601, f"Method not found: {method}"))
 

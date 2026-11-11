@@ -325,3 +325,17 @@ def test_sample_shows_what_the_model_said_for_the_doubtful_ones(tmp_path, fast_l
     assert "No estoy seguro" not in tool_text(c, "ashur_ver_lote", {"id": 1})[0]      # never through the connector
     assert lotes.rule("C:/Users/s/OneDrive/Documentos/My Games/Fallout3/x.ini")["tipo"] == "juego"
     assert lotes.rule("C:/Users/s/OneDrive/Documentos/Electronic Arts/The Sims 4/log.txt")["tipo"] == "juego"
+
+
+def test_with_the_ryzen_away_a_bigger_model_on_cpu_beats_a_smaller_one_on_gpu(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    mac, legion = MeasuredLLM(t, "mac-m1", "qwen2.5:3b", 1.0), MeasuredLLM(t, "legion-go", "qwen2.5:7b", 0.0)
+    try:
+        for d in ("mac-m1", "legion-go"):
+            c.db.add_task("llm", {}, "light", 0, target=d)
+        wait_for(lambda: all(c.db.setting(f"llm_perf:{d}") for d in ("mac-m1", "legion-go")))
+        nodes = [n for n in c.db.nodes() if "llm" in n["modules"]]
+        assert c.app.state.strongest_llm_node(nodes) == "legion-go"
+    finally:
+        mac.close()
+        legion.close()

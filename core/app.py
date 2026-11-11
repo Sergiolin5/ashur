@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.48.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.48.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1103,12 +1103,13 @@ def create_app(
     app.state.best_llm_node = best_llm_node
 
     def strongest_llm_node(ready: list[dict]) -> str:
-        """For a lote: the ready device with the most powerful model (on its GPU first, then the bigger model, then the
-        faster one). Always one of them: a device never measured ranks last, it is not left out."""
+        """For a lote: the ready device with the most powerful model. The bigger model first, then the one running on its
+        GPU, then the faster one: with the Ryzen 9 busy, the Legion Go's 7B on CPU (slow) answers before the Mac's 3B
+        (fast, but its classifications were the weak ones). A device never measured ranks last, it is not left out."""
         scored = []
         for n in ready:
             p = llm_perf(n) or {}
-            scored.append((0 if (p.get("share") or 0) >= 0.9 else 1, -model_size_b(p.get("model")),
+            scored.append((-model_size_b(p.get("model")), 0 if (p.get("share") or 0) >= 0.9 else 1,
                            p.get("seconds") or 999.0, n["id"]))
         return min(scored)[3]
 

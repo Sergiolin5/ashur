@@ -137,6 +137,11 @@ CREATE TABLE IF NOT EXISTS doc_signals (   -- what a lote learned about one docu
     node_id TEXT NOT NULL, path TEXT NOT NULL, pase TEXT NOT NULL, value TEXT NOT NULL, lote INTEGER NOT NULL,
     device TEXT, ts REAL NOT NULL, PRIMARY KEY (node_id, path, pase)
 );
+CREATE TABLE IF NOT EXISTS health_samples (   -- Apple Health readings the phone sends; local only, never in a prompt to Claude
+    id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT NOT NULL, valor REAL NOT NULL, unidad TEXT NOT NULL,
+    inicio REAL NOT NULL, fin REAL NOT NULL, fuente TEXT NOT NULL DEFAULT '', creado REAL NOT NULL,
+    UNIQUE (tipo, inicio, fin, fuente)
+);
 CREATE TABLE IF NOT EXISTS habits (        -- what Sergio does again and again (core/habits.py); he sees, corrects and deletes them
     id INTEGER PRIMARY KEY AUTOINCREMENT, clave TEXT NOT NULL UNIQUE, accion TEXT NOT NULL, tipo TEXT NOT NULL,
     patron TEXT NOT NULL DEFAULT '{}', veces INTEGER NOT NULL DEFAULT 0, dias INTEGER NOT NULL DEFAULT 0,
@@ -1206,6 +1211,48 @@ class DB:
                              (lote,)).fetchall()
         finally:
             c.close()
+
+    # --- health: Apple Health readings, local only ----------------------------
+    def health_add(self, samples: list[dict], now: float) -> int:
+        """Adds what is new; the same reading sent twice (same type, times and source) is kept once. Returns how many
+        were new."""
+        with self.lock:
+            before = self.conn.total_changes
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO health_samples (tipo, valor, unidad, inicio, fin, fuente, creado) "
+                "VALUES (:tipo, :valor, :unidad, :inicio, :fin, :fuente, :creado)",
+                [dict(s, creado=now) for s in samples])
+            self.conn.commit()
+            return self.conn.total_changes - before
+
+    def health_list(self, tipo: Optional[str], desde: float, limit: int = 2000) -> list[dict]:
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            sql, args = "SELECT tipo, valor, unidad, inicio, fin, fuente FROM health_samples WHERE inicio >= ?", [desde]
+            if tipo:
+                sql += " AND tipo = ?"
+                args.append(tipo)
+            return [dict(r) for r in c.execute(sql + " ORDER BY inicio DESC LIMIT ?", args + [limit])]
+        finally:
+            c.close()
+
+    def health_types(self) -> list[dict]:
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in c.execute(
+                "SELECT tipo, unidad, COUNT(*) muestras, MIN(inicio) desde, MAX(fin) hasta FROM health_samples "
+                "GROUP BY tipo, unidad ORDER BY tipo")]
+        finally:
+            c.close()
+
+    def health_delete(self, tipo: Optional[str]) -> int:
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM health_samples" + (" WHERE tipo = ?" if tipo else ""),
+                                    (tipo,) if tipo else ())
+            self.conn.commit()
+            return cur.rowcount
 
     # --- habits ------------------------------------------------------------
     def uso_events(self, since: float) -> list[dict]:

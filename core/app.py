@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.49.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.49.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1735,6 +1735,40 @@ def create_app(
         if lugar:
             db.set_setting("habit_here", json.dumps({"lugar": lugar, "ts": clock()}))
         return {"ok": True}
+
+    # --- health: what the phone reads from Apple Health, kept here and never sent to Claude ---
+    # Nothing in the brain, the connector or a lote reads this table; the log carries counts only (Sergio's rule: health
+    # never goes to Claude nor to the papers). For his panel and, later, local habits.
+    class HealthSample(BaseModel):
+        tipo: str = Field(pattern=r"^[a-z_]{1,40}$")
+        valor: float
+        unidad: str = Field(min_length=1, max_length=16)
+        inicio: float
+        fin: float
+        fuente: str = Field(default="", max_length=40)
+
+    class HealthIn(BaseModel):
+        muestras: list[HealthSample] = Field(min_length=1, max_length=500)
+
+    @app.post("/api/salud", dependencies=[Depends(require_self)])
+    def health_post(body: HealthIn):
+        rows = [m.model_dump() for m in body.muestras if m.fin >= m.inicio]
+        new = db.health_add(rows, clock())
+        db.log(clock(), None, "health_received", {"samples": len(rows), "new": new})
+        return {"recibidas": len(rows), "nuevas": new}
+
+    @app.get("/api/salud", dependencies=[Depends(require_self)])
+    def health_get(tipo: Optional[str] = None, dias: int = 30):
+        if tipo is not None and not re.match(r"^[a-z_]{1,40}$", tipo):
+            raise HTTPException(422, "Tipo no válido.")
+        return {"tipos": db.health_types(),
+                "muestras": db.health_list(tipo, clock() - max(1, min(dias, 3650)) * 86400)}
+
+    @app.delete("/api/salud", dependencies=[Depends(require_admin)])
+    def health_delete(tipo: Optional[str] = None):
+        n = db.health_delete(tipo)
+        db.log(clock(), None, "health_deleted", {"samples": n, "all": tipo is None})
+        return {"borradas": n}
 
     def habits_refresh(force: bool = False) -> None:
         now = clock()

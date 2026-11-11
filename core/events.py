@@ -92,6 +92,8 @@ def describe(event: str, d: dict) -> str:
         "encargo_done": f"terminó el encargo #{d.get('id')} ({d.get('docs')} documentos, {d.get('units')} trozos, {d.get('seconds')} s)",
         "encargo_failed": f"FALLÓ el encargo #{d.get('id')} ({d.get('units')} trozos hechos de {d.get('docs')} documentos)",
         "encargo_cancelled": f"se canceló el encargo #{d.get('id')}",
+        "health_received": f"recibió {d.get('samples')} lecturas de salud ({d.get('new')} nuevas)",
+        "health_deleted": f"borró {d.get('samples')} lecturas de salud",
         "uso": f"usó: {d.get('accion')}" + (f" desde {d.get('dispositivo')}" if d.get("dispositivo") else ""),
         "habit_proposed": f"propuso el hábito #{d.get('habito')} como pedido #{d.get('pedido')}",
         "habit_changed": f"{d.get('cambio')} el hábito #{d.get('habito')}",

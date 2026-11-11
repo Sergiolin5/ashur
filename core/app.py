@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.46.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.47.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1088,20 +1088,34 @@ def create_app(
 
     app.state.best_llm_node = best_llm_node
 
-    def local_complete(system: str, messages: list) -> tuple[str, str]:
-        """Ask a node with a local model (module 'llm') and wait for its answer."""
+    def strongest_llm_node(ready: list[dict]) -> str:
+        """For a lote: the ready device with the most powerful model (on its GPU first, then the bigger model, then the
+        faster one). Always one of them: a device never measured ranks last, it is not left out."""
+        scored = []
+        for n in ready:
+            p = llm_perf(n) or {}
+            scored.append((0 if (p.get("share") or 0) >= 0.9 else 1, -model_size_b(p.get("model")),
+                           p.get("seconds") or 999.0, n["id"]))
+        return min(scored)[3]
+
+    app.state.strongest_llm_node = strongest_llm_node
+
+    def local_complete(system: str, messages: list, pin: bool = False) -> tuple[str, str]:
+        """Ask a node with a local model (module 'llm') and wait for its answer. pin (lotes): only the most powerful
+        device ready now may answer; while it is busy the question waits, and if it never takes it nobody weaker does
+        (NoLocalDevice, which is «try later», not a failure of the document)."""
         sweep()
         ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")]
         if not ready:
             raise NoLocalDevice("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
                                    "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
-        target = best_llm_node(ready)
+        target = strongest_llm_node(ready) if pin else best_llm_node(ready)
         tid = db.add_task("llm", {"system": system, "messages": messages}, Weight.LIGHT.value, clock(), target=target)
         deadline = time.monotonic() + local_timeout_s
         handoff = time.monotonic() + 10           # the preferred device is busy or asleep: after 10 s, any device may take it
         try:
             while time.monotonic() < deadline:
-                if target and time.monotonic() >= handoff:
+                if target and not pin and time.monotonic() >= handoff:
                     db.untarget_if_queued(tid)
                     target = None
                 t = db.get_task(tid)
@@ -1111,6 +1125,8 @@ def create_app(
                     err = (t["result"] or {}).get("error") or "sin detalle"
                     raise LocalFailed(f"El modelo local falló en {t['node_id']}: {err}", t["node_id"])
                 time.sleep(0.2)
+            if pin and db.cancel_queued(tid, clock()) == "queued":      # never taken: the device is busy, not broken
+                raise NoLocalDevice(f"{target} está ocupado.")
             db.cancel_task(tid, "timeout", clock())
             raise LocalUnavailable("El modelo local no respondió a tiempo. Puede estar ocupado o recién despertando.")
         finally:
@@ -2463,7 +2479,7 @@ def create_app(
                 return f"Encargo #{eid} cancelado."
         raise HTTPException(409, "El encargo ya terminó.")
 
-    def encargo_unit(unit: dict) -> tuple[str, Optional[str], Optional[str]]:
+    def encargo_unit(unit: dict, pin: bool = False) -> tuple[str, Optional[str], Optional[str]]:
         """("ok", answer, device); ("failed", None, last device) after NOTES_TRIES tries; ("wait", None, None) when no
         device is ready or the queue got paused between tries: neither uses up the unit's tries."""
         node = None
@@ -2473,7 +2489,7 @@ def create_app(
                 if queue_paused():
                     return "wait", None, None
             try:
-                answer, node = local_complete(unit["system"], [{"role": "user", "content": unit["text"]}])
+                answer, node = local_complete(unit["system"], [{"role": "user", "content": unit["text"]}], pin=pin)
                 return "ok", answer, node
             except NoLocalDevice:
                 return "wait", None, None
@@ -2651,7 +2667,7 @@ def create_app(
                     db.lote_set(lid, expect="running", skipped=L["skipped"] + 1)
                     return True
                 t0 = time.monotonic()
-                how, answer, device = encargo_unit(lotes.unit_tipo(path, texts))
+                how, answer, device = encargo_unit(lotes.unit_tipo(path, texts), pin=True)
                 took = time.monotonic() - t0
                 if how == "wait":
                     if queue_paused():

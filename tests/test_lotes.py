@@ -4,7 +4,7 @@ import json
 
 from core import lotes
 from tests.test_brain import A
-from tests.test_encargos import FakeLLM, fast_local, tool_text, tools_c  # noqa: F401 (fast_local is a fixture)
+from tests.test_encargos import FakeLLM, fast_local, tool_text, tools_c, wait_for  # noqa: F401 (fast_local is a fixture)
 
 DOCS = {"/Users/s/Documents/Diario/a.txt": ["Hoy escribí sobre el proyecto."],
         "/Users/s/Documents/Diario/b.txt": ["Otra entrada mía."],
@@ -145,3 +145,41 @@ def test_paused_queue_holds_the_lote(tmp_path, fast_local):
     finally:
         node.close()
     assert c.db.lote_get(1)["status"] == "done"
+
+
+class MeasuredLLM(FakeLLM):
+    """Like a real node: every answer says which model ran and how much of it on the GPU."""
+
+    def __init__(self, c, device, model, share):
+        self.model, self.share = model, share
+        super().__init__(c, answer, device=device)
+
+    def serve(self):
+        while not self.stop.is_set():
+            t = self.c.get(f"/nodes/{self.device}/tasks/next", headers=self.h, params={"wait": 1, "modules": "llm"}).json()
+            if not t:
+                continue
+            self.payloads.append(t["payload"])
+            self.c.post(f"/tasks/{t['id']}/result", headers=self.h, json={"ok": True, "result": {
+                "text": answer(t["payload"], 0), "model": self.model, "seconds": 1.0, "gpu_share": self.share}})
+
+
+def test_a_lote_only_uses_the_most_powerful_model_ready(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    ask(c)
+    weak, strong = MeasuredLLM(t, "mac-m1", "qwen2.5:3b", 1.0), MeasuredLLM(t, "ryzen9", "qwen2.5:7b", 1.0)
+    try:
+        for d in ("mac-m1", "ryzen9"):                                # one answer each, so both are measured
+            c.db.add_task("llm", {}, "light", 0, target=d)
+        wait_for(lambda: len(weak.payloads) == 1 and len(strong.payloads) == 1)
+        wait_for(lambda: all(c.db.setting(f"llm_perf:{d}") for d in ("mac-m1", "ryzen9")))
+        nodes = [n for n in c.db.nodes() if "llm" in n["modules"]]
+        assert c.app.state.strongest_llm_node(nodes) == "ryzen9"      # the bigger model, both on GPU
+        approve(c, t, 1)
+        run(c)
+    finally:
+        weak.close()
+        strong.close()
+    assert c.db.lote_get(1)["status"] == "done"
+    assert len(strong.payloads) == 4 and len(weak.payloads) == 1      # all three documents went to the 7B
+    assert {r[0] for r in c.db.conn.execute("SELECT device FROM doc_signals")} == {"ryzen9"}

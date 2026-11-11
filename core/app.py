@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.48.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.48.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1737,6 +1737,17 @@ def create_app(
     def habits_list(todos: bool = False):
         habits_refresh()
         return [habit_row(h) for h in db.habits(todos)]
+
+    @app.get("/api/habits/conteo", dependencies=[Depends(require_admin)])
+    def habits_count():
+        """How many of each action the last 60 days hold, and on how many days: why there is no habit yet."""
+        now, by = clock(), {}
+        for e in db.uso_events(now - habits.WINDOW_DAYS * 86400):
+            b = by.setdefault(e["accion"], {"veces": 0, "dias": set()})
+            b["veces"] += 1
+            b["dias"].add(dt.datetime.fromtimestamp(e["ts"], BOGOTA).date())
+        return sorted(({"accion": a, "texto": habits.ACTIONS.get(a, (a, False))[0], "veces": b["veces"], "dias": len(b["dias"])}
+                       for a, b in by.items()), key=lambda x: -x["veces"])
 
     @app.post("/api/habits/refrescar", dependencies=[Depends(require_admin)])
     def habits_force():

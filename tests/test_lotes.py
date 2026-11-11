@@ -59,6 +59,12 @@ def test_parse_tipo_only_takes_kinds_from_the_list():
     assert pick("- tipo: <factura>\n- autor: duda") == {"tipo": "factura", "autor": "duda"}
     assert pick("autor: sergio") == {"tipo": "otro", "autor": "sergio"}
     assert lotes.parse_tipo("trabajo académico\nautor: sergio\nmás texto", K)["crudo"] == "trabajo académico | autor: sergio"
+    # the 7B on Sergio's third pilot also answered both values bare («otro / duda»): the author counts too
+    assert pick("informe\nsergio") == {"tipo": "informe", "autor": "sergio"}
+    assert pick("otro\nduda") == {"tipo": "otro", "autor": "duda"}
+    for vendored in ("C:/Docs/ParcialCorte2/packages/System.Security.Principal.Windows.5.0.0/THIRD-PARTY-NOTICES.TXT",
+                     "C:/Docs/PC  Backup/Documentos/Assetto Corsa/logs/errors.txt"):
+        assert lotes.rule(vendored) is not None, vendored
 
 
 def test_prompt_names_sergio_and_lists_the_kinds():

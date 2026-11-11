@@ -43,8 +43,9 @@ def prompt_tipo(names: list[str], kinds: list[str]) -> str:
         "Responde exactamente dos líneas, sin nada más:\n"
         f"tipo: <una de estas categorías, escrita tal cual: {', '.join(kinds)}; si ninguna encaja: {OTHER}>\n"
         "autor: <sergio si lo escribió, lo firmó o lo emitió él (uno de sus nombres aparece como autor, remitente o "
-        "firmante, o son notas, trabajos o borradores suyos); otro si lo escribió alguien más (manuales, libros, documentos "
-        "descargados o recibidos de otra persona o empresa); duda si no se puede saber>\n"
+        "firmante, o son notas, trabajos o borradores suyos); otro si lo escribió alguien más (manuales, libros, artículos "
+        "y papers de otros autores, licencias, archivos de programas o librerías, hojas de vida de otras personas, documentos "
+        "descargados o recibidos de otra persona o empresa); duda solo si no hay ninguna pista>\n"
         "Decide solo por lo que dicen el texto y la ruta, sin inventar.")
 
 PASSES = {"tipo": "clasificar por tipo y autor"}
@@ -55,11 +56,12 @@ PASSES = {"tipo": "clasificar por tipo y autor"}
 # Narrow on purpose: a folder that could hold his own writing (a «Revit» project folder, Downloads) is left to the model.
 RULES = (
     ("juego", ("/steamapps/", "/steamlibrary/", "/zomboid/", "/saved games/", "/programas/steam/", "/my games/",
-               "/electronic arts/")),
+               "/electronic arts/", "/assetto corsa/")),
     ("fototeca", (".photoslibrary/",)),
     ("software", ("/appdata/", "/library/application support/", "/program files/", "/program files (x86)/", "/programdata/",
                   "/addins/", "/lookup tables/", "/autodesk/", "/revit_20", "/.vscode/", "/.claude/", "/.codex/",
-                  "/site-packages/", "/node_modules/", "/pip/_vendor/", "/pip/_internal/", "/.git/", "/__pycache__/")),
+                  "/site-packages/", "/dist-packages/", "/node_modules/", "/pip/_vendor/", "/pip/_internal/", "/.git/",
+                  "/__pycache__/", "/packages/", "/vendor/", "/third_party/", "/third-party/")),
 )
 
 
@@ -99,6 +101,9 @@ def parse_tipo(answer: str, kinds: list[str]) -> dict:
             autor = (re.findall(r"\w+", value.lower()) or [""])[0]
     if tipo is None and lines and not LABEL.match(lines[0]):
         tipo = re.sub(r"[<>*_`\"']", "", lines[0]).strip()
+    if autor is None and len(lines) > 1 and not LABEL.match(lines[1]):       # «otro / sergio»: the author bare, too
+        bare = (re.findall(r"\w+", lines[1].lower()) or [""])[0]
+        autor = bare if bare in AUTHORS else None
     return {"tipo": _kind_of(tipo or "", kinds), "autor": autor if autor in AUTHORS else "duda",
             "crudo": " | ".join(lines[:2])[:200]}
 

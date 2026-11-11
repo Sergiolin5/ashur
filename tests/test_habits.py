@@ -185,3 +185,11 @@ def test_habits_read_back_what_the_log_already_said(tmp_path):
     c.db.log(at(2026, 11, 20), None, "uso", {"accion": "chatear"})       # from now on «uso» says it all
     c.db.log(at(2026, 11, 21), "zima", "task_queued", {"task_id": 9, "module": "inventory", "reason": "asked"})
     assert [e["accion"] for e in c.db.uso_events(0)] == ["repasar_inventario"] * 3 + ["chatear"]
+
+
+def test_the_page_says_what_the_log_holds(tmp_path):
+    c = make(tmp_path, MONDAYS[0])
+    for ts in MONDAYS[:2]:
+        c.db.log(ts, None, "chat", {"persona": "iphone"})
+    c.clock.now = MONDAYS[2]
+    assert c.get("/api/habits/conteo", headers=A).json() == [{"accion": "chatear", "texto": "hablar conmigo", "veces": 2, "dias": 2}]

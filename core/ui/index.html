@@ -743,6 +743,7 @@
         <div class="note" id="hab-status" hidden></div></section>
       <section><h2>Lo que Ashur notó</h2><div class="group" id="hab-list"></div>
         <button type="button" id="hab-refresh" class="link">Volver a contar ahora</button>
+        <div class="note" id="hab-count" hidden></div>
         <div class="note">Cuenta en tu servidor, sin modelo ni Claude: la misma acción el mismo día de la semana en 3 semanas, o en la misma franja de 2 horas o el mismo lugar en 5 días. Corregir guarda tu versión; borrar hace que no vuelva.</div></section>
     </div>
 
@@ -2173,7 +2174,15 @@
       }) : [row({ title: "Todavía no hay hábitos: Ashur necesita verte repetir algo unas semanas." })]);
     } catch (e) { note.hidden = false; note.textContent = "No pude cargar los hábitos."; }
   }
-  document.querySelector('.menu-item[data-page="habitos"]').addEventListener("click", () => loadHabits());
+  async function loadHabitCount() {
+    try {
+      const list = await (await api("api/habits/conteo")).json(), box = $("hab-count");
+      box.hidden = false;
+      box.textContent = list.length ? "En los últimos 60 días Ashur vio: " + list.map((x) => x.texto + " " + x.veces + " veces en " + x.dias + (x.dias === 1 ? " día" : " días")).join(" · ") + "."
+                                    : "En los últimos 60 días Ashur no vio ninguna acción tuya.";
+    } catch (e) {}
+  }
+  document.querySelector('.menu-item[data-page="habitos"]').addEventListener("click", () => { loadHabits(); loadHabitCount(); });
   $("hab-refresh").addEventListener("click", () => loadHabits("api/habits/refrescar"));
 
   // «277 de 771 documentos (36 %)» and «lleva 12 min · faltan ~16 min · 2,1 s por documento · en ryzen9»

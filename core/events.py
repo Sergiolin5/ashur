@@ -87,6 +87,11 @@ def describe(event: str, d: dict) -> str:
         "claude_request_decided": f"pedido #{d.get('id')} de Claude: "
                                   + {"approved": "aprobado", "rejected": "rechazado", "not_done": "no se hizo"}.get(d.get("status"), str(d.get("status")))
                                   + (f" ({d['result']})" if d.get("result") else ""),
+        "encargo_done": f"terminó el encargo #{d.get('id')} ({d.get('docs')} documentos, {d.get('units')} trozos, {d.get('seconds')} s)",
+        "encargo_failed": f"FALLÓ el encargo #{d.get('id')} ({d.get('units')} trozos hechos de {d.get('docs')} documentos)",
+        "encargo_cancelled": f"se canceló el encargo #{d.get('id')}",
+        "encargo_released": f"enviaste a Claude el resultado del encargo #{d.get('id')}",
+        "encargo_kept": f"dejaste en el panel el resultado del encargo #{d.get('id')}",
         "mcp_key": "creaste una clave nueva para el conector de Claude" if d.get("action") == "created"
                    else "revocaste la clave del conector de Claude",
     }.get(event, f"{event} {d}" if d else event)

@@ -25,12 +25,19 @@ MAX_LOCAL_CALLS = 20       # of those, calls to tools that run on the local mode
 # What Claude may ask for (always as a request Sergio approves), with the words the panel and the push show.
 ACTIONS = {"pausar_cola": "pausar la cola", "reanudar_cola": "reanudar la cola", "cancelar_tarea": "cancelar la tarea #{tarea}",
            "subir_tarea": "subir la tarea #{tarea}", "bajar_tarea": "bajar la tarea #{tarea}",
-           "repasar_inventario": "repasar el inventario", "releer_documentos": "releer los documentos"}
+           "repasar_inventario": "repasar el inventario", "releer_documentos": "releer los documentos",
+           "encargo": "lanzar el encargo #{encargo}", "cancelar_encargo": "cancelar el encargo #{encargo}"}
 MAX_PENDING_REQUESTS = 5
 
 
+class _OrUnknown(dict):
+    def __missing__(self, key):
+        return "?"
+
+
 def action_label(action: str, args: dict) -> str:
-    return ACTIONS.get(action, action).format(tarea=(args or {}).get("tarea", "?"))
+    """The action's words with its arguments filled in; an argument that is missing shows as «?»."""
+    return ACTIONS.get(action, action).format_map(_OrUnknown(args or {}))
 
 
 class ToolError(Exception):

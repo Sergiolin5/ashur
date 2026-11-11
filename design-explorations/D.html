@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>D · Consola — Ashur, Estado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* D · Consola: one screen, nothing below the fold on a laptop. Devices become a table that also carries the
+   inventory and, folded under each machine, its disks; the queue and the log live in a right rail. */
+:root{
+  --bg:#141210; --panel:#1D1A17; --panel-2:#26221E; --line:#332E28;
+  --text:#E9E4D8; --muted:#9A938A; --accent:#FF8A3D; --on-accent:#141210;
+  --ok:#7BD389; --warn:#F0B74A; --bad:#FF6B5E; --idle:#6F685F;
+  --sans:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;margin:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* top bar: wordmark, tabs, core line */
+.top{display:flex;align-items:center;gap:24px;padding:0 24px;height:56px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+.mark{font:600 15px var(--mono);letter-spacing:.02em}
+.mark i{font-style:normal;color:var(--accent)}
+.tabs{display:flex;gap:2px;height:100%}
+.tabs button{padding:0 14px;color:var(--muted);font-weight:500;border-bottom:2px solid transparent;transition:color .15s}
+.tabs button:hover{color:var(--text)}
+.tabs button[aria-selected=true]{color:var(--text);border-bottom-color:var(--accent)}
+.core{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted);font:12.5px var(--mono)}
+.core .led{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.flag{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;border:1px solid var(--line);color:var(--text);transition:border-color .15s}
+.flag:hover{border-color:var(--muted)}
+.flag svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+/* figures strip */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line)}
+.kpi{padding:16px 24px;border-right:1px solid var(--line)}
+.kpi:last-child{border-right:0}
+.kpi .k{color:var(--muted);font-size:12.5px}
+.kpi .v{font:500 26px/1.15 var(--mono);margin-top:4px}
+.kpi .v small{font:400 13px var(--sans);color:var(--muted);margin-left:6px}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 380px;min-height:calc(100vh - 56px - 87px)}
+.pane{padding:20px 24px}
+.rail{border-left:1px solid var(--line);background:var(--panel)}
+h2{margin:0 0 12px;font:600 13px var(--mono);color:var(--muted);display:flex;align-items:baseline;gap:10px}
+h2 .c{color:var(--text)}
+
+/* device table */
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{font:500 12px var(--sans);color:var(--muted);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th.r,td.r{text-align:right}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+tbody tr.dev{transition:background-color .15s}
+tbody tr.dev:hover{background:var(--panel)}
+.name{display:flex;align-items:center;gap:10px;font-weight:600}
+.chev{width:20px;height:20px;border-radius:4px;color:var(--muted);display:grid;place-items:center;transition:transform .15s,color .15s}
+.chev:hover{color:var(--text)}
+tr.open .chev{transform:rotate(90deg);color:var(--accent)}
+.os{color:var(--muted);font-weight:400;font-size:12.5px}
+.state{display:inline-flex;align-items:center;gap:7px}
+.state::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--idle)}
+.state.ok{color:var(--ok)}.state.ok::before{background:var(--ok)}
+.state.warn{color:var(--warn)}.state.warn::before{background:var(--warn)}
+.state.off{color:var(--muted)}
+.gauge{display:inline-grid;grid-template-columns:34px 52px;align-items:center;gap:8px;font-family:var(--mono)}
+.gauge i{height:4px;border-radius:2px;background:var(--panel-2);position:relative;overflow:hidden}
+.gauge i::after{content:"";position:absolute;inset:0 auto 0 0;width:calc(var(--v)*1%);background:var(--text);opacity:.75}
+.gauge.hot{color:var(--bad);font-weight:600}.gauge.hot i::after{background:var(--bad);opacity:1}
+.na{color:var(--muted);font-family:var(--mono)}
+.seen{color:var(--muted);font-family:var(--mono);font-size:12.5px}
+
+/* disks folded under a machine */
+tr.disks td{padding:0 10px 14px 40px;background:var(--panel);border-bottom:1px solid var(--line)}
+.dk{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px 16px;align-items:center;padding:10px 0;border-top:1px dashed var(--line)}
+.dk:first-child{border-top:0}
+.dk b{font-weight:500}
+.dk .d{color:var(--muted);font-size:12.5px;white-space:normal}
+.bytes{font:12.5px var(--mono);color:var(--muted)}
+.switch{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.switch span{width:30px;height:18px;border-radius:9px;background:var(--panel-2);border:1px solid var(--line);position:relative;transition:background-color .15s}
+.switch span::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--muted);transition:transform .15s}
+.switch.on{color:var(--text)}
+.switch.on span{background:var(--accent);border-color:var(--accent)}
+.switch.on span::after{transform:translateX(12px);background:var(--on-accent)}
+.disk-foot{display:flex;justify-content:space-between;align-items:center;padding-top:10px;color:var(--muted);font-size:12.5px}
+.ghost{padding:5px 10px;border-radius:6px;border:1px solid var(--line);font-size:12.5px;transition:border-color .15s}
+.ghost:hover{border-color:var(--muted)}
+.foot-note{color:var(--muted);font-size:12.5px;margin-top:12px;max-width:80ch}
+
+/* rail: running, queue, log */
+.run{border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--bg)}
+.run .who{color:var(--muted);font-size:12.5px}
+.run .v{font:500 30px/1.1 var(--mono);margin-top:4px}
+.run .v small{font:400 13px var(--sans);color:var(--muted);margin-left:6px}
+.run .path{font:12px var(--mono);color:var(--muted);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prog{height:3px;background:var(--panel-2);border-radius:2px;margin-top:12px;overflow:hidden}
+.prog i{display:block;width:38%;height:100%;background:var(--accent)}
+ol.queue{list-style:none;margin:12px 0 0;padding:0}
+ol.queue li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+ol.queue .pos{font:12.5px var(--mono);color:var(--muted)}
+ol.queue .t{font-weight:500}
+ol.queue .d{color:var(--muted);font-size:12.5px}
+.qb{display:flex;gap:4px}
+.qb button{min-width:30px;height:30px;padding:0 8px;border-radius:6px;border:1px solid var(--line);font-size:12.5px;transition:border-color .15s,color .15s}
+.qb button:hover{border-color:var(--muted)}
+.qb .x:hover{color:var(--bad);border-color:var(--bad)}
+.hint{color:var(--muted);font-size:12.5px;margin-top:8px}
+.pause{margin-top:12px;width:100%;padding:9px;border-radius:8px;background:var(--panel-2);font-weight:500;border:1px solid var(--line);transition:border-color .15s}
+.pause:hover{border-color:var(--accent)}
+.rail section+section{margin-top:28px}
+.log{font:12.5px/1.5 var(--mono);margin:0;padding:0;list-style:none}
+.log li{display:grid;grid-template-columns:72px 82px minmax(0,1fr);gap:8px;padding:5px 0;border-top:1px solid var(--line)}
+.log .t{color:var(--muted)}
+.log .w{color:var(--accent)}
+.log .w.nucleo{color:var(--muted)}
+
+@media (max-width:980px){
+  .layout{grid-template-columns:1fr}
+  .rail{border-left:0;border-top:1px solid var(--line)}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .kpi:nth-child(2){border-right:0}
+  .kpi:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .hide-s{display:none}
+  .core .txt{display:none}
+  .top{gap:12px;padding:0 14px}
+  .tabs button{padding:0 8px}
+  .pane{padding:16px 14px;overflow-x:auto}
+}
+@media (max-width:980px){.layout{display:flex;flex-direction:column}.rail{order:-1;border-top:0;border-bottom:1px solid var(--line)}}
+@media (max-width:520px){
+  .mark,.os{display:none}
+  th:nth-child(4),tr.dev td:nth-child(4){display:none}          /* RAM stays one tap away, in the machine's row */
+  .gauge{grid-template-columns:auto}.gauge i{display:none}
+  th,td{padding:8px 6px}
+  tr.disks td{padding:0 6px 12px 14px}
+  .dk{grid-template-columns:minmax(0,1fr) auto}.dk .bytes{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="mark">ashur<i>_</i></div>
+  <nav class="tabs" role="tablist" aria-label="Secciones">
+    <button role="tab" aria-selected="false">Ashur</button>
+    <button role="tab" aria-selected="false">Diario</button>
+    <button role="tab" aria-selected="true">Estado</button>
+    <button role="tab" aria-selected="false">Ajustes</button>
+  </nav>
+  <div class="core"><span class="led" aria-hidden="true"></span><span class="txt">Núcleo v0.46.0 · 42 ms</span></div>
+  <button class="flag" aria-label="Anotar un problema o una idea"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></button>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><div class="k">Trabajando ahora</div><div class="v">1<small>tarea</small></div></div>
+  <div class="kpi"><div class="k">En la fila</div><div class="v">2<small>tareas</small></div></div>
+  <div class="kpi"><div class="k">Dispositivos conectados</div><div class="v">3/4</div></div>
+  <div class="kpi"><div class="k">Inventario</div><div class="v">548.093<small>elementos · 2,4 TB</small></div></div>
+</div>
+
+<div class="layout">
+  <div class="pane">
+    <h2>Dispositivos <span class="c">4</span></h2>
+    <table>
+      <thead><tr>
+        <th>Equipo</th><th>Estado</th><th>CPU</th><th>RAM</th><th class="hide-s">GPU</th><th class="hide-s">Bat.</th>
+        <th class="r hide-s">Inventario</th><th class="r">Visto</th>
+      </tr></thead>
+      <tbody>
+        <tr class="dev open">
+          <td><div class="name"><button class="chev" aria-label="Ocultar discos de ryzen9" aria-expanded="true">›</button>ryzen9 <span class="os">Windows</span></div></td>
+          <td><span class="state ok">Disponible</span></td>
+          <td><span class="gauge" style="--v:34">34%<i></i></span></td>
+          <td><span class="gauge" style="--v:61">61%<i></i></span></td>
+          <td class="hide-s"><span class="gauge" style="--v:12">12%<i></i></span></td>
+          <td class="hide-s"><span class="na">—</span></td>
+          <td class="r hide-s num">412.880 · 1,8 TB</td>
+          <td class="r seen">2 s</td>
+        </tr>
+        <tr class="disks"><td colspan="8">
+          <div class="dk"><div><b>Sistema (C:)</b><div class="d">412 GB usados de 931 GB · fijo</div></div><span class="bytes">44 %</span><button class="switch on" role="switch" aria-checked="true"><span></span>Incluido</button></div>
+          <div class="dk"><div><b>Datos (D:)</b><div class="d">1,4 TB usados de 1,8 TB · fijo</div></div><span class="bytes">78 %</span><button class="switch on" role="switch" aria-checked="true"><span></span>Incluido</button></div>
+          <div class="dk"><div><b>Samsung T7</b><div class="d">ausente ahora · 1 TB · externo · 12,4 h conectado en 9 veces</div></div><span class="bytes">—</span><button class="switch" role="switch" aria-checked="false"><span></span>Fuera</button></div>
+          <div class="disk-foot"><span>1.204 ejecutables en el inventario</span><button class="ghost">Renombrar equipo</button></div>
+        </td></tr>
+        <tr class="dev">
+          <td><div class="name"><button class="chev" aria-label="Ver discos de mac-m1" aria-expanded="false">›</button>mac-m1 <span class="os">macOS</span></div></td>
+          <td><span class="state warn">Uso ligero</span></td>
+          <td><span class="gauge hot" style="--v:92">92%<i></i></span></td>
+          <td><span class="gauge" style="--v:78">78%<i></i></span></td>
+          <td class="hide-s"><span class="na">—</span></td>
+          <td class="hide-s"><span class="gauge" style="--v:64">64%<i></i></span></td>
+          <td class="r hide-s num">96.311 · 211 GB</td>
+          <td class="r seen">4 s</td>
+        </tr>
+        <tr class="dev">
+          <td><div class="name"><button class="chev" aria-label="Ver discos de legion-go" aria-expanded="false">›</button>legion-go <span class="os">Windows</span></div></td>
+          <td><span class="state warn">Uso ligero</span></td>
+          <td><span class="gauge" style="--v:8">8%<i></i></span></td>
+          <td><span class="gauge" style="--v:40">40%<i></i></span></td>
+          <td class="hide-s"><span class="na">—</span></td>
+          <td class="hide-s"><span class="na">—</span></td>
+          <td class="r hide-s num">38.902 · 402 GB</td>
+          <td class="r seen">6 s</td>
+        </tr>
+        <tr class="dev">
+          <td><div class="name"><button class="chev" aria-label="Ver discos de zimaboard" aria-expanded="false">›</button>zimaboard <span class="os">Linux</span></div></td>
+          <td><span class="state off">Desconectado</span></td>
+          <td><span class="na">—</span></td><td><span class="na">—</span></td>
+          <td class="hide-s"><span class="na">—</span></td><td class="hide-s"><span class="na">—</span></td>
+          <td class="r hide-s"><span class="na">sin repaso</span></td>
+          <td class="r seen">3 h</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="foot-note">El inventario se repasa solo cada semana, cuando cada equipo está libre y conectado. Un disco <b>incluido</b> se recorre y se anota (nombre y tamaño, sin cambiar ni borrar nada); <b>fuera</b> lo salta, y es lo que pasa por defecto. Toca el nombre de un disco para renombrarlo.</p>
+  </div>
+
+  <aside class="rail pane">
+    <section>
+      <h2>Trabajando ahora</h2>
+      <div class="run">
+        <div class="who">Inventario en ryzen9, 4 min</div>
+        <div class="v">128.430<small>elementos</small></div>
+        <div class="path">D:\Proyectos\clientes\2026\entregas</div>
+        <div class="prog" aria-hidden="true"><i></i></div>
+      </div>
+    </section>
+    <section>
+      <h2>En la fila <span class="c">2</span></h2>
+      <ol class="queue">
+        <li><span class="pos">1</span><div><div class="t">Lectura de documentos</div><div class="d">en mac-m1</div></div>
+          <div class="qb"><button aria-label="Bajar">↓</button><button class="x" aria-label="Cancelar esta tarea">Cancelar</button></div></li>
+        <li><span class="pos">2</span><div><div class="t">Inventario</div><div class="d">en cualquier equipo libre</div></div>
+          <div class="qb"><button aria-label="Subir">↑</button><button class="x" aria-label="Cancelar esta tarea">Cancelar</button></div></li>
+      </ol>
+      <div class="hint">Las pesadas empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.</div>
+      <button class="pause">Pausar la cola</button>
+    </section>
+    <section>
+      <h2>Actividad reciente</h2>
+      <ul class="log">
+        <li><span class="t">09:12</span><span class="w">ryzen9</span><span>Empezó inventario</span></li>
+        <li><span class="t">09:05</span><span class="w">mac-m1</span><span>Pasó a uso ligero</span></li>
+        <li><span class="t">08:58</span><span class="w nucleo">Núcleo</span><span>Nueva tarea: lectura de documentos</span></li>
+        <li><span class="t">08:41</span><span class="w">legion-go</span><span>Terminó: transcripción de voz</span></li>
+        <li><span class="t">08:30</span><span class="w nucleo">Núcleo</span><span>Te mandó un aviso</span></li>
+      </ul>
+    </section>
+  </aside>
+</div>
+</body>
+</html>

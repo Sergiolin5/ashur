@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>A · Índigo compacto — Ashur, Estado</title>
+<style>
+:root{
+--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:20px;--s6:24px;
+--font-body:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+--white:#FFFFFF;
+
+ --bg:#F7F7FA;--surface:#FFFFFF;--text:#1A1A24;--muted:#62627A;--muted-dot:#A3A3B5;
+ --border:#DCDCE5;--rule:#ECECF2;--track:#ECECF2;--quiet:#ECECF2;--quiet-hover:#DCDCE5;--nav-on:#ECECF2;
+ --accent:#5856D6;--accent-deep:#2E2C82;--accent-soft:#E4E3FA;--accent-ink:#3B38A6;
+ --font-head:var(--font-body);--font-num:var(--font-body);
+ --fs-body:14px;--fs-small:13px;--fs-meta:12px;--fs-h1:22px;--fs-h2:12px;--fs-count:26px;
+ --h1-weight:700;--h1-track:-.01em;--h2-weight:600;--h2-track:0;--h2-color:#62627A;
+ --pad:14px;--rowh:36px;--rowpad:7px;--sec:20px;--gap:16px;--tile:230px;--tilegap:8px;--r-control:8px;
+ --float:0 4px 14px rgba(26,26,36,.12);
+}
+.group{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.row+.row{border-top:1px solid var(--rule)}
+.devices .row{background:var(--surface);border:1px solid var(--border)!important;border-radius:8px}
+header{padding-top:16px}
+
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font:var(--fs-body)/1.4 var(--font-body);-webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer;border:0;margin:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+main{max-width:1180px;margin:0 auto;padding:var(--s5) var(--pad) 64px}
+h1{margin:0;font:var(--h1-weight) var(--fs-h1)/1.1 var(--font-head);letter-spacing:var(--h1-track)}
+.greet{color:var(--muted);font-size:var(--fs-small);margin-top:2px}
+.subtitle{color:var(--muted);font-size:var(--fs-small);margin-top:4px;font-variant-numeric:tabular-nums}
+.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:6px;vertical-align:1px}
+header{padding:var(--s6) 0 var(--s3)}
+section{margin-top:var(--sec)}
+h2{margin:0 0 var(--s2) 2px;font:var(--h2-weight) var(--fs-h2)/1.3 var(--font-head);color:var(--h2-color);letter-spacing:var(--h2-track)}
+.row{display:flex;align-items:center;gap:var(--s3);min-height:var(--rowh);padding:var(--rowpad) var(--pad);position:relative}
+.main{flex:1;min-width:0}
+.title{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail{color:var(--muted);font-size:var(--fs-small);margin-top:1px;overflow:hidden;text-overflow:ellipsis}
+.value{color:var(--muted);font-size:var(--fs-small);white-space:nowrap;font-variant-numeric:tabular-nums;font-family:var(--font-num)}
+.note{margin:var(--s2) 2px 0;color:var(--muted);font-size:var(--fs-meta);line-height:1.45;max-width:72ch}
+.note b{color:var(--text);font-weight:600}
+/* status in brand colours only: filled = disponible, ring = uso ligero, grey = desconectado; the words say it too */
+.dot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--muted-dot)}
+.dot.full{background:var(--accent)}
+.dot.light{background:transparent;box-shadow:inset 0 0 0 2px var(--accent)}
+.dot.offline{background:transparent;box-shadow:inset 0 0 0 2px var(--muted-dot)}
+.dot.off{background:transparent;box-shadow:inset 0 0 0 2px var(--muted-dot)}
+.dot-gap{width:10px;flex:none}
+.work{padding:var(--s4) var(--pad)}
+.who{color:var(--muted);font-size:var(--fs-small)}
+.count{font:600 var(--fs-count)/1.1 var(--font-num);letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums}
+.count small{font:400 var(--fs-body) var(--font-body);color:var(--muted);letter-spacing:0}
+.folder{color:var(--muted);font-size:var(--fs-meta);margin-top:6px;font-family:var(--font-num);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{height:4px;border-radius:2px;background:var(--track);overflow:hidden;margin-top:var(--s3)}
+.bar i{display:block;height:100%;width:38%;border-radius:2px;background:var(--accent)}
+.queue{margin-top:var(--s2)}
+.qbtns{display:flex;gap:6px;flex:none}
+.tog{padding:6px 12px;border-radius:999px;font-size:var(--fs-small);font-weight:500;background:var(--quiet);color:var(--text);transition:background-color .15s,color .15s}
+.tog:hover{background:var(--quiet-hover)}
+.tog.on{background:var(--accent-soft);color:var(--accent-ink)}
+.tog.pause{margin-top:var(--s3)}
+.meters{display:flex;flex-wrap:wrap;gap:var(--s3);margin-top:var(--s2);font-size:var(--fs-meta);color:var(--muted);font-variant-numeric:tabular-nums;font-family:var(--font-num)}
+.meter{position:relative;padding-bottom:6px;flex:1 1 auto;min-width:max-content}
+.meter::before,.meter::after{content:"";position:absolute;left:0;bottom:0;height:3px;border-radius:2px}
+.meter::before{right:0;background:var(--track)}
+.meter::after{width:calc(var(--v,0)*1%);background:var(--accent)}
+.meter.hot{color:var(--text);font-weight:700}
+.meter.hot::after{background:var(--accent-deep)}
+.dhead{display:flex;align-items:center;justify-content:space-between;margin:var(--s4) 2px 6px;font:600 var(--fs-small) var(--font-body);color:var(--muted)}
+.pen{padding:2px 10px;border-radius:999px;font-size:var(--fs-meta);background:var(--quiet);color:var(--muted)}
+.pen:hover{background:var(--quiet-hover);color:var(--text)}
+.row.disk .detail{white-space:normal}
+.activity .row{min-height:0}
+.activity .title{font-weight:400;font-size:var(--fs-small)}
+.activity .detail{font-size:var(--fs-meta)}
+.notefab{position:fixed;top:20px;right:16px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--surface);color:var(--text);box-shadow:var(--float)}
+.notefab svg,.ti{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+/* tabs: segmented on the phone, a sidebar from 900px; same four, same order */
+.seg{position:sticky;top:10px;z-index:5;display:flex;max-width:520px;margin:10px auto 0;padding:3px;border-radius:var(--r-control);background:var(--quiet)}
+.seg button{flex:1;padding:8px 0;border-radius:calc(var(--r-control) - 3px);background:none;color:var(--muted);font-size:var(--fs-small);font-weight:500;display:flex;justify-content:center;gap:8px;align-items:center;transition:color .15s,background-color .15s}
+.seg button:hover{color:var(--text)}
+.seg button[aria-selected=true]{background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(32,31,92,.12)}
+.seg .ti{display:none}
+@media (min-width:880px){#dashboard{display:grid;grid-template-columns:1fr 1fr;column-gap:var(--gap);align-items:start}.s-work,.s-dev{grid-column:1/-1}}
+@media (min-width:900px){
+ main{padding-left:calc(232px + 32px + var(--pad))}
+ .seg{position:fixed;top:32px;left:max(16px,calc((100vw - 1180px)/2 + 16px));width:232px;margin:0;max-width:none;flex-direction:column;gap:2px;padding:0;background:none}
+ .seg button{flex:none;justify-content:flex-start;height:40px;padding:0 12px;font-size:15px}
+ .seg .ti{display:block}
+ .seg button[aria-selected=true]{box-shadow:none;background:var(--nav-on)}
+ .seg button[aria-selected=true] .ti{color:var(--accent)}
+}
+.devices{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,var(--tile)),1fr));gap:var(--tilegap);background:none!important;border:0!important;box-shadow:none!important;border-radius:0!important}
+.devices .row{align-items:flex-start;padding:var(--s4) var(--pad)}
+.devices .dot{margin-top:6px}
+.devices .detail{white-space:normal}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <main>
+    <header>
+      <h1>Ashur</h1>
+      <div class="greet">Buenos días</div>
+      <div class="subtitle"><span class="live" aria-hidden="true"></span>Núcleo v0.46.0 &nbsp;·&nbsp; 3 dispositivos conectados &nbsp;·&nbsp; 42 ms</div>
+    </header>
+    <nav class="seg" role="tablist" aria-label="Secciones">
+      <button type="button" role="tab" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Ashur</span></button>
+      <button type="button" role="tab" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/></svg><span>Diario</span></button>
+      <button type="button" role="tab" aria-selected="true"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg><span>Estado</span></button>
+      <button type="button" role="tab" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>Ajustes</span></button>
+    </nav>
+
+    <div id="dashboard">
+      <section class="s-work">
+        <h2>Trabajando ahora</h2>
+        <div class="group"><div class="work">
+          <div class="who">Inventario en ryzen9, 4 min</div>
+          <div class="count">128.430 <small>elementos</small></div>
+          <div class="folder">D:\Proyectos\clientes\2026\entregas</div>
+          <div class="bar" aria-hidden="true"><i></i></div>
+        </div></div>
+        <div class="note">Las pesadas empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.</div>
+        <div class="group queue">
+          <div class="row"><div class="main"><div class="title">Lectura de documentos</div><div class="detail">en mac-m1 · 1º en la fila</div></div><div class="qbtns"><button type="button" class="tog" aria-label="Bajar">↓</button><button type="button" class="tog" aria-label="Cancelar esta tarea">Cancelar</button></div></div>
+          <div class="row"><div class="main"><div class="title">Inventario</div><div class="detail">en cualquier equipo libre · 2º en la fila</div></div><div class="qbtns"><button type="button" class="tog" aria-label="Subir">↑</button><button type="button" class="tog" aria-label="Cancelar esta tarea">Cancelar</button></div></div>
+        </div>
+        <button type="button" class="tog pause">Pausar la cola</button>
+      </section>
+
+      <section class="s-dev">
+        <h2>Dispositivos</h2>
+        <div class="group devices">
+        <div class="row dev"><span class="dot full" aria-hidden="true"></span>
+          <div class="main"><div class="title">ryzen9</div><div class="detail">Windows, disponible, v0.46.0</div><div class="meters"><span class="meter" style="--v:34">CPU 34%</span><span class="meter" style="--v:61">RAM 61%</span><span class="meter" style="--v:12">GPU 12%</span></div></div>
+          <div class="value">hace 2 s</div></div>
+        <div class="row dev"><span class="dot light" aria-hidden="true"></span>
+          <div class="main"><div class="title">mac-m1</div><div class="detail">macOS, uso ligero, v0.46.0 · en batería</div><div class="meters"><span class="meter hot" style="--v:92">CPU 92%</span><span class="meter" style="--v:78">RAM 78%</span><span class="meter none">GPU sin dato</span><span class="meter" style="--v:64">Bat. 64%</span></div></div>
+          <div class="value">hace 4 s</div></div>
+        <div class="row dev"><span class="dot light" aria-hidden="true"></span>
+          <div class="main"><div class="title">legion-go</div><div class="detail">Windows, uso ligero, v0.46.0</div><div class="meters"><span class="meter" style="--v:8">CPU 8%</span><span class="meter" style="--v:40">RAM 40%</span><span class="meter none">GPU sin dato</span></div></div>
+          <div class="value">hace 6 s</div></div>
+        <div class="row dev"><span class="dot offline" aria-hidden="true"></span>
+          <div class="main"><div class="title">zimaboard</div><div class="detail">Linux, desconectado</div></div>
+          <div class="value">hace 3 h</div></div>
+        </div>
+      </section>
+
+      <section class="s-inv">
+        <h2>Inventario</h2>
+        <div class="group">
+          <div class="row"><div class="main"><div class="title">ryzen9</div><div class="detail">412.880 elementos, 1.204 ejecutables</div></div><div class="value">1,8 TB</div></div>
+          <div class="row"><div class="main"><div class="title">mac-m1</div><div class="detail">96.311 elementos, 233 ejecutables</div></div><div class="value">211 GB</div></div>
+          <div class="row"><div class="main"><div class="title">legion-go</div><div class="detail">38.902 elementos, 517 ejecutables</div></div><div class="value">402 GB</div></div>
+        </div>
+        <div class="note">Se repasa solo cada semana, cuando cada equipo está libre y conectado.</div>
+      </section>
+
+      <section class="s-disk">
+        <h2>Discos</h2>
+        <h3 class="dhead"><span class="nm">ryzen9 · 3 discos</span><button type="button" class="pen">Renombrar</button></h3>
+        <div class="group">
+          <div class="row disk"><span class="dot full" aria-hidden="true"></span><div class="main"><div class="title">Sistema (C:)</div><div class="detail">412 GB usados de 931 GB · fijo</div></div><button type="button" class="tog on">Incluido</button></div>
+          <div class="row disk"><span class="dot full" aria-hidden="true"></span><div class="main"><div class="title">Datos (D:)</div><div class="detail">1,4 TB usados de 1,8 TB · fijo</div></div><button type="button" class="tog on">Incluido</button></div>
+          <div class="row disk"><span class="dot-gap" aria-hidden="true"></span><div class="main"><div class="title">Samsung T7</div><div class="detail">ausente ahora · 1 TB · externo · 12,4 h conectado en 9 veces</div></div><button type="button" class="tog">Fuera</button></div>
+        </div>
+        <h3 class="dhead"><span class="nm">mac-m1 · 1 disco</span><button type="button" class="pen">Renombrar</button></h3>
+        <div class="group">
+          <div class="row disk"><span class="dot full" aria-hidden="true"></span><div class="main"><div class="title">Macintosh HD</div><div class="detail">211 GB usados de 494 GB · fijo</div></div><button type="button" class="tog on">Incluido</button></div>
+        </div>
+        <div class="note"><b>Incluido</b>: el inventario recorre ese disco y anota el nombre y el tamaño de sus archivos (no cambia ni borra nada). <b>Fuera</b>: lo salta (es lo que pasa por defecto: ningún disco se escanea hasta que lo enciendas). «Renombrar» cambia el nombre del equipo; toca el nombre de un disco para cambiar el suyo.</div>
+      </section>
+
+      <section class="s-act">
+        <h2>Actividad reciente</h2>
+        <div class="group activity">
+          <div class="row"><div class="main"><div class="title">Empezó inventario</div><div class="detail">ryzen9 · 9:12 a. m.</div></div></div>
+          <div class="row"><div class="main"><div class="title">Pasó a uso ligero</div><div class="detail">mac-m1 · 9:05 a. m.</div></div></div>
+          <div class="row"><div class="main"><div class="title">Nueva tarea: lectura de documentos</div><div class="detail">Núcleo · 8:58 a. m.</div></div></div>
+          <div class="row"><div class="main"><div class="title">Terminó: transcripción de voz</div><div class="detail">legion-go · 8:41 a. m.</div></div></div>
+          <div class="row"><div class="main"><div class="title">Te mandó un aviso</div><div class="detail">Núcleo · 8:30 a. m.</div></div></div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <button type="button" class="notefab" aria-label="Anotar un problema o una idea"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></button>
+</div>
+</body>
+</html>

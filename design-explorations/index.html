@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ashur · Estado — 5 direcciones</title>
+<style>
+:root{--bg:#F5F5F7;--card:#FFFFFF;--text:#16161D;--muted:#5C5C6B;--line:#E2E2E8;--accent:#3B38A6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+header{padding:28px 28px 8px;display:flex;flex-wrap:wrap;align-items:end;gap:16px 32px}
+h1{margin:0;font-size:24px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:4px 0 0;max-width:70ch}
+.view{margin-left:auto;display:inline-flex;padding:3px;border-radius:10px;background:#E8E8EE}
+.view button{font:inherit;font-size:14px;font-weight:500;border:0;background:none;color:var(--muted);padding:7px 14px;border-radius:8px;cursor:pointer}
+.view button[aria-pressed=true]{background:#FFFFFF;color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.view button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.strip{display:flex;gap:20px;overflow-x:auto;padding:16px 28px 36px;scroll-snap-type:x mandatory}
+.card{flex:none;width:var(--cw,600px);background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;scroll-snap-align:start;display:flex;flex-direction:column}
+.meta{padding:16px 18px 14px;border-bottom:1px solid var(--line)}
+.top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.name{font-size:18px;font-weight:650}
+.type{font-size:12.5px;font-weight:600;padding:2px 9px;border-radius:999px}
+.type.r{background:#E4E3FA;color:#2E2C82}
+.type.l{background:#FCE8DD;color:#7A3216}
+.open{margin-left:auto;font-size:14px;color:var(--accent);font-weight:500}
+.sw{display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:10px}
+.sw span{display:inline-flex;align-items:center;gap:5px;font:12px ui-monospace,Menlo,monospace;color:var(--muted)}
+.sw i{width:14px;height:14px;border-radius:4px;border:1px solid rgba(0,0,0,.12);background:var(--c)}
+.fonts{margin-top:8px;font-size:13.5px;color:var(--muted)}
+.fonts b{color:var(--text);font-weight:600}
+.why,.risk{margin:8px 0 0;font-size:14px}
+.why b,.risk b{font-weight:600}
+.risk b{color:#8A2A1E}
+.frame{position:relative;height:var(--fh,760px);overflow:hidden;background:#EEE}
+.frame iframe{border:0;position:absolute;top:0;left:0;transform-origin:0 0;width:var(--iw,1200px);height:calc(var(--fh,760px) / var(--sc,.5));transform:scale(var(--sc,.5))}
+body.phone{--iw:390px;--sc:1;--cw:420px}
+body.phone .frame iframe{left:14px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Ashur · Estado — 5 direcciones</h1>
+    <p class="sub">A–C respetan el índigo de marca (#5856D6, el del ícono y el manifest), la estructura y la navegación actuales. D–E reestructuran la pantalla entera. Todas usan el contenido real de Estado.</p>
+  </div>
+  <div class="view" role="group" aria-label="Tamaño de la vista previa">
+    <button type="button" aria-pressed="true" data-v="desk">Escritorio</button>
+    <button type="button" aria-pressed="false" data-v="phone">Teléfono</button>
+  </div>
+</header>
+
+<div class="strip">
+
+  <article class="card">
+    <div class="meta">
+      <div class="top"><span class="name">A · Índigo compacto</span><span class="type r">Restringida</span><a class="open" href="A.html" target="_blank" rel="noopener">Abrir ↗</a></div>
+      <div class="sw"><span><i style="--c:#5856D6"></i>#5856D6</span><span><i style="--c:#3B38A6"></i>#3B38A6</span><span><i style="--c:#2E2C82"></i>#2E2C82</span><span><i style="--c:#E4E3FA"></i>#E4E3FA</span><span><i style="--c:#F7F7FA"></i>#F7F7FA</span><span><i style="--c:#DCDCE5"></i>#DCDCE5</span><span><i style="--c:#62627A"></i>#62627A</span><span><i style="--c:#1A1A24"></i>#1A1A24</span></div>
+      <div class="fonts"><b>Fuentes:</b> sans del sistema (SF Pro / Segoe UI), una sola familia</div>
+      <p class="why"><b>Por qué funciona:</b> la más densa (filas de 36px, texto de 14px), con la cola y los cuatro equipos visibles sin hacer scroll en un portátil. Se implementa hoy, sin tocar la CSP.</p>
+      <p class="risk"><b>Riesgo:</b> en el teléfono los toques quedan justos y puede sentirse como una hoja de cálculo; habría que subir el alto de fila bajo 600px.</p>
+    </div>
+    <div class="frame"><iframe src="A.html" title="Dirección A" loading="lazy"></iframe></div>
+  </article>
+
+  <article class="card">
+    <div class="meta">
+      <div class="top"><span class="name">B · Plano índigo</span><span class="type r">Restringida</span><a class="open" href="B.html" target="_blank" rel="noopener">Abrir ↗</a></div>
+      <div class="sw"><span><i style="--c:#4845C2"></i>#4845C2</span><span><i style="--c:#201F5C"></i>#201F5C</span><span><i style="--c:#A3A1EB"></i>#A3A1EB</span><span><i style="--c:#C9C8F4"></i>#C9C8F4</span><span><i style="--c:#E4E3FA"></i>#E4E3FA</span><span><i style="--c:#F1F1FC"></i>#F1F1FC</span><span><i style="--c:#5A5A70"></i>#5A5A70</span><span><i style="--c:#1A1A24"></i>#1A1A24</span></div>
+      <div class="fonts"><b>Fuentes:</b> sans del sistema + monoespaciada del sistema (SF Mono) para cifras</div>
+      <p class="why"><b>Por qué funciona:</b> la marca está en toda la pantalla (fondo tintado, el panel oscuro de lo que corre), y las cifras en mono se alinean como instrumentos.</p>
+      <p class="risk"><b>Riesgo:</b> tanto índigo le resta fuerza a lo seleccionado, y el panel oscuro pesa aunque no esté pasando nada importante.</p>
+    </div>
+    <div class="frame"><iframe src="B.html" title="Dirección B" loading="lazy"></iframe></div>
+  </article>
+
+  <article class="card">
+    <div class="meta">
+      <div class="top"><span class="name">C · Índigo aireado</span><span class="type r">Restringida</span><a class="open" href="C.html" target="_blank" rel="noopener">Abrir ↗</a></div>
+      <div class="sw"><span><i style="--c:#5856D6"></i>#5856D6</span><span><i style="--c:#3B38A6"></i>#3B38A6</span><span><i style="--c:#2E2C82"></i>#2E2C82</span><span><i style="--c:#F1F1FC"></i>#F1F1FC</span><span><i style="--c:#F7F7FA"></i>#F7F7FA</span><span><i style="--c:#ECECF2"></i>#ECECF2</span><span><i style="--c:#62627A"></i>#62627A</span><span><i style="--c:#1A1A24"></i>#1A1A24</span></div>
+      <div class="fonts"><b>Fuentes:</b> serif del sistema (New York / Georgia) en títulos + sans del sistema</div>
+      <p class="why"><b>Por qué funciona:</b> la más cómoda de leer en el teléfono; los títulos en serif le dan identidad a Ashur sin cargar una fuente web.</p>
+      <p class="risk"><b>Riesgo:</b> la menos densa: en el portátil Estado pide scroll, y las sombras suaves rozan lo genérico de SaaS.</p>
+    </div>
+    <div class="frame"><iframe src="C.html" title="Dirección C" loading="lazy"></iframe></div>
+  </article>
+
+  <article class="card">
+    <div class="meta">
+      <div class="top"><span class="name">D · Consola</span><span class="type l">Libre</span><a class="open" href="D.html" target="_blank" rel="noopener">Abrir ↗</a></div>
+      <div class="sw"><span><i style="--c:#141210"></i>#141210</span><span><i style="--c:#1D1A17"></i>#1D1A17</span><span><i style="--c:#332E28"></i>#332E28</span><span><i style="--c:#E9E4D8"></i>#E9E4D8</span><span><i style="--c:#9A938A"></i>#9A938A</span><span><i style="--c:#FF8A3D"></i>#FF8A3D</span><span><i style="--c:#7BD389"></i>#7BD389</span><span><i style="--c:#F0B74A"></i>#F0B74A</span><span><i style="--c:#FF6B5E"></i>#FF6B5E</span></div>
+      <div class="fonts"><b>Fuentes:</b> IBM Plex Sans + IBM Plex Mono</div>
+      <p class="why"><b>Por qué funciona:</b> todo en una pantalla: cifras arriba, una tabla que compara equipos por columna con inventario y discos dentro de cada equipo, y la cola y el registro en un riel.</p>
+      <p class="risk"><b>Riesgo:</b> solo oscuro, y las fuentes habría que servirlas desde el núcleo (CSP). En el teléfono la tabla pierde columnas (RAM se oculta).</p>
+    </div>
+    <div class="frame"><iframe src="D.html" title="Dirección D" loading="lazy"></iframe></div>
+  </article>
+
+  <article class="card">
+    <div class="meta">
+      <div class="top"><span class="name">E · Hoy</span><span class="type l">Libre</span><a class="open" href="E.html" target="_blank" rel="noopener">Abrir ↗</a></div>
+      <div class="sw"><span><i style="--c:#F4EFE6"></i>#F4EFE6</span><span><i style="--c:#FBF8F2"></i>#FBF8F2</span><span><i style="--c:#1F1B16"></i>#1F1B16</span><span><i style="--c:#6B6256"></i>#6B6256</span><span><i style="--c:#E2D9CA"></i>#E2D9CA</span><span><i style="--c:#B4532A"></i>#B4532A</span><span><i style="--c:#8A3A1E"></i>#8A3A1E</span><span><i style="--c:#4F6B3A"></i>#4F6B3A</span><span><i style="--c:#7A5300"></i>#7A5300</span></div>
+      <div class="fonts"><b>Fuentes:</b> Fraunces (títulos y cifras) + Geist</div>
+      <p class="why"><b>Por qué funciona:</b> responde «¿va todo bien?» con una frase; pensada para el teléfono, con las pestañas abajo al alcance del pulgar, y los discos detrás de un toque en cada equipo.</p>
+      <p class="risk"><b>Riesgo:</b> la frase hay que generarla para cada estado (código y redacción), comparar equipos por número es más lento, y es la que más se aleja del resto de la app.</p>
+    </div>
+    <div class="frame"><iframe src="E.html" title="Dirección E" loading="lazy"></iframe></div>
+  </article>
+
+</div>
+<script>
+  document.querySelectorAll(".view button").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll(".view button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    document.body.classList.toggle("phone", b.dataset.v === "phone");
+  }));
+</script>
+</body>
+</html>

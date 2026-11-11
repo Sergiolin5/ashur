@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>F · Consola de bolsillo — Ashur, Estado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* F · Consola de bolsillo — D's instruments (figures strip, mono numbers, gauges, log, signal orange) laid out
+   E's way (phone first, tabs under the thumb, machines as cards with their disks behind a tap).
+   Light: E's paper and terracotta. Dark: D's graphite and orange. Same hue family, so one app in both. */
+:root{
+  --bg:#F4EFE6; --panel:#FBF8F2; --panel-2:#EDE6DA; --line:#E2D9CA;
+  --text:#1F1B16; --muted:#6B6256; --accent:#8A3A1E; --accent-fill:#B4532A; --on-accent:#FFFFFF;
+  --ok:#4F6B3A; --warn:#7A5300; --bad:#A0342E; --idle:#8B8378; --bar:#1F1B16;
+  --sans:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme=light]){
+  --bg:#141210; --panel:#1D1A17; --panel-2:#26221E; --line:#332E28;
+  --text:#E9E4D8; --muted:#9A938A; --accent:#FF8A3D; --accent-fill:#FF8A3D; --on-accent:#141210;
+  --ok:#7BD389; --warn:#F0B74A; --bad:#FF6B5E; --idle:#6F685F; --bar:#E9E4D8; color-scheme:dark; } }
+:root[data-theme=dark]{
+  --bg:#141210; --panel:#1D1A17; --panel-2:#26221E; --line:#332E28;
+  --text:#E9E4D8; --muted:#9A938A; --accent:#FF8A3D; --accent-fill:#FF8A3D; --on-accent:#141210;
+  --ok:#7BD389; --warn:#F0B74A; --bad:#FF6B5E; --idle:#6F685F; --bar:#E9E4D8; color-scheme:dark; }
+
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font:15px/1.45 var(--sans);-webkit-font-smoothing:antialiased;padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+button{font:inherit;color:inherit;background:none;border:0;margin:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* mockup chrome, not part of the design */
+.preview{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 14px;font:12.5px var(--sans);color:#E9E4D8;background:#3A2F7A}
+.preview b{font-weight:600;margin-right:4px}
+.preview button{padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.35);color:#FFFFFF}
+.preview button[aria-pressed=true]{background:#FFFFFF;color:#2A2160;border-color:#FFFFFF}
+.preview .sep{width:1px;height:16px;background:rgba(255,255,255,.3)}
+
+/* parts that need script changes, shown only when asked */
+.js-mark .kpis{overflow:visible}
+.js-mark .needs-js{outline:2px dashed #7A5CFF;outline-offset:3px;border-radius:10px;position:relative}
+.js-mark .needs-js::after{content:attr(data-js);position:absolute;top:-11px;right:8px;z-index:3;font:600 11px/1 var(--sans);color:#FFFFFF;background:#5B3FE0;padding:4px 7px;border-radius:999px;white-space:nowrap}
+
+/* top bar */
+.top{display:flex;align-items:center;gap:12px;padding:14px 16px 10px}
+.mark{font:600 16px var(--mono)}
+.mark i{font-style:normal;color:var(--accent)}
+.core{display:flex;align-items:center;gap:7px;color:var(--muted);font:12.5px var(--mono);min-width:0}
+.core span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.led{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+.flag{margin-left:auto;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;border:1px solid var(--line);background:var(--panel);flex:none;transition:border-color .15s}
+.flag:hover{border-color:var(--muted)}
+svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.greet{padding:0 16px;color:var(--muted);font-size:14px}
+
+/* figures */
+.kpis{display:grid;grid-template-columns:1fr 1fr;margin:12px 16px 0;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}
+.kpi{padding:12px 14px}
+.kpi:nth-child(odd){border-right:1px solid var(--line)}
+.kpi:nth-child(-n+2){border-bottom:1px solid var(--line)}
+.kpi .k{color:var(--muted);font-size:12.5px}
+.kpi .v{font:500 24px/1.15 var(--mono);margin-top:2px}
+.kpi .v small{font:400 12.5px var(--sans);color:var(--muted);margin-left:5px}
+
+/* sections */
+.layout{display:grid;grid-template-columns:1fr;grid-template-areas:"work" "queue" "devices" "log";gap:28px;padding:24px 16px 8px}
+.a-work{grid-area:work}.a-queue{grid-area:queue}.a-dev{grid-area:devices}.a-log{grid-area:log}
+h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--muted);display:flex;align-items:baseline;gap:8px}
+h2 .c{color:var(--text)}
+.note{color:var(--muted);font-size:13px;margin:10px 2px 0;line-height:1.45}
+.note b{color:var(--text);font-weight:600}
+
+.run{border:1px solid var(--line);border-radius:14px;padding:14px;background:var(--panel)}
+.run .who{color:var(--muted);font-size:13px}
+.run .v{font:500 30px/1.1 var(--mono);margin-top:4px}
+.run .v small{font:400 13px var(--sans);color:var(--muted);margin-left:6px}
+.run .path{font:12px var(--mono);color:var(--muted);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prog{height:4px;background:var(--panel-2);border-radius:2px;margin-top:12px;overflow:hidden}
+.prog i{display:block;width:38%;height:100%;background:var(--accent-fill)}
+
+ol.next{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}
+ol.next li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:center;padding:12px 14px}
+ol.next li+li{border-top:1px solid var(--line)}
+.pos{font:500 15px var(--mono);color:var(--accent)}
+.t{font-weight:500}
+.d{color:var(--muted);font-size:13px}
+.qb{display:flex;gap:6px}
+.qb button{min-width:40px;height:40px;padding:0 12px;border-radius:12px;border:1px solid var(--line);font-size:14px;transition:border-color .15s,color .15s}
+.qb button:hover{border-color:var(--muted)}
+.qb .x:hover{color:var(--bad);border-color:var(--bad)}
+.pause{margin-top:12px;width:100%;height:46px;border-radius:12px;background:var(--text);color:var(--bg);font-weight:600;transition:opacity .15s}
+.pause:hover{opacity:.88}
+
+/* machines */
+.machine{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px}
+.machine+.machine{margin-top:10px}
+.mtop{display:flex;align-items:center;gap:10px}
+.mname{font:600 16px var(--mono)}
+.os{color:var(--muted);font-size:13px}
+.seen{margin-left:auto;color:var(--muted);font:12.5px var(--mono)}
+.state{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;margin-top:4px}
+.state::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--idle)}
+.state.ok{color:var(--ok)}.state.ok::before{background:var(--ok)}
+.state.warn{color:var(--warn)}.state.warn::before{background:var(--warn)}
+.state.off{color:var(--muted)}
+.state small{font-weight:400;color:var(--muted)}
+.gauges{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;margin-top:12px}
+.g{font:13px var(--mono);color:var(--muted)}
+.g .row{display:flex;justify-content:space-between}
+.g b{font-weight:500;color:var(--text)}
+.g i{display:block;height:4px;border-radius:2px;background:var(--panel-2);margin-top:5px;position:relative;overflow:hidden}
+.g i::after{content:"";position:absolute;inset:0 auto 0 0;width:calc(var(--v)*1%);background:var(--bar);opacity:.7}
+.g.hot,.g.hot b{color:var(--bad);font-weight:600}
+.g.hot i::after{background:var(--bad);opacity:1}
+.g.na b{color:var(--muted);font-weight:400}
+.inv{margin-top:12px;font:13px var(--mono);color:var(--muted)}
+details{margin-top:12px;border-top:1px solid var(--line)}
+summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;min-height:44px;font-weight:500;font-size:14px}
+summary::-webkit-details-marker{display:none}
+summary .chev{color:var(--muted);transition:transform .15s}
+details[open] summary .chev{transform:rotate(90deg);color:var(--accent)}
+summary .cnt{color:var(--muted);font-weight:400}
+.dk{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px dashed var(--line)}
+.dk .n{font-weight:500}
+.switch{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);min-height:40px}
+.switch span{width:36px;height:22px;border-radius:11px;background:var(--panel-2);border:1px solid var(--line);position:relative;transition:background-color .15s}
+.switch span::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--idle);transition:transform .15s}
+.switch.on{color:var(--text)}
+.switch.on span{background:var(--accent-fill);border-color:var(--accent-fill)}
+.switch.on span::after{transform:translateX(14px);background:var(--on-accent)}
+.dfoot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding-top:6px;color:var(--muted);font-size:12.5px}
+.ghost{height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--line);font-size:13px;color:var(--text);transition:border-color .15s}
+.ghost:hover{border-color:var(--muted)}
+
+/* log */
+.log{list-style:none;margin:0;padding:0;font:13px/1.5 var(--mono)}
+.log li{display:grid;grid-template-columns:50px minmax(0,1fr);gap:4px 10px;padding:8px 0;border-top:1px solid var(--line)}
+.log .t{color:var(--muted);grid-row:span 2}
+.log .w{color:var(--accent);font-size:12.5px}
+.log .w.nucleo{color:var(--muted)}
+.log .e{font-family:var(--sans);font-size:14px}
+
+/* tabs: under the thumb on the phone, in the top bar on wide screens */
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:10;display:flex;justify-content:space-around;padding:6px 8px calc(6px + env(safe-area-inset-bottom));
+        background:var(--panel);border-top:1px solid var(--line)}
+.tabbar button{flex:1;max-width:110px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;font-size:11.5px;color:var(--muted);border-radius:10px;transition:color .15s}
+.tabbar button:hover{color:var(--text)}
+.tabbar button[aria-selected=true]{color:var(--accent);font-weight:600}
+
+@media (min-width:900px){
+  body{padding-bottom:0}
+  .shell{max-width:1240px;margin:0 auto}
+  .top{padding:16px 24px;border-bottom:1px solid var(--line)}
+  .tabbar{position:static;order:2;border:0;background:none;padding:0;justify-content:flex-start;gap:2px;margin-left:16px}
+  .tabbar button{flex:none;flex-direction:row;gap:8px;padding:8px 12px;font-size:14px;max-width:none}
+  .tabbar svg.i{width:18px;height:18px}
+  .mark{order:1}.core{order:3;margin-left:auto}.flag{order:4;margin-left:0}
+  .greet{display:none}
+  .kpis{grid-template-columns:repeat(4,1fr);margin:20px 24px 0}
+  .kpi{border-bottom:0!important;border-right:1px solid var(--line)}
+  .kpi:last-child{border-right:0}
+  .layout{grid-template-columns:minmax(0,1fr) 380px;grid-template-areas:"devices work" "devices queue" "devices log";align-items:start;gap:28px 28px;padding:24px}
+  .a-dev .list{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+  .machine+.machine{margin-top:0}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="preview" role="group" aria-label="Controles de la vista previa (no son parte del diseño)">
+  <b>Vista previa</b>
+  <button type="button" data-theme="auto" aria-pressed="true">Auto</button>
+  <button type="button" data-theme="light" aria-pressed="false">Claro</button>
+  <button type="button" data-theme="dark" aria-pressed="false">Oscuro</button>
+  <span class="sep" aria-hidden="true"></span>
+  <button type="button" id="mark-js" aria-pressed="false">Marcar lo que requiere JS</button>
+</div>
+
+<div class="shell">
+  <header class="top">
+    <div class="mark">ashur<i>_</i></div>
+    <div class="core"><span class="led" aria-hidden="true"></span><span>v0.46.0 · 42 ms</span></div>
+    <button class="flag" aria-label="Anotar un problema o una idea"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></button>
+    <nav class="tabbar" role="tablist" aria-label="Secciones">
+      <button role="tab" aria-selected="false"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>Ashur</button>
+      <button role="tab" aria-selected="false"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/></svg>Diario</button>
+      <button role="tab" aria-selected="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>Estado</button>
+      <button role="tab" aria-selected="false"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>Ajustes</button>
+    </nav>
+  </header>
+  <div class="greet">Buenos días</div>
+
+  <div class="kpis needs-js" data-js="JS: franja nueva + suma del inventario">
+    <div class="kpi"><div class="k">Trabajando ahora</div><div class="v">1<small>tarea</small></div></div>
+    <div class="kpi"><div class="k">En la fila</div><div class="v">2<small>tareas</small></div></div>
+    <div class="kpi"><div class="k">Conectados</div><div class="v">3/4</div></div>
+    <div class="kpi"><div class="k">Inventario</div><div class="v">548.093<small>elem.</small></div></div>
+  </div>
+
+  <div class="layout">
+    <section class="a-work">
+      <h2>Trabajando ahora</h2>
+      <div class="run">
+        <div class="who">Inventario en ryzen9, 4 min</div>
+        <div class="v">128.430<small>elementos</small></div>
+        <div class="path">D:\Proyectos\clientes\2026\entregas</div>
+        <div class="prog" aria-hidden="true"><i></i></div>
+      </div>
+    </section>
+
+    <section class="a-queue">
+      <h2>Lo que sigue <span class="c">2</span></h2>
+      <ol class="next">
+        <li><span class="pos">1</span><div><div class="t">Lectura de documentos</div><div class="d">en mac-m1</div></div>
+          <div class="qb"><button aria-label="Bajar">↓</button><button class="x" aria-label="Cancelar esta tarea">Cancelar</button></div></li>
+        <li><span class="pos">2</span><div><div class="t">Inventario</div><div class="d">en cualquier equipo libre</div></div>
+          <div class="qb"><button aria-label="Subir">↑</button><button class="x" aria-label="Cancelar esta tarea">Cancelar</button></div></li>
+      </ol>
+      <p class="note">Las pesadas empiezan cuando el equipo esté libre: 10 minutos sin uso y, si es portátil, conectado a la corriente.</p>
+      <button class="pause">Pausar la cola</button>
+    </section>
+
+    <section class="a-dev">
+      <h2>Tus equipos <span class="c">4</span></h2>
+      <div class="list">
+        <article class="machine">
+          <div class="mtop"><span class="mname">ryzen9</span><span class="os">Windows</span><span class="seen">2 s</span></div>
+          <div class="state ok">Disponible <small>· v0.46.0</small></div>
+          <div class="gauges">
+            <div class="g" style="--v:34"><div class="row"><span>CPU</span><b>34%</b></div><i></i></div>
+            <div class="g" style="--v:61"><div class="row"><span>RAM</span><b>61%</b></div><i></i></div>
+            <div class="g" style="--v:12"><div class="row"><span>GPU</span><b>12%</b></div><i></i></div>
+          </div>
+          <div class="inv">412.880 elementos · 1.204 ejecutables · 1,8 TB</div>
+          <details open class="needs-js" data-js="JS: discos dentro del equipo">
+            <summary><span>Discos <span class="cnt">· 3</span></span><span class="chev" aria-hidden="true">›</span></summary>
+            <div class="dk"><div><div class="n">Sistema (C:)</div><div class="d">412 GB usados de 931 GB · fijo</div></div><button class="switch on" role="switch" aria-checked="true"><span></span>Incluido</button></div>
+            <div class="dk"><div><div class="n">Datos (D:)</div><div class="d">1,4 TB usados de 1,8 TB · fijo</div></div><button class="switch on" role="switch" aria-checked="true"><span></span>Incluido</button></div>
+            <div class="dk"><div><div class="n">Samsung T7</div><div class="d">ausente ahora · 1 TB · externo · 12,4 h conectado en 9 veces</div></div><button class="switch" role="switch" aria-checked="false"><span></span>Fuera</button></div>
+            <div class="dfoot"><span>Incluido: se recorre y se anota, sin cambiar ni borrar nada.</span><button class="ghost">Renombrar</button></div>
+          </details>
+        </article>
+
+        <article class="machine">
+          <div class="mtop"><span class="mname">mac-m1</span><span class="os">macOS</span><span class="seen">4 s</span></div>
+          <div class="state warn">Uso ligero <small>· en batería</small></div>
+          <div class="gauges">
+            <div class="g hot" style="--v:92"><div class="row"><span>CPU alta</span><b>92%</b></div><i></i></div>
+            <div class="g" style="--v:78"><div class="row"><span>RAM</span><b>78%</b></div><i></i></div>
+            <div class="g na"><div class="row"><span>GPU</span><b>sin dato</b></div><i></i></div>
+            <div class="g" style="--v:64"><div class="row"><span>Bat.</span><b>64%</b></div><i></i></div>
+          </div>
+          <div class="inv">96.311 elementos · 233 ejecutables · 211 GB</div>
+          <details class="needs-js" data-js="JS: discos dentro del equipo"><summary><span>Discos <span class="cnt">· 1</span></span><span class="chev" aria-hidden="true">›</span></summary>
+            <div class="dk"><div><div class="n">Macintosh HD</div><div class="d">211 GB usados de 494 GB · fijo</div></div><button class="switch on" role="switch" aria-checked="true"><span></span>Incluido</button></div>
+          </details>
+        </article>
+
+        <article class="machine">
+          <div class="mtop"><span class="mname">legion-go</span><span class="os">Windows</span><span class="seen">6 s</span></div>
+          <div class="state warn">Uso ligero <small>· v0.46.0</small></div>
+          <div class="gauges">
+            <div class="g" style="--v:8"><div class="row"><span>CPU</span><b>8%</b></div><i></i></div>
+            <div class="g" style="--v:40"><div class="row"><span>RAM</span><b>40%</b></div><i></i></div>
+            <div class="g na"><div class="row"><span>GPU</span><b>sin dato</b></div><i></i></div>
+          </div>
+          <div class="inv">38.902 elementos · 517 ejecutables · 402 GB</div>
+          <details class="needs-js" data-js="JS: discos dentro del equipo"><summary><span>Discos <span class="cnt">· 2</span></span><span class="chev" aria-hidden="true">›</span></summary></details>
+        </article>
+
+        <article class="machine">
+          <div class="mtop"><span class="mname">zimaboard</span><span class="os">Linux</span><span class="seen">3 h</span></div>
+          <div class="state off">Desconectado</div>
+          <div class="inv">Sin inventario todavía.</div>
+        </article>
+      </div>
+      <p class="note">El inventario se repasa solo cada semana, cuando cada equipo está libre y conectado. Un disco <b>Fuera</b> se salta, y es lo que pasa por defecto. Toca el nombre de un disco para renombrarlo.</p>
+    </section>
+
+    <section class="a-log">
+      <h2>Actividad reciente</h2>
+      <ul class="log">
+        <li><span class="t">09:12</span><span class="w">ryzen9</span><span class="e">Empezó inventario</span></li>
+        <li><span class="t">09:05</span><span class="w">mac-m1</span><span class="e">Pasó a uso ligero</span></li>
+        <li><span class="t">08:58</span><span class="w nucleo">Núcleo</span><span class="e">Nueva tarea: lectura de documentos</span></li>
+        <li><span class="t">08:41</span><span class="w">legion-go</span><span class="e">Terminó: transcripción de voz</span></li>
+        <li><span class="t">08:30</span><span class="w nucleo">Núcleo</span><span class="e">Te mandó un aviso</span></li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script>
+  // preview controls only: theme override and the "needs JS" marks
+  const root = document.documentElement;
+  document.querySelectorAll(".preview [data-theme]").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll(".preview [data-theme]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    if (b.dataset.theme === "auto") root.removeAttribute("data-theme"); else root.dataset.theme = b.dataset.theme;
+  }));
+  const mk = document.getElementById("mark-js");
+  mk.addEventListener("click", () => { const on = document.body.classList.toggle("js-mark"); mk.setAttribute("aria-pressed", String(on)); });
+</script>
+</body>
+</html>

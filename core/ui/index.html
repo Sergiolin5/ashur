@@ -615,6 +615,9 @@
   .nrow .acts button { margin: 0; width: auto; padding: 6px 12px; font-size: 13px; background: var(--field); color: var(--label); box-shadow: none; }
   .nrow.done .title { opacity: .5; text-decoration: line-through; }
   .nrow .title { white-space: normal; }
+  .nrow .detail.wrap { white-space: normal; }
+  .nrow .detail.to-claude { color: var(--tint); font-weight: 600; }
+  .nrow .enc-result { margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; color: var(--label); }
   .fold > h2 { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
   .fold > h2::after { content: "›"; font-size: 20px; transform: rotate(90deg); transition: transform .3s var(--spring); opacity: .6; }
   .fold.closed > :not(h2) { display: none; }
@@ -750,6 +753,7 @@
       <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="notes"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span><span class="mi-text"><b>Pendientes</b><small id="notes-sub">Problemas e ideas que anotaste</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="claude-requests"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8"/></svg></span><span class="mi-text"><b>Pedidos de Claude</b><small id="cr-sub">Lo que Claude te pide hacer</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="encargos"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="mi-text"><b>Encargos</b><small>Trabajo que Claude le encargó a tus equipos</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="diag"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span><span class="mi-text"><b>Diagnóstico</b><small>Errores y por qué un equipo no está al día</small></span><span class="mi-go" aria-hidden="true">›</span></button>
     </nav>
 
@@ -917,6 +921,14 @@
       <section><h2>Historial</h2><div class="group" id="cr-done"></div></section>
     </div>
 
+    <div class="page" data-page="encargos" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Encargos</div></div>
+      <section><h2>En curso</h2><div class="group" id="enc-open"></div>
+        <div class="note" id="enc-status" hidden></div>
+        <div class="note" id="enc-note">Claude pide el encargo, tú lo apruebas en Pedidos de Claude y tus equipos lo hacen de a un trozo con los modelos locales. El resultado solo llega a Claude si tú lo envías.</div></section>
+      <section><h2>Terminados</h2><div class="group" id="enc-done"></div></section>
+    </div>
+
     <div class="page" data-page="diag" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title" id="diag-title">Diagnóstico</div></div>
       <button type="button" id="diag-copy" class="link">Copiar todo para pegárselo a Claude</button>
@@ -1058,6 +1070,7 @@
     });
   }
   const num = (v) => (typeof v === "number" ? v : null);
+  const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
   function row(opts) {
     const r = el("div", "row" + (opts.dot ? " indent" : ""));
     if (opts.dot) r.append(el("span", "dot " + opts.dot));
@@ -1638,7 +1651,7 @@
   // a notification (or a link) says where it should land: a tab, or a page inside Ajustes
   const WHERE = { "#diario": ["diary"], "#estado": ["status"], "#memoria": ["settings", "memory"], "#diagnostico": ["settings", "diag"],
                   "#actualizacion": ["settings", "update"], "#pendientes": ["settings", "notes"],
-                  "#pedidos": ["settings", "claude-requests"] };
+                  "#pedidos": ["settings", "claude-requests"], "#encargos": ["settings", "encargos"] };
   function openWhere(h) { const w = WHERE[h]; if (!w) return; showTab(w[0]); if (w[1]) showPage(w[1]); }
   let startHash = location.hash;
   // --- tabs ---------------------------------------------------------------
@@ -1674,7 +1687,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
+    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -2126,9 +2139,14 @@
       $("cr-sub").textContent = pending.length ? pending.length + (pending.length === 1 ? " pedido por decidir" : " pedidos por decidir") : "Lo que Claude te pide hacer";
       const draw = (q) => {
         const r = el("div", "row nrow"), m = el("div", "main");
-        const label = q.label.charAt(0).toUpperCase() + q.label.slice(1) + (q.module ? " (" + q.module + ")" : "");
+        const label = cap(q.label) + (q.module ? " (" + q.module + ")" : "");
         if (q.status === "pending") {
           m.append(el("div", "title", label), el("div", "detail", (q.reason ? q.reason + " · " : "") + whenText(q.ts)));
+          if (q.encargo) {
+            const en = q.encargo;
+            m.append(el("div", "detail", cap(en.label) + " · " + en.estimate), el("div", "detail wrap", en.docs.join(", ")));
+            if (en.to_claude) m.append(el("div", "detail wrap to-claude", "El resultado irá a Claude"));
+          }
           const a = el("div", "acts");
           const ok = el("button", null, "Aprobar"), no = el("button", null, "Rechazar");
           ok.type = no.type = "button";
@@ -2158,6 +2176,57 @@
     loadClaudeRequests();
   }
   document.querySelector('.menu-item[data-page="claude-requests"]').addEventListener("click", loadClaudeRequests);
+
+  // --- encargos: work Claude ordered over indexed documents; the result reaches Claude only if Sergio sends it ---
+  const ENC_STATUS = { pending_approval: "por aprobar", queued: "en espera", running: "trabajando", paused: "pausado", done: "listo",
+                       released: "enviado a Claude", kept: "solo en el panel", rejected: "rechazado", cancelled: "cancelado", failed: "falló" };
+  const ENC_OPEN = ["pending_approval", "queued", "running", "paused"];
+  async function loadEncargos() {
+    try {
+      const list = await (await api("api/encargos")).json();
+      const open = list.filter((e) => ENC_OPEN.includes(e.status)), done = list.filter((e) => !ENC_OPEN.includes(e.status));
+      const draw = (e) => {
+        const r = el("div", "row nrow"), m = el("div", "main");
+        m.append(el("div", "title", cap(e.label) + " · #" + e.id),
+                 el("div", "detail wrap", cap(ENC_STATUS[e.status] || e.status) + (e.error ? ": " + e.error : "") + " · " + whenText(e.updated || e.ts)));
+        if (e.reason) m.append(el("div", "detail wrap", e.reason));
+        if (e.total) {
+          const bar = el("div", "mapbar"), i = el("i");
+          i.style.width = Math.round(100 * Math.min(e.done, e.total) / e.total) + "%"; bar.append(i);
+          m.append(bar, el("div", "detail", e.done + " de " + e.total + " trozos"));
+        }
+        if (e.result) m.append(el("div", "enc-result", e.result));
+        const a = el("div", "acts");
+        if (ENC_OPEN.includes(e.status)) {
+          const no = el("button", null, "Cancelar"); no.type = "button";
+          twice(no, "Toca otra vez para cancelar", () => moveEncargo(e.id, "cancel", [no]));
+          a.append(no);
+        } else if (e.status === "done" && e.to_claude) {
+          const send = el("button", null, "Enviar a Claude"), keep = el("button", null, "No enviar");
+          send.type = keep.type = "button";
+          twice(send, "Toca otra vez para enviar", () => moveEncargo(e.id, "release", [send, keep]));
+          keep.onclick = () => moveEncargo(e.id, "keep", [send, keep]);
+          a.append(send, keep);
+        }
+        if (a.childElementCount) m.append(a);
+        r.append(m); return r;
+      };
+      put($("enc-open"), open.length ? open.map(draw) : [row({ title: "Nada en curso." })]);
+      put($("enc-done"), done.length ? done.map(draw) : [row({ title: "Claude aún no ha encargado nada." })]);
+    } catch (e) {}
+  }
+  const ENC_DONE_TEXT = { cancel: "cancelado", release: "enviado a Claude", keep: "se queda solo en el panel" };
+  async function moveEncargo(id, what, buttons) {
+    for (const b of buttons) b.disabled = true;
+    const note = $("enc-status");
+    note.hidden = false;
+    try {
+      const r = await api("api/encargos/" + id + "/" + what, { method: "POST" });
+      note.textContent = r.ok ? "Encargo #" + id + ": " + ENC_DONE_TEXT[what] + "." : await detailOf(r, "No pude cambiar el encargo.");
+    } catch (e) { note.textContent = "No pude cambiar el encargo."; }
+    loadEncargos();
+  }
+  document.querySelector('.menu-item[data-page="encargos"]').addEventListener("click", loadEncargos);
 
   // --- space: duplicates and largest files (computed by the core, at most every 6 h) ---
   async function loadDocs(q) {

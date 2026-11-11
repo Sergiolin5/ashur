@@ -605,8 +605,10 @@ def test_connector_never_returns_private_material(tmp_path, fast_local):
              ("ashur_ver_encargo", {"id": 1})]
     assert {n for n, _ in calls} == {t["name"] for t in rpc(c, "tools/list", headers={
         "Authorization": "Bearer " + c.key}).json()["result"]["tools"]}
-    outputs = [tool_text(c, n, a)[0] for n, a in calls]
+    results = [tool_text(c, n, a) for n, a in calls]
+    outputs = [t for t, _ in results]
     th.join(5)
+    assert results[7][1] is False and outputs[7].startswith("Encargo #1 pedido")   # the success reply is swept too
     assert outputs[4].startswith("Respuesta local.")                     # the local model really answered
     assert "CANARIO-VISIBLE.pdf" in outputs[2]                         # the search really ran over the inventory
     joined = "\n".join(outputs).upper()

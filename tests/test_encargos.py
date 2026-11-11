@@ -988,3 +988,55 @@ def test_pedir_cancelar_encargo(tmp_path):
     # approving it cancels the encargo
     r = c.tailnet.post("/api/claude-requests/2/approve", headers=A)
     assert r.json()["status"] == "approved" and c.db.encargo_get(1)["status"] == "cancelled"
+
+
+# --- privacy sweep (Task 5) -----------------------------------------------------------------
+
+def test_sweep_no_document_text_reaches_claude_unreleased(tmp_path, fast_local):
+    canary = "CANARIOZQ7"
+    c = tools_c(tmp_path, {"/d/gatos.txt": [f"Los gatos duermen. {canary} es la clave."],
+                           "/d/gatos2.txt": [f"Más gatos y {canary}."]})
+    c.app.state.encargo_retry_wait_s = 0
+    c.step = c.app.state.encargo_step
+    t = c.tailnet
+    t.db = c.db
+    # the fake model only "knows" the canary by reading it in the document text it was sent
+    node = FakeLLM(t, lambda p, n: (f"{canary} gatos\n- {canary}" if canary in json.dumps(p) else "nada"))
+    variants = [("resumir", {}), ("responder", {"pregunta": "¿qué hacen los gatos?"}), ("clasificar", {})]
+    ids = {}
+    try:
+        for to_claude in (True, False):
+            for op, extra in variants:
+                text, err = encargar(c, operacion=op, devolver_a_claude=to_claude, **extra)
+                assert err is False, text
+                eid = c.db.encargos()[0]["id"]
+                rid = [r for r in c.db.claude_requests(50) if r["args"] == {"encargo": eid}][0]["id"]
+                assert t.post(f"/api/claude-requests/{rid}/approve", headers=A).json()["status"] == "approved"
+                ids[(op, to_claude)] = eid
+            run_all(c)
+        tools = {x["name"] for x in c.post("/mcp", headers={"Authorization": "Bearer " + c.key},
+                                           json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]}
+
+        def outputs():
+            calls = [("ashur_estado", {}), ("ashur_diagnostico", {}),
+                     ("ashur_buscar_archivo", {"consulta": "gatos"}), ("ashur_buscar_archivo", {"consulta": canary}),
+                     ("ashur_preguntar_local", {"pregunta": "¿qué hay de gatos?"}),
+                     ("ashur_pedir", {"accion": "pausar_cola", "motivo": "prueba"}), ("ashur_ver_pedido", {"id": 1}),
+                     ("ashur_encargar", {"operacion": "resumir", "busqueda": "gatos", "devolver_a_claude": True,
+                                         "motivo": "prueba"})]
+            calls += [("ashur_ver_encargo", {"id": eid}) for eid in ids.values()]
+            assert {n for n, _ in calls} == tools
+            return [(n, a, tool_text(c, n, a)[0]) for n, a in calls]
+
+        statuses = {k: c.db.encargo_get(v)["status"] for k, v in ids.items()}
+        assert statuses == {(op, True): "done" for op, _ in variants} | {(op, False): "kept" for op, _ in variants}
+        for k, v in ids.items():
+            assert canary in c.db.encargo_get(v)["result"], k          # the result really carries document text
+        for n, a, out in outputs():
+            assert canary not in out.upper(), (n, a)
+        released = ids[("responder", True)]
+        assert t.post(f"/api/encargos/{released}/release", headers=A).status_code == 200
+        for n, a, out in outputs():
+            assert (canary in out) == (n == "ashur_ver_encargo" and a == {"id": released}), (n, a)
+    finally:
+        node.close()

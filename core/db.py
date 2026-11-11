@@ -1032,6 +1032,24 @@ class DB:
                 break
         return out
 
+    def docs_under(self, node_id: str, prefix: str, limit: int) -> list[dict]:
+        """Indexed documents of a node whose path starts with prefix, case-insensitive, with `\\` read as `/` on both
+        sides. Returns up to limit + 1 rows so the caller can tell «over the cap». Own read-only connection, like
+        docs_search; compared in Python because SQLite's lower() and NOCASE only fold ASCII (Ñ, É in folder names)."""
+        want = prefix.replace("\\", "/").casefold()
+        c = sqlite3.connect(self.path, timeout=30)
+        out = []
+        try:
+            for nid, path, chunks in c.execute(
+                    "SELECT node_id, path, chunks FROM docs WHERE node_id = ? ORDER BY path", (node_id,)):
+                if path.replace("\\", "/").casefold().startswith(want):
+                    out.append({"node_id": nid, "path": path, "chunks": chunks})
+                    if len(out) > limit:
+                        break
+        finally:
+            c.close()
+        return out
+
     def inventory_add(self, node_id: str, rows: list[dict], scan: Optional[int] = None) -> int:
         """Upsert a batch; the approved flag survives rescans. scan: the inventory task that saw these rows."""
         with self.lock:

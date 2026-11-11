@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from core.brain import (health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
-from core import lotes, signals
+from core import habits, lotes, signals
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, OWN_TOOL, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.47.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.48.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -668,9 +668,20 @@ def create_app(
                     p[k] = getattr(batch, k)
         return {"ok": True, **out}
 
+    def uso(accion: str, dispositivo: Optional[str] = None, lugar: Optional[str] = None) -> None:
+        """One thing Sergio did, for the habits (core/habits.py). Never what he wrote, only which action, from which
+        device and, if the phone app sent it, a ~1 km place. The place stays on the server."""
+        d = {"accion": accion}
+        if dispositivo:
+            d["dispositivo"] = dispositivo
+        if lugar:
+            d["lugar"] = lugar
+        db.log(clock(), None, "uso", d)
+
     @app.post("/api/inventory/refresh", dependencies=[Depends(require_admin)])
     def inventory_refresh():
         """Sergio asks for a rescan now. Still heavy: each device starts when it is free."""
+        uso("repasar_inventario")
         now, queued = clock(), []
         for n in db.nodes():
             if n["simulated"] or "inventory" not in n["modules"]:
@@ -686,6 +697,7 @@ def create_app(
     @app.post("/api/docs/refresh", dependencies=[Depends(require_admin)])
     def docs_refresh():
         """Sergio asks for a re-read now. Still heavy: each device starts when it is free."""
+        uso("releer_documentos")
         now, queued = clock(), []
         for n in db.nodes():
             if n["simulated"] or "docs" not in n["modules"]:
@@ -1267,6 +1279,7 @@ def create_app(
 
     @app.post("/api/time/start", dependencies=[Depends(require_admin)])
     def time_start(body: TimeStart):
+        uso("empezar_tarea")
         db.time_start(clock(), body.task.strip(), body.category.strip(), body.est_min)
         return time_view()
 
@@ -1411,6 +1424,8 @@ def create_app(
     def chat(body: ChatIn, guest: Optional[dict] = Depends(require_chat)):
         if guest and db.count_messages_since(f"g{guest['id']}", clock() - 3600) >= guest_limits()["messages_per_hour"]:
             raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
+        if not guest:
+            uso("chatear", body.persona)
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
                              allow_claude=body.allow_claude and guest is None,
@@ -1688,6 +1703,112 @@ def create_app(
         if not g or not g.get("is_self"):
             raise HTTPException(401, "admin key required")
 
+    # --- habits: counted on the server, suggested, never done without the master phone's approval (core/habits.py) ---
+    class UsoIn(BaseModel):
+        accion: str = Field(pattern=r"^[a-z_]{1,32}$")
+        dispositivo: Optional[str] = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,23}$")
+        lat: Optional[float] = Field(default=None, ge=-90, le=90)
+        lon: Optional[float] = Field(default=None, ge=-180, le=180)
+
+    @app.post("/api/uso", dependencies=[Depends(require_self)])
+    def uso_post(body: UsoIn):
+        """For the phone app: something Sergio did there, with the device and, if he allows location, where."""
+        if body.accion not in habits.ACTIONS:
+            raise HTTPException(422, "Acción desconocida.")
+        lugar = habits.cell(body.lat, body.lon) if body.lat is not None and body.lon is not None else None
+        uso(body.accion, body.dispositivo, lugar)
+        if lugar:
+            db.set_setting("habit_here", json.dumps({"lugar": lugar, "ts": clock()}))
+        return {"ok": True}
+
+    def habits_refresh(force: bool = False) -> None:
+        now = clock()
+        last = float(db.setting("habits_refreshed") or 0)
+        if not force and now - last < 600:
+            return
+        seen = habits.detect(db.uso_events(now - habits.WINDOW_DAYS * 86400), now)
+        db.habits_merge(seen, now)
+        db.set_setting("habits_refreshed", str(now))
+
+    def habit_row(h: dict) -> dict:
+        return dict(h, descripcion=habits.describe(h), puede_hacer=habits.ACTIONS.get(h["accion"], ("", False))[1])
+
+    @app.get("/api/habits", dependencies=[Depends(require_admin)])
+    def habits_list(todos: bool = False):
+        habits_refresh()
+        return [habit_row(h) for h in db.habits(todos)]
+
+    @app.post("/api/habits/refrescar", dependencies=[Depends(require_admin)])
+    def habits_force():
+        habits_refresh(force=True)
+        return [habit_row(h) for h in db.habits()]
+
+    @app.get("/api/habits/sugerencias", dependencies=[Depends(require_admin)])
+    def habits_suggestions():
+        """Words only. Nothing here queues, pauses or runs anything."""
+        habits_refresh()
+        now = clock()
+        here = json.loads(db.setting("habit_here") or "null")
+        lugar = here["lugar"] if here and now - here["ts"] < 1800 else None
+        today = dt.datetime.fromtimestamp(now, BOGOTA).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        return habits.suggestions(db.habits(), db.uso_events(today), now, lugar)
+
+    class HabitFix(BaseModel):
+        nota: Optional[str] = Field(default=None, max_length=200)
+        dia: Optional[int] = Field(default=None, ge=0, le=6)
+        desde: Optional[int] = Field(default=None, ge=0, le=22)
+
+    @app.put("/api/habits/{hid}", dependencies=[Depends(require_admin)])
+    def habit_fix(hid: int, body: HabitFix):
+        """Sergio corrects a habit: his note, or its day or hour. From then on what Ashur counts never overwrites it."""
+        h = db.habit_get(hid)
+        if not h or h["estado"] == "borrado":
+            raise HTTPException(404, "No existe ese hábito.")
+        patron = dict(h["patron"])
+        if body.dia is not None:
+            if h["tipo"] != "semana":
+                raise HTTPException(422, "Solo un hábito semanal tiene día.")
+            patron["dia"] = body.dia
+        if body.desde is not None:
+            if h["tipo"] != "hora":
+                raise HTTPException(422, "Solo un hábito por hora tiene hora.")
+            patron.update(desde=body.desde // habits.BAND_H * habits.BAND_H)
+            patron["hasta"] = patron["desde"] + habits.BAND_H
+        fields = {"patron": patron, "estado": "corregido"}
+        if body.nota is not None:
+            fields["nota"] = body.nota.strip() or None
+        db.habit_set(hid, **fields)
+        db.log(clock(), None, "habit_changed", {"habito": hid, "cambio": "corrigió"})
+        return habit_row(db.habit_get(hid))
+
+    @app.delete("/api/habits/{hid}", dependencies=[Depends(require_admin)])
+    def habit_delete(hid: int):
+        """Kept as «borrado» on purpose: the same pattern seen again is recognised and stays deleted."""
+        if not db.habit_set(hid, estado="borrado"):
+            raise HTTPException(404, "No existe ese hábito.")
+        db.log(clock(), None, "habit_changed", {"habito": hid, "cambio": "borró"})
+        return {"ok": True}
+
+    @app.post("/api/habits/{hid}/proponer", dependencies=[Depends(require_admin)])
+    def habit_propose(hid: int):
+        """«Hazlo» on a suggestion: it becomes a request in Pedidos, the same one Claude files, and runs only when the
+        master phone approves it there. This endpoint itself never runs the action."""
+        h = db.habit_get(hid)
+        if not h or h["estado"] == "borrado":
+            raise HTTPException(404, "No existe ese hábito.")
+        if not habits.ACTIONS.get(h["accion"], ("", False))[1] or h["accion"] not in ACTIONS:
+            raise HTTPException(422, "Ese hábito es solo un recordatorio: Ashur no lo hace por ti.")
+        reason = "Hábito: " + (h.get("nota") or habits.describe(h))
+        with request_lock:
+            same = db.claude_request_pending_same(h["accion"], {})
+            if same:
+                return {"pedido": same, "nuevo": False}
+            if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                raise HTTPException(409, "Ya hay 5 pedidos esperando; decide alguno primero.")
+            rid = db.claude_request_add(clock(), h["accion"], {}, reason)
+        db.log(clock(), None, "habit_proposed", {"habito": hid, "pedido": rid})
+        return {"pedido": rid, "nuevo": True}
+
     def local_day(ts: float) -> str:
         return dt.datetime.fromtimestamp(ts, BOGOTA).strftime("%Y-%m-%d")
 
@@ -1781,6 +1902,7 @@ def create_app(
             raise HTTPException(422, "La entrada está vacía.")
         now = clock()
         eid = db.diary_add(now, local_day(now), text, body.source)
+        uso("escribir_diario")
         db.log(now, None, "diary_entry", {"chars": len(text)})        # never the words
         return {"id": eid}
 
@@ -2360,6 +2482,7 @@ def create_app(
 
     @app.post("/api/queue/pause", dependencies=[Depends(require_admin)])
     def set_queue_pause(p: QueuePause):
+        uso("pausar_cola" if p.paused else "reanudar_cola")
         db.set_setting("queue_paused", "1" if p.paused else "0")
         db.log(clock(), None, "queue_paused" if p.paused else "queue_resumed", {})
         return {"paused": p.paused}
@@ -2782,6 +2905,7 @@ def create_app(
 
     @app.post("/api/lotes/{lid}/release", dependencies=[Depends(require_admin)])
     def lote_release(lid: int):
+        uso("liberar_resultado")
         return lote_move(lid, ("done", "kept"), "released", "Solo se envía a Claude un lote terminado.")
 
     @app.post("/api/lotes/{lid}/keep", dependencies=[Depends(require_admin)])
@@ -2830,6 +2954,7 @@ def create_app(
 
     @app.post("/api/encargos/{eid}/release", dependencies=[Depends(require_admin)])
     def encargo_release(eid: int):
+        uso("liberar_resultado")
         return encargo_move(eid, "done", "released", "Solo se envía a Claude un encargo terminado que espera tu visto bueno.",
                             need_claude=True)
 
@@ -2908,6 +3033,7 @@ def create_app(
     def claude_request_approve(rid: int):
         if not db.claude_request_decide(rid, "running", clock(), ""):       # claimed once: a double tap gets 404
             raise HTTPException(404, "Ya se decidió o no existe.")
+        uso("aprobar_pedido")
         try:
             status, result = run_request(db.claude_request_get(rid))
         except Exception as e:                  # never leave it «en curso» forever

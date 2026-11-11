@@ -137,6 +137,11 @@ CREATE TABLE IF NOT EXISTS doc_signals (   -- what a lote learned about one docu
     node_id TEXT NOT NULL, path TEXT NOT NULL, pase TEXT NOT NULL, value TEXT NOT NULL, lote INTEGER NOT NULL,
     device TEXT, ts REAL NOT NULL, PRIMARY KEY (node_id, path, pase)
 );
+CREATE TABLE IF NOT EXISTS habits (        -- what Sergio does again and again (core/habits.py); he sees, corrects and deletes them
+    id INTEGER PRIMARY KEY AUTOINCREMENT, clave TEXT NOT NULL UNIQUE, accion TEXT NOT NULL, tipo TEXT NOT NULL,
+    patron TEXT NOT NULL DEFAULT '{}', veces INTEGER NOT NULL DEFAULT 0, dias INTEGER NOT NULL DEFAULT 0,
+    primera REAL, ultima REAL, estado TEXT NOT NULL DEFAULT 'activo', nota TEXT, creado REAL NOT NULL, actualizado REAL
+);
 CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          REAL NOT NULL,
@@ -1199,6 +1204,74 @@ class DB:
                              (lote,)).fetchall()
         finally:
             c.close()
+
+    # --- habits ------------------------------------------------------------
+    def uso_events(self, since: float) -> list[dict]:
+        """The «uso» events of the log since a time, on their own read-only connection (session_log has no index on
+        event: the scan must not hold the shared lock)."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            rows = c.execute("SELECT ts, detail FROM session_log WHERE event = 'uso' AND ts >= ? ORDER BY ts",
+                             (since,)).fetchall()
+        finally:
+            c.close()
+        out = []
+        for ts, detail in rows:
+            d = json.loads(detail or "{}")
+            out.append({"ts": ts, "accion": d.get("accion"), "dispositivo": d.get("dispositivo"), "lugar": d.get("lugar")})
+        return out
+
+    @staticmethod
+    def _habit(r) -> dict:
+        d = dict(r)
+        d["patron"] = json.loads(d["patron"])
+        return d
+
+    def habits(self, todos: bool = False) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT * FROM habits" + ("" if todos else " WHERE estado != 'borrado'")
+                                     + " ORDER BY dias DESC, id").fetchall()
+        return [self._habit(r) for r in rows]
+
+    def habit_get(self, hid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM habits WHERE id = ?", (hid,)).fetchone()
+        return self._habit(r) if r else None
+
+    def habits_merge(self, seen: list[dict], now: float) -> None:
+        """New patterns come in as «activo»; an active one takes the new counts and pattern; a corrected one keeps
+        Sergio's pattern and note and only takes the counts; a deleted one is left as it is, so it never comes back."""
+        with self.lock:
+            for h in seen:
+                r = self.conn.execute("SELECT estado FROM habits WHERE clave = ?", (h["clave"],)).fetchone()
+                if r is None:
+                    self.conn.execute(
+                        "INSERT INTO habits (clave, accion, tipo, patron, veces, dias, primera, ultima, creado, actualizado) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (h["clave"], h["accion"], h["tipo"], json.dumps(h["patron"]), h["veces"], h["dias"],
+                         h["primera"], h["ultima"], now, now))
+                elif r["estado"] == "activo":
+                    self.conn.execute("UPDATE habits SET patron = ?, veces = ?, dias = ?, primera = ?, ultima = ?, "
+                                      "actualizado = ? WHERE clave = ?",
+                                      (json.dumps(h["patron"]), h["veces"], h["dias"], h["primera"], h["ultima"], now,
+                                       h["clave"]))
+                elif r["estado"] == "corregido":
+                    self.conn.execute("UPDATE habits SET veces = ?, dias = ?, ultima = ?, actualizado = ? WHERE clave = ?",
+                                      (h["veces"], h["dias"], h["ultima"], now, h["clave"]))
+            self.conn.commit()
+
+    def habit_set(self, hid: int, **fields) -> bool:
+        bad = set(fields) - {"patron", "nota", "estado"}
+        if bad:
+            raise ValueError(f"unknown habit field(s): {', '.join(sorted(bad))}")
+        if "patron" in fields:
+            fields["patron"] = json.dumps(fields["patron"])
+        fields["actualizado"] = time.time()
+        with self.lock:
+            cur = self.conn.execute(f"UPDATE habits SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?",
+                                    list(fields.values()) + [hid])
+            self.conn.commit()
+        return cur.rowcount > 0
 
     def signals(self, pase: str) -> list[tuple]:
         """(node_id, path, value json) of a pass, on its own read-only connection."""

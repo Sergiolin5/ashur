@@ -548,6 +548,7 @@
       <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="notes"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span><span class="mi-text"><b>Pendientes</b><small id="notes-sub">Problemas e ideas que anotaste</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="claude-requests"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8"/></svg></span><span class="mi-text"><b>Pedidos de Claude</b><small id="cr-sub">Lo que Claude te pide hacer</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      <button type="button" class="menu-item" data-page="habitos"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/></svg></span><span class="mi-text"><b>Hábitos</b><small>Lo que sueles hacer y lo que Ashur te sugiere</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="encargos"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="mi-text"><b>Encargos</b><small>Trabajo que Claude le encargó a tus equipos</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       <button type="button" class="menu-item" data-page="diag"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span><span class="mi-text"><b>Diagnóstico</b><small>Errores y por qué un equipo no está al día</small></span><span class="mi-go" aria-hidden="true">›</span></button>
     </nav>
@@ -733,6 +734,16 @@
         <div class="note" id="cr-status" hidden></div>
         <div class="note" id="cr-note">Claude no hace nada por su cuenta: lo que quiere hacer llega aquí y solo pasa si lo apruebas. Al aprobar, Ashur revisa otra vez si todavía aplica.</div></section>
       <section><h2>Historial</h2><div class="group" id="cr-done"></div></section>
+    </div>
+
+    <div class="page" data-page="habitos" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Hábitos</div></div>
+      <section><h2>Sugerencias ahora</h2><div class="group" id="hab-sug"></div>
+        <div class="note">Ashur solo sugiere. «Hazlo» deja un pedido en Pedidos de Claude, y nada corre hasta que lo apruebas ahí.</div>
+        <div class="note" id="hab-status" hidden></div></section>
+      <section><h2>Lo que Ashur notó</h2><div class="group" id="hab-list"></div>
+        <button type="button" id="hab-refresh" class="link">Volver a contar ahora</button>
+        <div class="note">Cuenta en tu servidor, sin modelo ni Claude: la misma acción el mismo día de la semana en 3 semanas, o en la misma franja de 2 horas o el mismo lugar en 5 días. Corregir guarda tu versión; borrar hace que no vuelva.</div></section>
     </div>
 
     <div class="page" data-page="encargos" hidden>
@@ -2108,6 +2119,63 @@
     out.hidden = false;
     if (r.ok) loadLoteConfig();
   });
+  // --- habits: Ashur counts, suggests, and never acts without approval -----------------------
+  const HAB_DAYS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+  async function loadHabits(path) {
+    const note = $("hab-status");
+    try {
+      const [sr, lr] = await Promise.all([api("api/habits/sugerencias"), api(path || "api/habits", path ? { method: "POST" } : undefined)]);
+      const sug = await sr.json(), list = await lr.json();
+      put($("hab-sug"), sug.length ? sug.map((x) => {
+        const r = el("div", "row nrow"), m = el("div", "main");
+        m.append(el("div", "title", x.texto));
+        if (x.puede_hacer) {
+          const a = el("div", "acts"), go = el("button", null, "Hazlo"); go.type = "button";
+          go.onclick = async () => {
+            go.disabled = true;
+            const q = await api("api/habits/" + x.habito + "/proponer", { method: "POST" });
+            note.hidden = false;
+            note.textContent = q.ok ? "Pedido #" + (await q.json()).pedido + " listo para aprobar en Pedidos de Claude." : await detailOf(q, "No pude proponerlo.");
+          };
+          a.append(go); m.append(a);
+        }
+        r.append(m); return r;
+      }) : [row({ title: "Nada que sugerir ahora." })]);
+      put($("hab-list"), list.length ? list.map((h) => {
+        const r = el("div", "row nrow"), m = el("div", "main");
+        m.append(el("div", "title", h.nota || h.descripcion),
+                 el("div", "detail", h.veces + " veces en " + h.dias + (h.tipo === "semana" ? " semanas" : " días") + " · " + (h.estado === "corregido" ? "corregido por ti" : "notado por Ashur")));
+        const a = el("div", "acts"), fix = el("button", null, "Corregir"), del = el("button", null, "Borrar");
+        fix.type = del.type = "button";
+        twice(del, "Toca otra vez para borrar", async () => { await api("api/habits/" + h.id, { method: "DELETE" }); loadHabits(); });
+        fix.onclick = () => {
+          const box = el("div", "detail"), txt = el("input", "field"), save = el("button", null, "Guardar");
+          txt.value = h.nota || h.descripcion; txt.maxLength = 200; save.type = "button";
+          let pick = null;
+          if (h.tipo === "semana" || h.tipo === "hora") {
+            pick = el("select", "field");
+            const opts = h.tipo === "semana" ? HAB_DAYS.map((d, i) => [i, d]) : [...Array(12).keys()].map((i) => [i * 2, (i * 2) + ":00 a " + (i * 2 + 2) + ":00"]);
+            pick.replaceChildren(...opts.map(([v, t]) => { const o = el("option", null, t); o.value = v; return o; }));
+            pick.value = h.tipo === "semana" ? h.patron.dia : h.patron.desde;
+          }
+          save.onclick = async () => {
+            const body = { nota: txt.value };
+            if (pick) body[h.tipo === "semana" ? "dia" : "desde"] = Number(pick.value);
+            const q = await api("api/habits/" + h.id, { method: "PUT", body: JSON.stringify(body) });
+            note.hidden = false; note.textContent = q.ok ? "Hábito corregido." : await detailOf(q, "No pude corregirlo.");
+            loadHabits();
+          };
+          box.append(txt); if (pick) box.append(pick); box.append(save);
+          fix.replaceWith(box);
+        };
+        a.append(fix, del); m.append(a);
+        r.append(m); return r;
+      }) : [row({ title: "Todavía no hay hábitos: Ashur necesita verte repetir algo unas semanas." })]);
+    } catch (e) { note.hidden = false; note.textContent = "No pude cargar los hábitos."; }
+  }
+  document.querySelector('.menu-item[data-page="habitos"]').addEventListener("click", () => loadHabits());
+  $("hab-refresh").addEventListener("click", () => loadHabits("api/habits/refrescar"));
+
   // «277 de 771 documentos (36 %)» and «lleva 12 min · faltan ~16 min · 2,1 s por documento · en ryzen9»
   function loteLines(L) {
     const seen = L.done + L.failed + L.skipped, pct = L.total ? Math.round(100 * Math.min(seen, L.total) / L.total) : 0;

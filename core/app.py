@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.47.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.47.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2603,10 +2603,34 @@ def create_app(
     app.state.encargo_step = encargo_step
 
     # --- lotes: every document of a scope, one at a time, after the encargos (core/lotes.py) ---
-    lote_queue = {"id": None, "docs": [], "fails": 0, "device": None}   # the documents still to do, in memory: a restart reads them again
+    lote_queue = {"id": None, "docs": [], "fails": 0, "device": None, "system": "", "kinds": []}   # in memory: a restart reads them again
 
     def lote_forget() -> None:
         lote_queue.update(id=None, docs=[], fails=0, device=None)
+
+    def lote_names() -> list[str]:
+        """The names Sergio goes by in his documents. They live in the server's settings and in the local model's
+        prompt, nowhere else: not in the code, not in a log line, not in anything a connector tool returns."""
+        return lotes.clean_list(db.setting("lote_nombres", ""), 20, 60)
+
+    def lote_kinds() -> list[str]:
+        return lotes.clean_list(db.setting("lote_tipos", ""), 40, 40) or list(lotes.DEFAULT_KINDS)
+
+    class LoteConfig(BaseModel):
+        nombres: str = Field(max_length=2000)
+        tipos: str = Field(max_length=2000)
+
+    @app.get("/api/lotes/config", dependencies=[Depends(require_admin)])
+    def lote_config():
+        return {"nombres": lote_names(), "tipos": lote_kinds(), "tipos_por_defecto": list(lotes.DEFAULT_KINDS)}
+
+    @app.put("/api/lotes/config", dependencies=[Depends(require_admin)])
+    def lote_config_put(body: LoteConfig):
+        """Takes effect with the next lote (or when the one in course is read again after a restart)."""
+        db.set_setting("lote_nombres", "\n".join(lotes.clean_list(body.nombres, 20, 60)))
+        db.set_setting("lote_tipos", "\n".join(lotes.clean_list(body.tipos, 40, 40)))
+        db.log(clock(), None, "lote_config", {"names": len(lote_names()), "kinds": len(lote_kinds())})
+        return lote_config()
 
     app.state.lote_forget = lote_forget
 
@@ -2625,7 +2649,7 @@ def create_app(
         rows = [r for r in db.signals(L["pase"]) if lotes.in_scope(r[0], r[1], L["scope"])]
         head = (f"Lote #{L['id']} ({lotes.PASSES.get(L['pase'], L['pase'])}; {lotes.scope_label(L['scope'])}): "
                 f"{L['done']} hechos, {L['skipped']} sin texto, {L['failed']} fallidos.")
-        lote_summaries[L["id"]] = (L["updated"], head + "\n" + lotes.summary_tipo(rows))
+        lote_summaries[L["id"]] = (L["updated"], head + "\n" + lotes.summary_tipo(rows, L["scope"]))
         return lote_summaries[L["id"]][1]
 
     def lote_row(L: dict) -> dict:
@@ -2659,7 +2683,10 @@ def create_app(
                     db.lote_set(lid, expect=L["status"], status="paused")
                 return False
             if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
-                pending = [d for d in db.lote_pending(L["pase"]) if lotes.in_scope(d[0], d[1], L["scope"])]
+                pending = [d for d in db.lote_pending(L["pase"], lid if L["scope"].get("rehacer") else None)
+                           if lotes.in_scope(d[0], d[1], L["scope"])]
+                kinds = lote_kinds()
+                lote_queue.update(system=lotes.prompt_tipo(lote_names(), kinds), kinds=kinds)
                 if not db.setting(f"lote_started:{lid}"):
                     db.set_setting(f"lote_started:{lid}", str(clock()))
                 pending.sort(key=lambda d: lotes.rule(d[1]) is None)     # what the path settles goes first: «faltan» is then the model's time
@@ -2687,7 +2714,7 @@ def create_app(
                     db.lote_set(lid, expect="running", skipped=L["skipped"] + 1)
                     return True
                 t0 = time.monotonic()
-                how, answer, device = encargo_unit(lotes.unit_tipo(path, texts), pin=True)
+                how, answer, device = encargo_unit(lotes.unit_tipo(path, texts, lote_queue["system"]), pin=True)
                 took = time.monotonic() - t0
                 if how == "wait":
                     if queue_paused():
@@ -2709,7 +2736,7 @@ def create_app(
                 if not db.lote_set(lid, expect="running", done=L["done"] + 1, seconds=L["seconds"] + took):
                     lote_forget()
                     return True                               # cancelled while the device worked: the answer is dropped
-                db.signal_put(node_id, path, L["pase"], lotes.parse_tipo(answer), lid, device, clock())
+                db.signal_put(node_id, path, L["pase"], lotes.parse_tipo(answer, lote_queue["kinds"]), lid, device, clock())
                 prev = db.setting("lote_s_per_doc")
                 db.set_setting("lote_s_per_doc", f"{took if prev is None else 0.9 * float(prev) + 0.1 * took:.2f}")
                 L["done"] += 1
@@ -3102,6 +3129,9 @@ def create_app(
 
         def lote(args: dict) -> str:
             pase, motivo, equipo, carpeta = args.get("pase"), args.get("motivo"), args.get("equipo"), args.get("carpeta")
+            redo = args.get("rehacer", False)
+            if not isinstance(redo, bool):
+                raise ToolError("«rehacer» debe ser verdadero o falso.")
             if pase not in lotes.PASSES:
                 raise ToolError("«pase» debe ser uno de: " + ", ".join(lotes.PASSES) + ".")
             if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
@@ -3111,7 +3141,9 @@ def create_app(
             if (equipo is None) != (carpeta is None):
                 raise ToolError("«equipo» y «carpeta» van juntos; sin ninguno, el lote cubre todos los documentos leídos.")
             scope = {"equipo": equipo.strip(), "carpeta": carpeta.strip()} if equipo else {}
-            todo = [d for d in db.lote_pending(pase) if lotes.in_scope(d[0], d[1], scope)]
+            if redo:
+                scope["rehacer"] = True
+            todo = [d for d in db.lote_pending(pase, 0 if redo else None) if lotes.in_scope(d[0], d[1], scope)]
             n, model = len(todo), sum(1 for d in todo if not lotes.rule(d[1]))
             split = f"{n} documentos ({n - model} por la ruta, {model} por el modelo)"
             if not n:
@@ -3168,6 +3200,7 @@ def create_app(
                      "pase": {"type": "string", "enum": list(lotes.PASSES)},
                      "equipo": {"type": "string", "description": "Equipo, junto con «carpeta»"},
                      "carpeta": {"type": "string", "description": "Carpeta del equipo, junto con «equipo»"},
+                     "rehacer": {"type": "boolean", "description": "Volver a hacer también los documentos que un lote anterior ya cubrió"},
                      "motivo": {"type": "string", "minLength": 3, "maxLength": 300, "description": "Por qué lo pides, para Sergio"}},
                   "required": ["pase", "motivo"], "additionalProperties": False}, lote),
             Tool("ashur_ver_lote", "Cómo va un lote; su resumen solo aparece si Sergio lo liberó.",

@@ -46,11 +46,19 @@ def run(c, limit=50):
 
 
 # --- pure -----------------------------------------------------------------------------
-def test_parse_tipo_is_strict_about_the_author():
-    assert lotes.parse_tipo("Tipo: Notas de reunión.\nAutor: Sergio") == {"tipo": "notas de reunión", "autor": "sergio"}
-    assert lotes.parse_tipo("tipo: factura\nautor: la empresa") == {"tipo": "factura", "autor": "duda"}
-    assert lotes.parse_tipo("no sé") == {"tipo": "otra", "autor": "duda"}
-    assert len(lotes.parse_tipo("tipo: " + "x" * 200)["tipo"]) <= 40
+def test_parse_tipo_only_takes_kinds_from_the_list():
+    K = list(lotes.DEFAULT_KINDS)
+    assert lotes.parse_tipo("Tipo: Informe técnico.\nAutor: Sergio", K) == {"tipo": "informe", "autor": "sergio"}
+    assert lotes.parse_tipo("tipo: cuenta de cobro\nautor: la empresa", K) == {"tipo": "cuenta de cobro", "autor": "duda"}
+    assert lotes.parse_tipo("tipo: dataset\nautor: otro", K) == {"tipo": "otro", "autor": "otro"}
+    assert lotes.parse_tipo("no sé", K) == {"tipo": "otro", "autor": "duda"}
+
+
+def test_prompt_names_sergio_and_lists_the_kinds():
+    p = lotes.prompt_tipo(["Sergio Molina", "Sermolin"], ["carta", "informe"])
+    assert "Sergio Molina, Sermolin" in p and "carta, informe" in p and "otro" in p
+    assert "con estos nombres" not in lotes.prompt_tipo([], ["carta"])
+    assert lotes.clean_list("Sergio Molina, sermolin\nSERMOLIN;  Ana  ", 20, 60) == ["Sergio Molina", "sermolin", "Ana"]
 
 
 def test_scope_is_a_folder_boundary_case_insensitive():
@@ -78,7 +86,7 @@ def test_lote_needs_approval_then_classifies_every_document(tmp_path, fast_local
     L = c.db.lote_get(1)
     assert (L["status"], L["done"], L["total"], L["failed"], L["skipped"]) == ("done", 3, 3, 0, 0)
     got = {p.rsplit("/", 1)[-1]: json.loads(v) for _, p, v in c.db.signals("tipo")}
-    assert got["a.txt"] == {"tipo": "diario personal", "autor": "sergio"} and got["manual.txt"]["autor"] == "otro"
+    assert got["a.txt"] == {"tipo": "diario", "autor": "sergio"} and got["manual.txt"]["autor"] == "otro"
     assert len(node.payloads) == 3                                  # one unit per document
 
 
@@ -87,7 +95,7 @@ def test_nothing_reaches_claude_until_released_and_health_stays_out(tmp_path, fa
     docs["/Users/s/Documents/Historia clínica/c.txt"] = ["Resultados."]
     c, t = setup(tmp_path, docs)
     ask(c)
-    node = FakeLLM(t, lambda p, n: ("tipo: examen médico\nautor: otro" if "c.txt" in json.dumps(p) else answer(p, n)))
+    node = FakeLLM(t, lambda p, n: ("tipo: examen\nautor: sergio" if "c.txt" in json.dumps(p) else answer(p, n)))
     try:
         approve(c, t, 1)
         run(c)
@@ -99,7 +107,7 @@ def test_nothing_reaches_claude_until_released_and_health_stays_out(tmp_path, fa
     assert "Diario" in row["summary"] and row["salud"]              # Sergio sees it all, and what will be held
     assert t.post("/api/lotes/1/release", headers=A).status_code == 200
     seen, _ = tool_text(c, "ashur_ver_lote", {"id": 1})
-    assert "Documents/Diario" in seen and "sergio 2" in seen
+    assert "Documents/Diario" in seen and "sergio 3" in seen and "- diario: 2 / 0 / 0" in seen
     assert "clínica" not in seen and "médico" not in seen and "CANARIOZQ7" not in seen
     assert "de salud no se envi" in seen
 
@@ -221,7 +229,7 @@ def test_a_lote_does_not_spend_the_model_on_what_the_path_settles(tmp_path, fast
     by = {r[0]: r[1] for r in c.db.conn.execute("SELECT device, COUNT(*) FROM doc_signals GROUP BY device")}
     assert by == {"regla": 4, "mac-m1": 3}
     row = t.get("/api/lotes", headers=A).json()[0]
-    assert "Por la ruta, sin modelo: 4. Leídos por el modelo: 3." in row["summary"] and "- software (3)" in row["summary"]
+    assert "Por la ruta, sin modelo: 4. Leídos por el modelo: 3." in row["summary"] and "- software: 0 / 3 / 0" in row["summary"]
 
 
 def test_panel_can_tell_how_far_a_lote_is_and_how_long_is_left(tmp_path, fast_local):
@@ -241,3 +249,47 @@ def test_panel_can_tell_how_far_a_lote_is_and_how_long_is_left(tmp_path, fast_lo
         node.close()
     assert t.get("/api/overview", headers=A).json()["lote"] is None
     assert "took_s" in t.get("/api/lotes", headers=A).json()[0]
+
+
+def test_names_and_kinds_are_sergios_to_set_and_never_reach_claude(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    assert t.get("/api/lotes/config").status_code == 401
+    cfg = t.get("/api/lotes/config", headers=A).json()
+    assert cfg["nombres"] == [] and cfg["tipos"] == list(lotes.DEFAULT_KINDS)
+    t.put("/api/lotes/config", headers=A, json={"nombres": "Nombre Canario ZQ7\nsermolin", "tipos": "bitácora, manual"})
+    ask(c)
+    node = FakeLLM(t, lambda p, n: "tipo: bitácora\nautor: sergio")
+    try:
+        approve(c, t, 1)
+        run(c)
+    finally:
+        node.close()
+    assert all("Nombre Canario ZQ7, sermolin" in p["system"] and "bitácora, manual" in p["system"] for p in node.payloads)
+    t.post("/api/lotes/1/release", headers=A)
+    seen = tool_text(c, "ashur_ver_lote", {"id": 1})[0] + tool_text(c, "ashur_estado", {})[0] + tool_text(c, "ashur_diagnostico", {})[0]
+    assert "Canario" not in seen and "- bitácora: 3 / 0 / 0" in seen
+    assert "Canario" not in json.dumps(c.db.log_rows(100), ensure_ascii=False)
+    t.put("/api/lotes/config", headers=A, json={"nombres": "", "tipos": ""})        # empty: back to the stock list
+    assert t.get("/api/lotes/config", headers=A).json()["tipos"] == list(lotes.DEFAULT_KINDS)
+
+
+def test_redo_does_the_documents_again_and_resumes_without_repeating(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    ask(c)
+    node = FakeLLM(t, answer)
+    try:
+        approve(c, t, 1)
+        run(c)
+        assert ask(c)[1] is True                                     # nothing left to do without «rehacer»
+        text, err = ask(c, rehacer=True, equipo="mac-m1", carpeta="/Users/s/Documents")
+        assert err is False and "2 documentos" in text
+        approve(c, t, 2)
+        assert c.step()                                              # one redone
+        c.app.state.lote_forget()                                    # as after a restart
+        run(c)
+    finally:
+        node.close()
+    L = c.db.lote_get(2)
+    assert (L["status"], L["done"], L["total"]) == ("done", 2, 2) and "(rehacer)" in t.get("/api/lotes", headers=A).json()[0]["label"]
+    assert len(node.payloads) == 3 + 2                              # three the first time, each of the two redone once
+    assert {r[0]: r[1] for r in c.db.conn.execute("SELECT lote, COUNT(*) FROM doc_signals GROUP BY lote")} == {1: 1, 2: 2}

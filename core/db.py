@@ -1160,15 +1160,18 @@ class DB:
                                   "ORDER BY (status = 'queued'), id LIMIT 1").fetchone()
         return self._lote_row(r) if r else None
 
-    def lote_pending(self, pase: str) -> list[tuple]:
+    def lote_pending(self, pase: str, redo: Optional[int] = None) -> list[tuple]:
         """(node_id, path, chunks, first_rowid) of every indexed document with no signal for this pass yet, in order.
-        Own read-only connection: it reads all of docs, which must never hold the shared lock."""
+        redo (a lote that does documents again): also those whose signal came from another lote, so after a restart
+        it goes on with what it has not redone itself. Own read-only connection: it reads all of docs, which must
+        never hold the shared lock."""
         c = sqlite3.connect(self.path, timeout=30)
         try:
             return c.execute(
                 "SELECT d.node_id, d.path, d.chunks, d.first_rowid FROM docs d LEFT JOIN doc_signals s "
-                "ON s.node_id = d.node_id AND s.path = d.path AND s.pase = ? WHERE s.path IS NULL "
-                "ORDER BY d.node_id, d.path", (pase,)).fetchall()
+                "ON s.node_id = d.node_id AND s.path = d.path AND s.pase = ? "
+                "WHERE s.path IS NULL OR (? IS NOT NULL AND s.lote != ?) ORDER BY d.node_id, d.path",
+                (pase, redo, redo)).fetchall()
         finally:
             c.close()
 

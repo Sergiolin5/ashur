@@ -92,6 +92,7 @@ def describe(event: str, d: dict) -> str:
         "encargo_done": f"terminó el encargo #{d.get('id')} ({d.get('docs')} documentos, {d.get('units')} trozos, {d.get('seconds')} s)",
         "encargo_failed": f"FALLÓ el encargo #{d.get('id')} ({d.get('units')} trozos hechos de {d.get('docs')} documentos)",
         "encargo_cancelled": f"se canceló el encargo #{d.get('id')}",
+        "lote_config": f"guardó cómo clasifican los lotes ({d.get('names')} nombres, {d.get('kinds')} tipos)",
         "lote_done": f"terminó el lote #{d.get('id')} ({d.get('docs')} documentos, {d.get('failed')} fallidos, {d.get('skipped')} sin texto, {d.get('seconds')} s)",
         "lote_failed": f"FALLÓ el lote #{d.get('id')} tras {d.get('done')} documentos",
         "lote_released": f"enviaste a Claude el resumen del lote #{d.get('id')}",

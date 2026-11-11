@@ -15,9 +15,9 @@ TOP_FOLDERS = 40
 DAYS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
 
-def folder(path: str) -> str:
+def folder(path: str, depth: int = FOLDER_DEPTH) -> str:
     parts = path.replace("\\", "/").split("/")[:-1]
-    return "/".join(parts[:FOLDER_DEPTH]) or "/"
+    return "/".join(parts[:depth]) or "/"
 
 
 def _n(n: int, one: str, many: str) -> str:

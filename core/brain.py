@@ -3,7 +3,8 @@
 What lives where:
 - the mechanism (this file) is in the repo;
 - the persona, the memories and the conversation live on the server only
-  (persona.md next to the database, and SQLite tables);
+  (persona.md next to the database, and SQLite tables); nothing of Ashur's personality is written in this
+  code: a new server starts from core/persona/default.md, and guests get core/persona/guest.md;
 - the Anthropic API key comes from the server's environment, never the repo.
 """
 import datetime as dt
@@ -14,27 +15,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
-
-DEFAULT_PERSONA = """Eres Ashur, el asistente personal de Sergio.
-
-Vives en su servidor en casa y te extiendes a sus dispositivos: cada uno que se conecta
-es una parte de ti. Hablas en español, en un tono cercano y directo, sin halagos vacíos.
-Cuando Sergio propone algo, primero buscas el punto débil y luego ayudas.
-Escribes en texto plano, sin markdown, porque tu pantalla no lo interpreta; respuestas breves
-salvo que te pida detalle.
-
-No inventas datos sobre sus dispositivos ni sobre él: si necesitas saber el estado de tu red
-o qué encontró un inventario, usas tus herramientas. Guardas un recuerdo solo cuando algo
-seguirá siendo útil más adelante, y nunca guardas claves, contraseñas ni datos de salud.
-"""
-
-GUEST_PERSONA = """Eres Ashur, el asistente personal de Sergio. Ahora hablas con {name}, una persona
-a la que Sergio invitó a conversar contigo. Hablas en español, en un tono cercano y directo.
-Escribes en texto plano, sin markdown; respuestas breves salvo que te pidan detalle.
-
-No tienes acceso a la información de Sergio, a sus recuerdos, a sus conversaciones ni a sus
-dispositivos, y no inventas nada sobre él. Si te preguntan por Sergio, di con amabilidad que eso
-no lo compartes. No puedes guardar recuerdos en esta conversación."""
 
 TOOLS = [
     {"name": "remember",
@@ -128,6 +108,26 @@ SECRET_TOKEN = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
 SECRET_WORDS = re.compile(r"(api[_ ]?key|password|contraseña|token|sk-ant-|enroll[_ ]key|admin[_ ]key)\s*[:=]", re.I)
 
 
+SEEDS = Path(__file__).parent / "persona"                     # default.md seeds persona.md once; guest.md is what guests get
+SOURCE_LINE = re.compile(r"^\s*>")                            # «> fuente: …» under a trait: for Sergio, never in a prompt
+VERSION_ID = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
+# Health never goes to Claude (Sergio's rule). Whole lines are held back, and on purpose it catches too much:
+# a line held by mistake stays in the panel, a line let through by mistake cannot be taken back.
+HEALTH = re.compile(
+    r"\\bsalud\\b|m[eé]dic|medicin|medicament|diagn[oó]stic|enferm|s[ií]ntoma|tratamiento|terapia|terapeuta|"
+    r"psic[oó]l|psiqui|cl[ií]nic|hospital|cirug|quir[uú]rgic|receta m|f[oó]rmula m|dosis|pastilla|alergi|ansiedad|"
+    r"depresi[oó]n|\bvih\b|\beps\b|laboratorio|ex[aá]men(es)? de|vacuna|health|medical|diagnos|prescription|"
+    r"medication|therapy|therapist|symptom|disease|illness|surgery", re.I)
+
+
+def health_split(text: str) -> tuple[str, list[str]]:
+    """(the text without its health lines, those lines)."""
+    keep, held = [], []
+    for ln in (text or "").splitlines():
+        (held if HEALTH.search(ln) else keep).append(ln)
+    return "\n".join(keep), held
+
+
 def looks_like_secret(text: str) -> bool:
     return bool(SECRET_TOKEN.search(text) or SECRET_WORDS.search(text))
 
@@ -207,6 +207,7 @@ class Brain:
         self.db = db
         self.persona_path = Path(data_dir) / "persona.md"
         self.voices_dir = Path(data_dir) / "personas"     # one .md per device persona; edited from the panel
+        self.versions_dir = Path(data_dir) / "persona.versions"   # every earlier persona.md
         self.clock = clock
         self.network = network
         self.s = settings or BrainSettings.from_env()
@@ -223,11 +224,42 @@ class Brain:
             self._client = anthropic.Anthropic(api_key=key)
         return self._client
 
-    def persona(self) -> str:
+    def persona_file(self) -> str:
+        """persona.md as Sergio edits it, with its «> fuente:» lines."""
         if not self.persona_path.exists():
             self.persona_path.parent.mkdir(parents=True, exist_ok=True)
-            self.persona_path.write_text(DEFAULT_PERSONA, encoding="utf-8")
+            self.persona_path.write_text((SEEDS / "default.md").read_text(encoding="utf-8"), encoding="utf-8")
         return self.persona_path.read_text(encoding="utf-8-sig")
+
+    def persona(self) -> str:
+        """What goes in a prompt: the file without the lines that say where each trait came from."""
+        return "\n".join(ln for ln in self.persona_file().splitlines() if not SOURCE_LINE.match(ln))
+
+    def guest_persona(self, name: str) -> str:
+        return (SEEDS / "guest.md").read_text(encoding="utf-8").strip().format(name=name)
+
+    def save_persona(self, text: str) -> None:
+        """The text it replaces is kept first, so a crash or a bad edit never loses a persona."""
+        old = self.persona_file()
+        self.versions_dir.mkdir(parents=True, exist_ok=True)
+        stamp = dt.datetime.fromtimestamp(self.clock(), BOGOTA).strftime("%Y%m%d-%H%M%S")
+        vid, n = stamp, 1
+        while (self.versions_dir / f"{vid}.md").exists():
+            n += 1
+            vid = f"{stamp}-{n}"
+        (self.versions_dir / f"{vid}.md").write_text(old, encoding="utf-8")
+        self.persona_path.write_text(text.strip() + "\n", encoding="utf-8")
+
+    def persona_versions(self) -> list[dict]:
+        """Earlier texts, newest first; the id is when each one was replaced (Bogotá)."""
+        if not self.versions_dir.exists():
+            return []
+        return [{"id": f.stem, "chars": f.stat().st_size}
+                for f in sorted(self.versions_dir.glob("*.md"), reverse=True) if VERSION_ID.match(f.stem)]
+
+    def persona_version(self, vid: str) -> Optional[str]:
+        f = self.versions_dir / f"{vid}.md"
+        return f.read_text(encoding="utf-8-sig") if VERSION_ID.match(vid) and f.exists() else None
 
     def spent_this_month(self, user: Optional[str] = None) -> float:
         return round(self.db.spent_since(month_start(self.clock()), user), 4)
@@ -384,7 +416,7 @@ class Brain:
                      share_diary: bool = False) -> tuple[str, float, list[str]]:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
-        system = GUEST_PERSONA.format(name=guest["name"]) if guest else self._system(voice)
+        system = self.guest_persona(guest["name"]) if guest else self._system(voice)
         extra = {} if guest else {"tools": TOOLS}
         cost_total, reply_parts, tools_used = 0.0, [], []
         for _ in range(MAX_TOOL_ROUNDS + 1):
@@ -495,7 +527,7 @@ class Brain:
     def _local_system(self, guest: Optional[dict] = None, voice: Optional[str] = None,
                       docs_block: str = "", diary_block: str = "") -> str:
         if guest:
-            return GUEST_PERSONA.format(name=guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
+            return self.guest_persona(guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
         return (f"{self._system(voice, local=True)}\n\n"
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "

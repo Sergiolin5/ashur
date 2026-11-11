@@ -74,6 +74,7 @@ def describe(event: str, d: dict) -> str:
         "chat_key_created": f"creaste una clave de chat para ti ({d.get('guest_id')})",
         "persona_saved": f"guardó la persona {d.get('persona')}",
         "persona_deleted": f"borró la persona {d.get('persona')}",
+        "persona_signals": f"contó las señales de {d.get('documents')} documentos",
         "guest_created": f"creaste el invitado {d.get('guest_id')}",
         "guest_revoked": f"revocaste el invitado {d.get('guest_id')}",
         "memory_imported": f"importó {d.get('count')} recuerdos ({d.get('source')})",

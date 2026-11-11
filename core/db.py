@@ -1095,6 +1095,15 @@ class DB:
             c.close()
         return None if r is None else {"node_id": r[0], "path": r[1], "chunks": r[2], "first_rowid": r[3]}
 
+    def docs_profile(self) -> list[tuple]:
+        """(node_id, path, modified) of every indexed document. Own read-only connection, like docs_summary: a full
+        read of docs must never hold the shared lock."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            return c.execute("SELECT node_id, path, modified FROM docs").fetchall()
+        finally:
+            c.close()
+
     def docs_under(self, node_id: str, prefix: str, limit: int) -> list[dict]:
         """Indexed documents of a node whose path starts with prefix, case-insensitive, with `\\` read as `/` on both
         sides. Returns up to limit + 1 rows so the caller can tell «over the cap». Own read-only connection, like

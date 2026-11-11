@@ -30,8 +30,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.brain import (NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
+from core.brain import (health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
+from core import signals
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
@@ -1339,6 +1340,34 @@ def create_app(
         db.log(clock(), None, "persona_deleted", {"persona": name})
         return {"ok": True}
 
+    # --- Ashur's own persona: one file, every earlier text kept (Sergio only) ---
+    class PersonaFileIn(BaseModel):
+        text: str = Field(min_length=1, max_length=20000)
+
+    @app.get("/api/persona", dependencies=[Depends(require_admin)])
+    def persona_get():
+        return {"text": brain.persona_file(), "versions": brain.persona_versions()}
+
+    @app.put("/api/persona", dependencies=[Depends(require_admin)])
+    def persona_put(body: PersonaFileIn):
+        brain.save_persona(body.text)
+        db.log(clock(), None, "persona_saved", {"persona": "ashur", "chars": len(body.text)})
+        return {"ok": True}
+
+    @app.get("/api/persona/versions/{vid}", dependencies=[Depends(require_admin)])
+    def persona_version(vid: str):
+        text = brain.persona_version(vid)
+        if text is None:
+            raise HTTPException(404, "No existe esa versión.")
+        return {"text": text}
+
+    @app.get("/api/persona/signals", dependencies=[Depends(require_admin)])
+    def persona_signals():
+        """Counts over every indexed document, no model. Plain def: FastAPI runs it off the event loop."""
+        out = signals.profile(db.docs_profile())
+        db.log(clock(), None, "persona_signals", {"documents": out["documents"]})
+        return out
+
     @app.get("/api/whoami")
     def whoami(x_admin_key: str = Header(default=""), guest: Optional[dict] = Depends(require_chat)):
         if guest:
@@ -2397,6 +2426,8 @@ def create_app(
         out["label"] = encargo_label(e)
         if e["status"] not in ENCARGO_WITH_RESULT:
             out["result"] = None
+        elif e["to_claude"] and e["status"] in ("done", "released"):
+            out["salud"] = health_split(e["result"] or "")[1]      # the lines Claude does not get, for Sergio to see
         return out
 
     def cancel_encargo(eid: int) -> str:
@@ -2854,9 +2885,12 @@ def create_app(
             st, head = e["status"], f"Encargo #{eid}: "
             # Only «released» ever returns text derived from the documents; every other line is fixed words or counts.
             if st == "released":
-                res = e["result"] or ""
+                res, held = health_split(e["result"] or "")          # health never goes to Claude, released or not
                 cut = len(res) > CLAUDE_CUT
-                return head + "liberado por Sergio.\n" + res[:CLAUDE_CUT] + ("\n(el resto está en el panel)" if cut else "")
+                note = (f"\n({len(held)} línea{'s' if len(held) != 1 else ''} de salud no se envi{'aron' if len(held) != 1 else 'ó'}.)"
+                        if held else "")
+                return (head + "liberado por Sergio.\n" + res[:CLAUDE_CUT]
+                        + ("\n(el resto está en el panel)" if cut else "") + note)
             if st == "running":
                 last = e["state"].get("_last_device")
                 where = f", en {last}" if last else ""

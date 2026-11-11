@@ -694,6 +694,26 @@
         <div id="persona-result" class="note" style="margin:10px 0 0" hidden></div>
       </div>
     </section>
+    <section>
+      <h2>Persona de Ashur</h2>
+      <div class="group signin">
+        <p>Quién es Ashur en todos los dispositivos. Las líneas que empiezan con «&gt;» dicen de dónde salió cada rasgo: son para ti y no entran en lo que lee el modelo. Cada vez que guardas, el texto anterior queda en Versiones.</p>
+        <textarea id="base-text" rows="14" maxlength="20000" aria-label="Persona de Ashur" style="width:100%;font:inherit;font-size:15px;color:var(--label);background:var(--field);border:0;border-radius:10px;padding:11px 12px;resize:vertical"></textarea>
+        <button type="button" id="base-save">Guardar</button>
+        <select id="base-versions" aria-label="Versiones anteriores" style="width:100%;font:inherit;font-size:15px;padding:10px;border-radius:10px;border:0;background:var(--field);color:var(--label);margin-top:8px" hidden></select>
+        <div id="base-result" class="note" style="margin:10px 0 0" hidden></div>
+      </div>
+    </section>
+    <section>
+      <h2>Señales de tus documentos</h2>
+      <div class="group signin">
+        <p>Cuenta todos los documentos leídos por carpeta, tipo, hora y día. No usa ningún modelo ni lee su texto. Las carpetas de salud se ven aquí pero no entran en el texto para Claude.</p>
+        <button type="button" id="signals-run">Contar ahora</button>
+        <button type="button" id="signals-copy" class="link" style="text-align:center" hidden>Copiar para Claude</button>
+        <pre id="signals-out" class="note" hidden style="white-space:pre-wrap;font-size:12px;user-select:all"></pre>
+        <div id="signals-health" class="note" hidden></div>
+      </div>
+    </section>
 
     </div>
 
@@ -1519,7 +1539,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadUpdate(); loadTotp(); loadPersonas(); loadSpace(); loadDiag(); }
+    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadUpdate(); loadTotp(); loadPersonas(); loadBase(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -2029,6 +2049,7 @@
           m.append(bar, el("div", "detail", e.done + " de " + e.total + " trozos"));
         }
         if (e.result) m.append(el("div", "enc-result", e.result));
+        if (e.salud && e.salud.length) m.append(el("div", "detail wrap", "No va a Claude (salud), " + e.salud.length + (e.salud.length === 1 ? " línea: " : " líneas: ") + e.salud.join(" · ")));
         const a = el("div", "acts");
         if (ENC_OPEN.includes(e.status)) {
           const no = el("button", null, "Cancelar"); no.type = "button";
@@ -2295,6 +2316,56 @@
     await api("api/personas/" + encodeURIComponent(name), { method: "DELETE" });
     $("persona-result").textContent = "Borrada «" + name + "»."; $("persona-result").hidden = false;
     loadPersonas();
+  });
+
+  // --- Ashur's own persona: one file, earlier texts kept ------------------------------
+  async function loadBase() {
+    try {
+      const r = await api("api/persona");
+      if (!r.ok) return;
+      const p = await r.json(), sel = $("base-versions");
+      $("base-text").value = p.text.trim();
+      sel.replaceChildren(el("option", null, "Versiones anteriores (" + p.versions.length + ")"),
+                          ...p.versions.map((v) => el("option", null, v.id.replace(/^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d).*$/, "$1-$2-$3 $4:$5") + " · " + v.chars + " caracteres")));
+      sel.options[0].value = "";
+      p.versions.forEach((v, i) => { sel.options[i + 1].value = v.id; });
+      sel.hidden = !p.versions.length;
+    } catch (e) {}
+  }
+  $("base-versions").addEventListener("change", async () => {
+    const id = $("base-versions").value, out = $("base-result");
+    if (!id) return;
+    const r = await api("api/persona/versions/" + encodeURIComponent(id));
+    if (!r.ok) { out.textContent = await detailOf(r, "No pude abrir esa versión."); out.hidden = false; return; }
+    $("base-text").value = (await r.json()).text.trim();
+    out.textContent = "Versión cargada en el cuadro. Toca Guardar para volver a ella."; out.hidden = false;
+  });
+  $("base-save").addEventListener("click", async () => {
+    const out = $("base-result"), text = $("base-text").value.trim();
+    if (!text) { out.textContent = "La persona no puede quedar vacía."; out.hidden = false; return; }
+    const r = await api("api/persona", { method: "PUT", body: JSON.stringify({ text }) });
+    out.textContent = r.ok ? "Guardada. La anterior quedó en Versiones." : await detailOf(r, "No pude guardar la persona.");
+    out.hidden = false;
+    if (r.ok) loadBase();
+  });
+  let signalsText = "";
+  $("signals-run").addEventListener("click", async () => {
+    const b = $("signals-run"), out = $("signals-out"), h = $("signals-health");
+    b.disabled = true; b.textContent = "Contando…";
+    try {
+      const r = await api("api/persona/signals");
+      if (!r.ok) throw new Error(await detailOf(r, "HTTP " + r.status));
+      const p = await r.json();
+      signalsText = p.text;
+      out.textContent = p.text; out.hidden = false; $("signals-copy").hidden = false;
+      h.hidden = !p.health_folders.length;
+      h.textContent = "Solo para ti (salud, no va a Claude): " + p.health_folders.map((f) => f[0] + ": " + f[1] + " (" + f[2] + ")").join(" · ");
+    } catch (e) { out.textContent = "No pude contar las señales: " + e.message; out.hidden = false; }
+    b.disabled = false; b.textContent = "Contar ahora";
+  });
+  $("signals-copy").addEventListener("click", async () => {
+    const b = $("signals-copy");
+    try { await navigator.clipboard.writeText(signalsText); b.textContent = "Copiado: pégalo en el chat"; } catch (e) { b.textContent = "No pude copiar"; showCopy(signalsText); }
   });
 
   // Every 10 s while the panel is on screen (was 3 s), 60 s in a hidden tab, and backing off while the core fails.

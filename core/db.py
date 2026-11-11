@@ -1179,6 +1179,15 @@ class DB:
                               (node_id, path, pase, json.dumps(value, ensure_ascii=False), lote, device, ts))
             self.conn.commit()
 
+    def signals_put_many(self, rows: list[tuple]) -> None:
+        """rows: (node_id, path, pase, value dict, lote, device, ts). One transaction: a lote settles hundreds of
+        documents by their path at once, and one commit each would take the shared lock that many times."""
+        with self.lock:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO doc_signals (node_id, path, pase, value, lote, device, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(n, p, ps, json.dumps(v, ensure_ascii=False), l, d, ts) for n, p, ps, v, l, d, ts in rows])
+            self.conn.commit()
+
     def signals(self, pase: str) -> list[tuple]:
         """(node_id, path, value json) of a pass, on its own read-only connection."""
         c = sqlite3.connect(self.path, timeout=30)

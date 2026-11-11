@@ -25,6 +25,27 @@ Decide solo por lo que dicen el texto y la ruta, sin inventar."""
 
 PASSES = {"tipo": "clasificar por tipo y autor"}
 
+# What a path settles by itself, with no model: files a program, a game or the system wrote. Sergio wants them all
+# as knowledge (what he uses, what he plays), categorised; reading 70 000 of them with the model would only say
+# the same. Fragments are matched against the path with «/» and casefolded, so every one is a folder boundary.
+# Narrow on purpose: a folder that could hold his own writing (a «Revit» project folder, Downloads) is left to the model.
+RULES = (
+    ("juego", ("/steamapps/", "/steamlibrary/", "/zomboid/", "/saved games/", "/programas/steam/")),
+    ("fototeca", (".photoslibrary/",)),
+    ("software", ("/appdata/", "/library/application support/", "/program files/", "/program files (x86)/", "/programdata/",
+                  "/addins/", "/lookup tables/", "/autodesk/", "/revit_20", "/.vscode/", "/.claude/", "/.codex/",
+                  "/site-packages/", "/node_modules/", "/pip/_vendor/", "/pip/_internal/", "/.git/", "/__pycache__/")),
+)
+
+
+def rule(path: str) -> dict | None:
+    """The signal a path earns without a model, or None when the model has to read the document."""
+    p = "/" + _norm(path).lstrip("/")
+    for tipo, fragments in RULES:
+        if any(f in p for f in fragments):
+            return {"tipo": tipo, "autor": "otro", "regla": True}
+    return None
+
 
 def parse_tipo(answer: str) -> dict:
     """Always a value: an answer the model garbled is «otra / duda», never a guess."""
@@ -57,9 +78,10 @@ def unit_tipo(path: str, chunks: list[str]) -> dict:
 def summary_tipo(rows) -> str:
     """rows: (node_id, path, value json) of the lote's scope. One fact per line, so a health line can be held alone."""
     authors, kinds, mine, per_folder = Counter(), Counter(), Counter(), Counter()
-    kinds_in = {}
+    kinds_in, by_rule = {}, 0
     for node, path, value in rows:
         v = json.loads(value)
+        by_rule += bool(v.get("regla"))
         authors[v["autor"]] += 1
         kinds[v["tipo"]] += 1
         key = (node, folder(path))
@@ -67,7 +89,9 @@ def summary_tipo(rows) -> str:
         if v["autor"] == "sergio":
             mine[key] += 1
             kinds_in.setdefault(key, Counter())[v["tipo"]] += 1
-    lines = ["Autor: " + ", ".join(f"{a} {authors[a]}" for a in AUTHORS) + ".", "Tipos más comunes:"]
+    lines = ["Autor: " + ", ".join(f"{a} {authors[a]}" for a in AUTHORS) + ".",
+             f"Por la ruta, sin modelo: {by_rule}. Leídos por el modelo: {sum(authors.values()) - by_rule}.",
+             "Tipos más comunes:"]
     lines += [f"- {k} ({n})" for k, n in kinds.most_common(TOP)]
     lines.append(f"Carpetas con documentos escritos por Sergio ({min(len(mine), TOP)} de {len(mine)}):")
     for (node, f), n in sorted(mine.items(), key=lambda kv: (-kv[1], kv[0]))[:TOP]:

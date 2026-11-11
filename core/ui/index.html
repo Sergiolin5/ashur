@@ -1997,7 +1997,7 @@
         const label = cap(q.label) + (q.module ? " (" + q.module + ")" : "");
         if (q.status === "pending") {
           m.append(el("div", "title", label), el("div", "detail", (q.reason ? q.reason + " · " : "") + whenText(q.ts)));
-          if (q.lote) m.append(el("div", "detail wrap", cap(q.lote.label) + " · " + q.lote.documents + " documentos · " + q.lote.estimate));
+          if (q.lote) m.append(el("div", "detail wrap", cap(q.lote.label) + " · " + q.lote.documents + " documentos (" + q.lote.by_model + " los lee el modelo) · " + q.lote.estimate));
           if (q.encargo) {
             const en = q.encargo;
             m.append(el("div", "detail", cap(en.label) + " · " + en.estimate), el("div", "detail wrap", en.docs.join(", ")));

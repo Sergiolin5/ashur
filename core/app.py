@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.47.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.47.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2651,6 +2651,7 @@ def create_app(
                 return False
             if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
                 pending = [d for d in db.lote_pending(L["pase"]) if lotes.in_scope(d[0], d[1], L["scope"])]
+                pending.sort(key=lambda d: lotes.rule(d[1]) is None)     # what the path settles goes first: «faltan» is then the model's time
                 lote_queue.update(id=lid, docs=pending, fails=0)
                 L.update(total=L["done"] + len(pending), failed=0, skipped=0)
                 if not db.lote_set(lid, expect=L["status"], status="running", total=L["total"], failed=0, skipped=0):
@@ -2659,7 +2660,15 @@ def create_app(
             elif L["status"] != "running" and not db.lote_set(lid, expect=L["status"], status="running"):
                 return True
             docs = lote_queue["docs"]
-            if docs:
+            if docs and lotes.rule(docs[0][1]):               # the path says it all: no model, up to 500 in one write
+                n = next((i for i, d in enumerate(docs[:500]) if not lotes.rule(d[1])), min(len(docs), 500))
+                if not db.lote_set(lid, expect="running", done=L["done"] + n):
+                    lote_forget()
+                    return True
+                db.signals_put_many([(d[0], d[1], L["pase"], lotes.rule(d[1]), lid, "regla", clock()) for d in docs[:n]])
+                del docs[:n]
+                L["done"] += n
+            elif docs:
                 node_id, path, chunks, first = docs[0]
                 texts = db.doc_texts(node_id, path) if chunks and first is not None else []
                 if not texts:                                 # no text, gone, or indexed before 0.33.3 (needs a reread)
@@ -2838,7 +2847,8 @@ def create_app(
             lid = r["args"].get("lote")
             if r["action"] == "lote" and isinstance(lid, int) and (L := db.lote_get(lid)):
                 row["lote"] = {"label": f"{lotes.PASSES.get(L['pase'], L['pase'])} · {lotes.scope_label(L['scope'])}",
-                               "documents": L["total"], "estimate": lote_estimate(L["total"])}
+                               "documents": L["total"], "by_model": int(db.setting(f"lote_model:{lid}") or L["total"]),
+                               "estimate": lote_estimate(int(db.setting(f"lote_model:{lid}") or L["total"]))}
             out.append(row)
         return out
 
@@ -3090,7 +3100,9 @@ def create_app(
             if (equipo is None) != (carpeta is None):
                 raise ToolError("«equipo» y «carpeta» van juntos; sin ninguno, el lote cubre todos los documentos leídos.")
             scope = {"equipo": equipo.strip(), "carpeta": carpeta.strip()} if equipo else {}
-            n = sum(1 for d in db.lote_pending(pase) if lotes.in_scope(d[0], d[1], scope))
+            todo = [d for d in db.lote_pending(pase) if lotes.in_scope(d[0], d[1], scope)]
+            n, model = len(todo), sum(1 for d in todo if not lotes.rule(d[1]))
+            split = f"{n} documentos ({n - model} por la ruta, {model} por el modelo)"
             if not n:
                 raise ToolError("No hay documentos leídos por hacer ahí: o no hay ninguno, o ese pase ya los cubrió.")
             with request_lock:
@@ -3100,11 +3112,12 @@ def create_app(
                     raise ToolError("Ya hay 5 pedidos esperando a Sergio; espera a que decida.")
                 lid = db.lote_add(clock(), pase, scope, motivo.strip())
                 db.lote_set(lid, total=n)               # counted once here: Pedidos polls, and counting reads all of docs
+                db.set_setting(f"lote_model:{lid}", str(model))
                 rid = db.claude_request_add(clock(), "lote", {"lote": lid}, motivo.strip())
             label = action_label("lote", {"lote": lid})
             db.log(clock(), None, "claude_request", {"id": rid, "action": "lote", "label": label})
-            launch_push(rid, f"Claude pide: {label}", f"{n} documentos, {lote_estimate(n)}. {motivo.strip()}")
-            return (f"Lote #{lid} pedido (pedido #{rid}): {n} documentos, {lote_estimate(n)}. "
+            launch_push(rid, f"Claude pide: {label}", f"{split}, {lote_estimate(model)}. {motivo.strip()}")
+            return (f"Lote #{lid} pedido (pedido #{rid}): {split}, {lote_estimate(model)}. "
                     "Sergio lo aprueba en el panel; míralo con ashur_ver_lote.")
 
         def ver_lote(args: dict) -> str:

@@ -183,3 +183,40 @@ def test_a_lote_only_uses_the_most_powerful_model_ready(tmp_path, fast_local):
     assert c.db.lote_get(1)["status"] == "done"
     assert len(strong.payloads) == 4 and len(weak.payloads) == 1      # all three documents went to the 7B
     assert {r[0] for r in c.db.conn.execute("SELECT device FROM doc_signals")} == {"ryzen9"}
+
+
+def test_rules_settle_program_and_game_files_by_their_path():
+    for path, tipo in (("X:\\SteamLibrary\\steamapps\\workshop\\content\\a.txt", "juego"),
+                       ("C:/Users/s/AppData/Local/x/log.txt", "software"),
+                       ("/Users/s/Library/Application Support/Code/a.json", "software"),
+                       ("/Users/s/Pictures/Photos Library.photoslibrary/database/x.json", "fototeca"),
+                       ("S:/Revit 2024/Revit 2026/AddIns/DynamoForRevit/a.md", "software")):
+        assert lotes.rule(path) == {"tipo": tipo, "autor": "otro", "regla": True}, path
+    for mine in ("C:/Users/s/OneDrive/Documentos/Proyectos Revit/notas.txt", "/Users/s/Downloads/carta.txt",
+                 "S:/MARIANELLA TELLEZ ILUMINACION/RETILAP/memoria.docx", "C:/Users/s/Documents/steam.txt"):
+        assert lotes.rule(mine) is None, mine
+
+
+def test_a_lote_does_not_spend_the_model_on_what_the_path_settles(tmp_path, fast_local):
+    docs = dict(DOCS)
+    for i in range(3):
+        docs[f"/Users/s/Library/Application Support/app/f{i}.json"] = ["{}"]
+    docs["/Users/s/Zomboid/Logs/l.txt"] = ["log"]
+    c, t = setup(tmp_path, docs)
+    text, err = ask(c)
+    assert err is False and "7 documentos (4 por la ruta, 3 por el modelo)" in text
+    req = [r for r in t.get("/api/claude-requests", headers=A).json() if r["action"] == "lote"][0]
+    assert req["lote"]["documents"] == 7 and req["lote"]["by_model"] == 3
+    node = FakeLLM(t, answer)
+    try:
+        approve(c, t, 1)
+        run(c)
+    finally:
+        node.close()
+    L = c.db.lote_get(1)
+    assert (L["status"], L["done"], L["total"]) == ("done", 7, 7)
+    assert len(node.payloads) == 3                                    # the model only read what the path could not settle
+    by = {r[0]: r[1] for r in c.db.conn.execute("SELECT device, COUNT(*) FROM doc_signals GROUP BY device")}
+    assert by == {"regla": 4, "mac-m1": 3}
+    row = t.get("/api/lotes", headers=A).json()[0]
+    assert "Por la ruta, sin modelo: 4. Leídos por el modelo: 3." in row["summary"] and "- software (3)" in row["summary"]

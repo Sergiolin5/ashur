@@ -7,7 +7,7 @@ Sergio dirige y aprueba; no programa. Responde siempre en español.
 - La app es **cliente** del núcleo. No guarda memoria ni hábitos propios: el servidor es la verdad.
 - Toda acción Write/System pasa por **Pedidos** y la aprueba el teléfono maestro (por ahora: quien tenga la clave admin, desbloqueada con Touch ID).
 - Claude no responde solo: el chat usa `allow_claude: false` salvo que Sergio lo active en ese mensaje.
-- Los datos de salud **nunca** salen a Claude ni a los papers. HealthKit: «todo queda en local» (ver duda abierta abajo).
+- Los datos de salud **nunca** salen a Claude ni a los papers. HealthKit: se leen en el teléfono y van **también al servidor** (decisión de Sergio, 2026-11-11), marcados como solo local; nunca a Claude.
 - Nada de claves en el código: la clave admin vive en el **Keychain**.
 - **Antes de usar cualquier API del iPhone Duo, verificarla en la documentación de Apple y en el SDK instalado.** Si no se puede verificar, decirlo y no inventar nombres.
 - Construir **una funcionalidad a la vez, compilando entre cada una** (orden a → i). Checkpoint con Sergio después de (c) y al final: qué compila, qué se probó en el simulador y qué solo se puede probar en el Duo físico.
@@ -45,10 +45,10 @@ b. **Layout adaptativo al pliegue.** Cerrado: compacto, solo conversación. Abie
    - Probar las poses en el simulador del Duo de Device Hub (abrir, cerrar, rotar, plegar).
 c. **Aprobaciones con Touch ID.** `LocalAuthentication`: la clave admin en el Keychain con `SecAccessControl` (`.biometryCurrentSet`); leerla dispara Touch ID en el Duo y Face ID en el 15 Pro (requiere `NSFaceIDUsageDescription`). Aprobar un pedido = leer la clave (biometría) + `POST .../approve`. **Checkpoint con Sergio aquí.**
 d. **Voz.** Entrada: grabar m4a y mandarlo a `/api/audio?kind=dictation` (transcribe un nodo con faster-whisper; nada a la nube) o `Speech` en el dispositivo; preguntar a Sergio cuál. Salida: `AVSpeechSynthesizer` en español.
-e. **Cámara.** Foto como contexto; **solo a Claude con aprobación de Sergio** en ese mensaje. Hoy el núcleo no acepta imágenes en `/api/chat`: hará falta un endpoint nuevo (cambio de núcleo → preguntar). El modelo local no lee imágenes (el modelo de visión del Ryzen es un objetivo aparte).
+e. **Cámara.** Foto como contexto; **solo a Claude con aprobación de Sergio** en ese mensaje. Hoy el núcleo no acepta imágenes en `/api/chat`: **Sergio aprobó el endpoint nuevo (2026-11-11)**. Se construye en el núcleo (Python, `core/app.py` + `core/brain.py`, con pruebas) antes que la parte de la app; la imagen no se guarda en la base y solo viaja a Claude con `allow_claude: true`. El modelo local no lee imágenes (el modelo de visión del Ryzen es un objetivo aparte).
 f. **Ubicación y sensores** como señales de hábitos: `POST /api/uso` con lat/lon solo si Sergio da permiso «al usar la app». Nada en segundo plano sin preguntarle.
 g. **HomeKit.** Entitlement HomeKit + `NSHomeKitUsageDescription`. Toda acción sobre un accesorio pasa por aprobación.
-h. **HealthKit.** Entitlement HealthKit + `NSHealthShareUsageDescription`. Solo lectura. Los datos **no** se mandan a Claude. **Duda abierta:** «todo queda en local» puede significar «solo en el teléfono» o «en el servidor, nunca a Claude»; preguntar a Sergio antes de mandar cualquier dato de salud al núcleo.
+h. **HealthKit.** Entitlement HealthKit + `NSHealthShareUsageDescription`. Solo lectura. Los datos van al servidor como contexto de hábitos (endpoint nuevo en el núcleo, con su propia tabla o como recuerdos «solo local»: preguntar a Sergio por el esquema antes de crearlo) y **nunca** se mandan a Claude ni entran en un prompt que vaya a Claude.
 i. **Identidad visual.** Presencia animada en índigo `#5856D6` (marca de Ashur; el panel web usa un acento óxido a propósito, la app usa el índigo). Refleja la madurez (`/api/persona` → `level`) y si los nodos están en «crecimiento pleno» (todos los equipos en línea según `/api/overview`). Sin parpadeos; efectos marcados pero modernos; respetar «reducir movimiento».
 
 ## Estado del proyecto al traspasar

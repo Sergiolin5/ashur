@@ -2141,6 +2141,25 @@
         if (L.summary) m.append(el("div", "enc-result", L.summary));
         if (L.salud && L.salud.length) m.append(el("div", "detail wrap", "No va a Claude (salud), " + L.salud.length + (L.salud.length === 1 ? " línea" : " líneas") + "."));
         const a = el("div", "acts");
+        if (!open && L.done) {                                   // what the model really said for the «otro / duda» ones
+          const see = el("button", null, "Ver respuestas en duda"), box = el("div", "detail wrap");
+          see.type = "button";
+          see.onclick = async () => {
+            see.disabled = true;
+            try {
+              const r = await api("api/lotes/" + L.id + "/muestra");
+              const d = await r.json();
+              const text = d.muestra.map((x) => x.equipo + ": " + x.ruta + "\n  → " + (x.crudo || "(sin respuesta guardada)")).join("\n");
+              box.replaceChildren(el("div", null, d.total + " documentos «otro / duda»; " + d.muestra.length + " de muestra:"), el("pre", "note", text));
+              box.querySelector("pre").style.cssText = "white-space:pre-wrap;font-size:12px;user-select:all";
+              const cp = el("button", "link", "Copiar para Claude"); cp.type = "button";
+              cp.onclick = async () => { try { await navigator.clipboard.writeText(text); cp.textContent = "Copiado"; } catch (e) { showCopy(text); } };
+              box.append(cp);
+            } catch (e) { box.textContent = "No pude traer la muestra."; }
+            see.disabled = false;
+          };
+          a.append(see); m.append(box);
+        }
         if (open) {
           const no = el("button", null, "Cancelar"); no.type = "button";
           twice(no, "Toca otra vez para cancelar", () => moveLote(L.id, "cancel", [no]));

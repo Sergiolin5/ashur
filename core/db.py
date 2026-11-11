@@ -1191,6 +1191,15 @@ class DB:
                 [(n, p, ps, json.dumps(v, ensure_ascii=False), l, d, ts) for n, p, ps, v, l, d, ts in rows])
             self.conn.commit()
 
+    def lote_signals(self, lote: int) -> list[tuple]:
+        """(node_id, path, value json) a given lote wrote, on its own read-only connection."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            return c.execute("SELECT node_id, path, value FROM doc_signals WHERE lote = ? ORDER BY node_id, path",
+                             (lote,)).fetchall()
+        finally:
+            c.close()
+
     def signals(self, pase: str) -> list[tuple]:
         """(node_id, path, value json) of a pass, on its own read-only connection."""
         c = sqlite3.connect(self.path, timeout=30)

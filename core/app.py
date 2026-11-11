@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.47.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.47.4", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2765,6 +2765,20 @@ def create_app(
                 db.claude_request_decide(rid, "not_done", clock(), "Lote cancelado.")
         db.log(clock(), None, "lote_" + to, {"id": lid})
         return {"ok": True}
+
+    @app.get("/api/lotes/{lid}/muestra", dependencies=[Depends(require_admin)])
+    def lote_sample(lid: int, tipo: str = "otro", autor: str = "duda", n: int = 10):
+        """What the model actually answered for a few documents of one kind and author (the «crudo» lines), for Sergio
+        to judge whether a «duda» is the document or the reading of the answer. Panel only: never through the connector."""
+        if not db.lote_get(lid):
+            raise HTTPException(404, "No existe ese lote.")
+        rows = []
+        for node, path, value in db.lote_signals(lid):
+            v = json.loads(value)
+            if v.get("tipo") == tipo and v.get("autor") == autor:
+                rows.append({"equipo": node, "ruta": path, "crudo": v.get("crudo")})
+        step = max(1, len(rows) // max(1, min(n, 30)))           # spread over the list, not the first ten of one folder
+        return {"total": len(rows), "muestra": rows[::step][:min(n, 30)]}
 
     @app.post("/api/lotes/{lid}/release", dependencies=[Depends(require_admin)])
     def lote_release(lid: int):

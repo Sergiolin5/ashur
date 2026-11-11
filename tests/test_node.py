@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -345,6 +346,8 @@ def test_policy_says_why_it_paused():
     assert "85%" in explain(Signals(idle_s=0, other_load_pct=85), t, Mode.OFF, False)
     assert "en uso" in explain(Signals(idle_s=120), t, Mode.LIGHT, False)
     assert explain(Signals(idle_s=5, fullscreen=True, locked=True), t, Mode.FULL, False) == "pantalla bloqueada: libre"
+    assert explain(Signals(idle_s=5, fullscreen=True, fullscreen_app="LockApp.exe"), t, Mode.OFF, False) == \
+        "hay una app en pantalla completa (LockApp.exe)"
 
     class R:
         def read(self):
@@ -427,3 +430,14 @@ def test_agent_tells_the_core_how_long_the_machine_slept(core, tmp_path, monkeyp
     back = [r for r in c.get("/log", headers=A).json() if r["event"] == "back_online"]
     assert back and back[0]["detail"]["slept_s"] == 600
     assert agent.slept_s == 0.0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows signal readers")
+def test_windows_lock_readers_run_without_errors():
+    """The CI runner is no locked screen, so this checks the calls themselves (structure offsets, handle types), not
+    the verdict: a crash here would mean the node never sees a lock."""
+    from node import policy
+    assert policy._windows_session_lock() in (True, False, None)
+    assert policy._windows_locked() in (True, False)
+    front = policy._windows_front_app()
+    assert front is None or front.lower().endswith(".exe")

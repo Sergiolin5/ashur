@@ -71,16 +71,35 @@ def rule(path: str) -> dict | None:
     return None
 
 
+LABEL = re.compile(r"^[\s*_#>`-]*(tipo|autor)[\s*_]*:[\s*_]*", re.I)    # «**Tipo:**», «- autor:», «tipo :»
+
+
+def _kind_of(said: str, kinds: list[str]) -> str:
+    said = re.sub(r"[^\w áéíóúñü/-]", "", said.casefold()).strip()
+    return next((k for k in sorted(kinds, key=len, reverse=True)
+                 if said == k.casefold() or said.startswith(k.casefold() + " ")), OTHER)
+
+
 def parse_tipo(answer: str, kinds: list[str]) -> dict:
-    """Always a value from the closed list: an answer the model garbled is «otro / duda», never a guess. A kind the
-    model dressed up («Informe técnico.») still counts when it starts with one of the list, the longest first."""
-    kind = re.search(r"^\s*tipo\s*:\s*(.+)$", answer or "", re.I | re.M)
-    who = re.search(r"^\s*autor\s*:\s*(\w+)", answer or "", re.I | re.M)
-    said = re.sub(r"[^\w áéíóúñü/-]", "", kind.group(1).casefold()).strip() if kind else ""
-    tipo = next((k for k in sorted(kinds, key=len, reverse=True) if said == k.casefold() or said.startswith(k.casefold() + " ")),
-                OTHER)
-    autor = who.group(1).lower() if who else ""
-    return {"tipo": tipo, "autor": autor if autor in AUTHORS else "duda"}
+    """Always a value from the closed list: an answer the model garbled is «otro / duda», never a guess.
+    The 7B, given the long list, often drops the «tipo:» label and answers the kind alone on the first line (the
+    second pilot lost 540 of 687 documents that way), so a first line with no label is read as the kind. «crudo»
+    keeps the answer's first two lines, local only, so a better reading later needs no second pass of the model."""
+    lines = [ln.strip() for ln in (answer or "").splitlines() if ln.strip()]
+    tipo, autor = None, None
+    for ln in lines:
+        m = LABEL.match(ln)
+        if not m:
+            continue
+        value = re.sub(r"[<>*_`\"']", "", ln[m.end():]).strip()
+        if m.group(1).lower() == "tipo" and tipo is None:
+            tipo = value
+        elif m.group(1).lower() == "autor" and autor is None:
+            autor = (re.findall(r"\w+", value.lower()) or [""])[0]
+    if tipo is None and lines and not LABEL.match(lines[0]):
+        tipo = re.sub(r"[<>*_`\"']", "", lines[0]).strip()
+    return {"tipo": _kind_of(tipo or "", kinds), "autor": autor if autor in AUTHORS else "duda",
+            "crudo": " | ".join(lines[:2])[:200]}
 
 
 def _norm(path: str) -> str:

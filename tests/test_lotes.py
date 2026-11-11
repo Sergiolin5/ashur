@@ -48,10 +48,17 @@ def run(c, limit=50):
 # --- pure -----------------------------------------------------------------------------
 def test_parse_tipo_only_takes_kinds_from_the_list():
     K = list(lotes.DEFAULT_KINDS)
-    assert lotes.parse_tipo("Tipo: Informe técnico.\nAutor: Sergio", K) == {"tipo": "informe", "autor": "sergio"}
-    assert lotes.parse_tipo("tipo: cuenta de cobro\nautor: la empresa", K) == {"tipo": "cuenta de cobro", "autor": "duda"}
-    assert lotes.parse_tipo("tipo: dataset\nautor: otro", K) == {"tipo": "otro", "autor": "otro"}
-    assert lotes.parse_tipo("no sé", K) == {"tipo": "otro", "autor": "duda"}
+    pick = lambda a: {k: v for k, v in lotes.parse_tipo(a, K).items() if k != "crudo"}
+    assert pick("Tipo: Informe técnico.\nAutor: Sergio") == {"tipo": "informe", "autor": "sergio"}
+    assert pick("tipo: cuenta de cobro\nautor: la empresa") == {"tipo": "cuenta de cobro", "autor": "duda"}
+    assert pick("tipo: dataset\nautor: otro") == {"tipo": "otro", "autor": "otro"}
+    assert pick("no sé") == {"tipo": "otro", "autor": "duda"}
+    # what the real 7B answered with the long list: the kind alone, no label (2026-11-11, ryzen9)
+    assert pick("trabajo académico\nautor: sergio") == {"tipo": "trabajo académico", "autor": "sergio"}
+    assert pick("**Tipo:** carta\n**Autor:** <otro>") == {"tipo": "carta", "autor": "otro"}
+    assert pick("- tipo: <factura>\n- autor: duda") == {"tipo": "factura", "autor": "duda"}
+    assert pick("autor: sergio") == {"tipo": "otro", "autor": "sergio"}
+    assert lotes.parse_tipo("trabajo académico\nautor: sergio\nmás texto", K)["crudo"] == "trabajo académico | autor: sergio"
 
 
 def test_prompt_names_sergio_and_lists_the_kinds():
@@ -86,7 +93,8 @@ def test_lote_needs_approval_then_classifies_every_document(tmp_path, fast_local
     L = c.db.lote_get(1)
     assert (L["status"], L["done"], L["total"], L["failed"], L["skipped"]) == ("done", 3, 3, 0, 0)
     got = {p.rsplit("/", 1)[-1]: json.loads(v) for _, p, v in c.db.signals("tipo")}
-    assert got["a.txt"] == {"tipo": "diario", "autor": "sergio"} and got["manual.txt"]["autor"] == "otro"
+    assert {k: got["a.txt"][k] for k in ("tipo", "autor")} == {"tipo": "diario", "autor": "sergio"}
+    assert got["manual.txt"]["autor"] == "otro"
     assert len(node.payloads) == 3                                  # one unit per document
 
 

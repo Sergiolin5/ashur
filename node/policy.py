@@ -25,14 +25,20 @@ class Thresholds:
 class Signals:
     idle_s: Optional[float]            # None = cannot be read on this OS
     fullscreen: bool = False
+    locked: bool = False               # session locked or screen saver on: nobody is at the screen
     other_load_pct: float = 0.0
     on_battery: bool = False
     battery_pct: Optional[float] = None
 
 
 def decide_shared(s: Signals, t: Thresholds) -> Mode:
-    """The shared main machine (Ryzen 9)."""
-    if s.fullscreen or s.other_load_pct > t.other_load_off_pct:
+    """The shared main machine (Ryzen 9). A locked screen means he is away: the lock screen covers the monitor and
+    used to read as a full-screen app, which kept Ashur off the whole time he was gone."""
+    if s.other_load_pct > t.other_load_off_pct:
+        return Mode.OFF
+    if s.locked:
+        return Mode.FULL
+    if s.fullscreen:
         return Mode.OFF
     if s.idle_s is not None and s.idle_s >= t.idle_for_full_s:
         return Mode.FULL
@@ -55,7 +61,7 @@ def explain(s: Signals, t: Thresholds, mode: Mode, portable: bool) -> str:
     if mode == Mode.OFF:
         if portable and s.on_battery and s.battery_pct is not None and s.battery_pct < t.battery_off_pct:
             return f"con batería al {s.battery_pct:.0f}%: pausado hasta conectarlo"
-        if s.fullscreen:
+        if s.fullscreen and not s.locked:
             return "hay una app en pantalla completa"
         return f"otros programas usan el {s.other_load_pct:.0f}% del procesador"
     if mode == Mode.LIGHT:
@@ -64,7 +70,7 @@ def explain(s: Signals, t: Thresholds, mode: Mode, portable: bool) -> str:
         if s.idle_s is None:
             return "no puedo leer cuánto lleva sin uso"
         return f"en uso (sin tocar hace {s.idle_s / 60:.0f} de {t.idle_for_full_s / 60:.0f} min)"
-    return "libre"
+    return "pantalla bloqueada: libre" if s.locked else "libre"
 
 
 # --- signal readers --------------------------------------------------------
@@ -82,6 +88,44 @@ def _windows_idle_s() -> Optional[float]:
         return None
     now = ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF
     return ((now - lii.dwTime) & 0xFFFFFFFF) / 1000.0
+
+
+def _windows_locked() -> bool:
+    """True when the session is locked or the screen saver runs. Three looks, any one is enough: the screen saver
+    flag; the input desktop is not «Default» (it is «Winlogon» while locked, and a locked desktop often cannot even be
+    opened); the window in front belongs to LockApp.exe (the Windows 10/11 lock screen)."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32, kernel32 = ctypes.WinDLL("user32", use_last_error=True), ctypes.windll.kernel32
+    user32.OpenInputDesktop.restype = wintypes.HANDLE
+    running = wintypes.BOOL()
+    if user32.SystemParametersInfoW(0x0072, 0, ctypes.byref(running), 0) and running.value:   # SPI_GETSCREENSAVERRUNNING
+        return True
+    desk = user32.OpenInputDesktop(0, False, 0x0001)        # DESKTOP_READOBJECTS
+    if not desk:
+        # access denied is the locked desktop; any other failure (a session with no screen at all) says nothing,
+        # and «locked» there would let Ashur work at full while he plays
+        return ctypes.get_last_error() == 5
+    try:
+        name = ctypes.create_unicode_buffer(256)
+        if user32.GetUserObjectInformationW(desk, 2, name, ctypes.sizeof(name), None) and name.value.lower() != "default":
+            return True                                      # UOI_NAME
+    finally:
+        user32.CloseDesktop(desk)
+    hwnd = user32.GetForegroundWindow()
+    if hwnd:
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        proc = kernel32.OpenProcess(0x1000, False, pid)     # PROCESS_QUERY_LIMITED_INFORMATION
+        if proc:
+            try:
+                buf, size = ctypes.create_unicode_buffer(520), wintypes.DWORD(520)
+                if kernel32.QueryFullProcessImageNameW(proc, 0, buf, ctypes.byref(size)):
+                    return buf.value.replace("/", "\\").rsplit("\\", 1)[-1].lower() == "lockapp.exe"
+            finally:
+                kernel32.CloseHandle(proc)
+    return False
 
 
 def _windows_fullscreen() -> bool:
@@ -177,12 +221,16 @@ class SignalReader:
             # and the reading is noise (a self-test once saw "off" from it). Take a real sample.
             time.sleep(1.0)
             self._sampled = True
-        idle, fullscreen = None, False
+        idle, fullscreen, locked = None, False, False
         if self.windows:
             try:
                 idle, fullscreen = _windows_idle_s(), _windows_fullscreen()
             except Exception as e:  # never let a signal crash the agent
                 log.warning("could not read Windows signals: %s", e)
+            try:
+                locked = _windows_locked()
+            except Exception as e:  # unknown: as before, the full-screen check decides
+                log.warning("could not tell if the screen is locked: %s", e)
         elif self.mac:
             try:
                 idle = _mac_idle_s()           # fullscreen is not detected on macOS yet
@@ -196,7 +244,7 @@ class SignalReader:
             batt = self.psutil.sensors_battery()
         except Exception:
             pass
-        return Signals(idle_s=idle, fullscreen=fullscreen, other_load_pct=other,
+        return Signals(idle_s=idle, fullscreen=fullscreen, locked=locked, other_load_pct=other,
                        on_battery=bool(batt and not batt.power_plugged),
                        battery_pct=batt.percent if batt else None)
 

@@ -24,6 +24,8 @@ A = {"X-Admin-Key": ADMIN}
     (Signals(idle_s=None), Mode.LIGHT),                               # unknown: polite
     (Signals(idle_s=900, fullscreen=True), Mode.OFF),                 # game paused, still fullscreen
     (Signals(idle_s=900, other_load_pct=85), Mode.OFF),               # his render running
+    (Signals(idle_s=5, fullscreen=True, locked=True), Mode.FULL),     # the lock screen covers the monitor: he is away
+    (Signals(idle_s=5, locked=True, other_load_pct=85), Mode.OFF),    # locked, but something of his still runs hard
 ])
 def test_shared_main_machine(sig, expected):
     assert decide_shared(sig, T) == expected
@@ -342,6 +344,7 @@ def test_policy_says_why_it_paused():
     assert "batería al 20%" in explain(Signals(idle_s=0, on_battery=True, battery_pct=20), t, Mode.OFF, True)
     assert "85%" in explain(Signals(idle_s=0, other_load_pct=85), t, Mode.OFF, False)
     assert "en uso" in explain(Signals(idle_s=120), t, Mode.LIGHT, False)
+    assert explain(Signals(idle_s=5, fullscreen=True, locked=True), t, Mode.FULL, False) == "pantalla bloqueada: libre"
 
     class R:
         def read(self):

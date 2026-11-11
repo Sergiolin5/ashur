@@ -1304,6 +1304,8 @@ class DB:
     _ENC_JSON = ("params", "docs", "units", "state", "devices")
     _ENC_COLS = ("id, ts, op, params, to_claude, reason, status, docs, done, total, state, result, devices, "
                  "error, updated")
+    _ENC_SETTABLE = frozenset({"ts", "op", "params", "to_claude", "reason", "status", "docs", "units", "done",
+                               "total", "state", "result", "devices", "error", "updated"})
     _ENC_UNFINISHED = "('pending_approval', 'queued', 'running', 'paused')"
 
     @classmethod
@@ -1330,6 +1332,9 @@ class DB:
 
     def encargo_set(self, eid: int, expect: Optional[str] = None, **fields) -> bool:
         """Update columns; with expect, only if the status is still that one (atomic). Always stamps updated."""
+        bad = set(fields) - self._ENC_SETTABLE
+        if bad:
+            raise ValueError(f"unknown encargo field(s): {', '.join(sorted(bad))}")
         fields["updated"] = time.time()
         vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in fields.values()]
         sql = f"UPDATE encargos SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?"
@@ -1363,11 +1368,21 @@ class DB:
         return self._enc_row(r) if r else None
 
     def doc_texts(self, node_id: str, path: str) -> list[str]:
-        """A document's chunks in order, on its own read-only connection (never the shared lock)."""
+        """A document's chunks in order, on its own read-only connection (never the shared lock). doc_chunks has no
+        index on node_id/path, so it reads by rowid range (docs.first_rowid; chunks are inserted in seq order by
+        docs_apply). Only a document indexed before first_rowid existed falls back to the filtered full scan."""
         c = sqlite3.connect(self.path, timeout=30)
         try:
-            rows = c.execute("SELECT content FROM doc_chunks WHERE node_id = ? AND path = ? "
-                             "ORDER BY CAST(seq AS INTEGER)", (node_id, path)).fetchall()
+            d = c.execute("SELECT first_rowid, chunks FROM docs WHERE node_id = ? AND path = ?",
+                          (node_id, path)).fetchone()
+            if d is None or not d[1]:
+                return []
+            if d[0] is None:
+                rows = c.execute("SELECT content FROM doc_chunks WHERE node_id = ? AND path = ? "
+                                 "ORDER BY CAST(seq AS INTEGER)", (node_id, path)).fetchall()
+            else:
+                rows = c.execute("SELECT content FROM doc_chunks WHERE rowid BETWEEN ? AND ? ORDER BY rowid",
+                                 (d[0], d[0] + d[1] - 1)).fetchall()
         finally:
             c.close()
         return [r[0] for r in rows]

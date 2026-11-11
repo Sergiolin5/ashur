@@ -1,4 +1,6 @@
 """Encargos: the table and its DB methods."""
+import pytest
+
 from core.db import DB
 
 
@@ -67,11 +69,33 @@ def test_next_prefers_running_then_oldest_queued(tmp_path):
 
 def test_doc_texts_in_order(tmp_path):
     db = make(tmp_path)
+    chunks = [f"c{i}" for i in range(12)]
+    db.docs_apply("n1", [{"path": "/b.txt", "modified": 1.0, "chunks": ["otro"]},
+                         {"path": "/a.txt", "modified": 1.0, "chunks": chunks},
+                         {"path": "/c.txt", "modified": 1.0, "chunks": ["x", "y"]}], [])
+    assert db.doc_texts("n1", "/a.txt") == chunks
+    assert db.doc_texts("n1", "/c.txt") == ["x", "y"]
+    assert db.doc_texts("n1", "/zz") == []
+    db.docs_apply("n1", [{"path": "/e.txt", "modified": 1.0, "chunks": []}], [])
+    assert db.doc_texts("n1", "/e.txt") == []
+
+
+def test_doc_texts_fallback_without_first_rowid(tmp_path):
+    db = make(tmp_path)
+    db.docs_apply("n1", [{"path": "/a.txt", "modified": 1.0, "chunks": ["x"]}], [])
+    db.conn.execute("DELETE FROM doc_chunks")
     for seq, txt in [(2, "tres"), (0, "uno"), (10, "once"), (1, "dos")]:
         db.conn.execute("INSERT INTO doc_chunks (content, node_id, path, seq) VALUES (?, ?, ?, ?)",
                         (txt, "n1", "/a.txt", seq))
-    db.conn.execute("INSERT INTO doc_chunks (content, node_id, path, seq) VALUES (?, ?, ?, ?)",
-                    ("otro", "n1", "/b.txt", 0))
+    db.conn.execute("UPDATE docs SET first_rowid = NULL, chunks = 4")
     db.conn.commit()
     assert db.doc_texts("n1", "/a.txt") == ["uno", "dos", "tres", "once"]
-    assert db.doc_texts("n1", "/zz") == []
+
+
+def test_set_rejects_unknown_field(tmp_path):
+    db = make(tmp_path)
+    eid = db.encargo_add(1.0, "resumir", {}, False, "", [])
+    with pytest.raises(ValueError):
+        db.encargo_set(eid, id=5)
+    with pytest.raises(ValueError):
+        db.encargo_set(eid, **{"status = 'x', done": 1})

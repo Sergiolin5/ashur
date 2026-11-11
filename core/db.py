@@ -1371,8 +1371,9 @@ class DB:
         """A document's chunks in order, on its own read-only connection (never the shared lock). doc_chunks has no
         index on node_id/path, so it reads by rowid range (docs.first_rowid; chunks are inserted in seq order by
         docs_apply). Only a document indexed before first_rowid existed falls back to the filtered full scan."""
-        c = sqlite3.connect(self.path, timeout=30)
+        c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         try:
+            c.execute("BEGIN")                         # one snapshot (WAL): a docs_apply between the two reads can't mix them
             d = c.execute("SELECT first_rowid, chunks FROM docs WHERE node_id = ? AND path = ?",
                           (node_id, path)).fetchone()
             if d is None or not d[1]:
@@ -1384,6 +1385,8 @@ class DB:
                 rows = c.execute("SELECT content FROM doc_chunks WHERE rowid BETWEEN ? AND ? ORDER BY rowid",
                                  (d[0], d[0] + d[1] - 1)).fetchall()
         finally:
+            if c.in_transaction:
+                c.rollback()
             c.close()
         return [r[0] for r in rows]
 

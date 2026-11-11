@@ -279,3 +279,42 @@ def test_responder_keeps_best_six_fragments(tmp_path):
     frags = E.best_fragments(db, docs, "presupuesto")
     assert len(frags) == E.ANSWER_FRAGMENTS and all(0 <= f["doc"] < len(docs) for f in frags)
     assert all("fuera" not in f["text"] for f in frags)
+
+
+def test_fragments_several_from_one_long_document(tmp_path):
+    db = make(tmp_path)
+    db.docs_apply("n1", [{"path": "/largo.txt", "modified": 1.0,
+                          "chunks": [f"parte {i} del presupuesto" for i in range(10)]}], [])
+    docs = E.resolve_docs(db, "presupuesto", None, None)
+    frags = E.best_fragments(db, docs, "presupuesto")
+    assert len(frags) == E.ANSWER_FRAGMENTS and all(f["doc"] == 0 for f in frags)
+    assert len({f["text"] for f in frags}) == E.ANSWER_FRAGMENTS
+
+
+def test_fragments_common_word_still_finds_the_encargo_document(tmp_path):
+    db = make(tmp_path)
+    db.docs_apply("n1", [{"path": f"/otros/f{i}.txt", "modified": 1.0, "chunks": ["presupuesto presupuesto"] * 3}
+                         for i in range(200)], [])
+    db.docs_apply("n1", [{"path": "/mio/a.txt", "modified": 1.0, "chunks": ["intro", "el presupuesto es anual"]}], [])
+    docs = E.resolve_docs(db, None, "n1", "/mio")
+    frags = E.best_fragments(db, docs, "presupuesto")
+    assert [f["text"] for f in frags] == ["el presupuesto es anual"] and frags[0]["doc"] == 0
+
+
+def test_docs_search_in_falls_back_without_first_rowid(tmp_path):
+    db = make(tmp_path)
+    db.docs_apply("n1", [{"path": "/a.txt", "modified": 1.0, "chunks": ["presupuesto uno", "presupuesto dos"]},
+                         {"path": "/b.txt", "modified": 1.0, "chunks": ["presupuesto ajeno"]}], [])
+    db.conn.execute("UPDATE docs SET first_rowid = NULL")
+    db.conn.commit()
+    hits = db.docs_search_in(["presupuesto"], [{"node_id": "n1", "path": "/a.txt"}], 6)
+    assert sorted(h["text"] for h in hits) == ["presupuesto dos", "presupuesto uno"]
+    assert db.docs_search_in(['"AND"', "NEAR", "*x"], [{"node_id": "n1", "path": "/a.txt"}], 6) == []
+    assert db.docs_search_in(["presupuesto"], [], 6) == []
+
+
+def test_clasificar_joins_chunks_with_newline():
+    op = E.OPERATIONS["clasificar"]
+    d = doc(0)
+    units = op.first_units([d], {key(d): ["uno", "dos"]}, {})
+    assert units[0]["text"].endswith("uno\ndos")

@@ -49,9 +49,9 @@ def resolve_docs(db, busqueda: Optional[str], equipo: Optional[str], carpeta: Op
     if by_search:
         docs = []
         for hit in db.docs_search(Brain.file_words(busqueda.lower()), limit=MAX_DOCS, with_text=False, any_word=True):
-            same = [r for r in db.docs_under(hit["node_id"], hit["path"], MAX_DOCS) if r["path"] == hit["path"]]
-            if same:                                   # gone from docs between the two reads: skip it
-                docs.append(_doc(same[0]))
+            row = db.doc_info(hit["node_id"], hit["path"])
+            if row:                                    # gone from docs between the two reads: skip it
+                docs.append(_doc(row))
     else:
         folder = _norm(carpeta.strip()).rstrip("/") + "/"      # «C:\Docs\», «C:/Docs», «c:/docs/» are one folder
         docs = [_doc(r) for r in db.docs_under(equipo, folder, MAX_DOCS)]
@@ -67,15 +67,9 @@ def resolve_docs(db, busqueda: Optional[str], equipo: Optional[str], carpeta: Op
 def best_fragments(db, docs: list[dict], pregunta: str) -> list[dict]:
     """The chunks of the encargo's documents that best match the question: [{"doc": index, "text"}]."""
     where = {(d["node_id"], d["path"]): i for i, d in enumerate(docs)}
-    words = Brain.file_words(pregunta.lower())
-    out = []
-    for hit in db.docs_search(words, limit=50, any_word=True, full=True):
-        i = where.get((hit["node_id"], hit["path"]))
-        if i is not None:
-            out.append({"doc": i, "text": hit["snippet"]})
-            if len(out) >= ANSWER_FRAGMENTS:
-                break
-    return out
+    hits = db.docs_search_in(Brain.file_words(pregunta.lower()), docs, ANSWER_FRAGMENTS)
+    return [{"doc": where[(h["node_id"], h["path"])], "text": h["text"]} for h in hits
+            if (h["node_id"], h["path"]) in where]
 
 
 def windows(chunks: list[str]) -> list[str]:
@@ -229,7 +223,7 @@ class Clasificar(Operation):
         cats = params.get("categorias") or []
         system = CLASSIFY_IN.format(cats=", ".join(cats)) if cats else CLASSIFY_FREE
         return [{"kind": "classify", "doc": i, "system": system,
-                 "text": f"Documento: {d['name']}\n\n" + "".join(texts.get(_key(d), []))[:CLASSIFY_CHARS],
+                 "text": f"Documento: {d['name']}\n\n" + "\n".join(texts.get(_key(d), []))[:CLASSIFY_CHARS],
                  "categorias": cats}
                 for i, d in enumerate(docs)]
 

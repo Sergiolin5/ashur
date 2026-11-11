@@ -999,14 +999,20 @@ class DB:
         finally:
             c.close()
 
+    @staticmethod
+    def _fts_query(words: list[str], any_word: bool) -> str:
+        """An FTS5 MATCH string from plain words: each one quoted (its own quotes dropped) as a prefix term, so a
+        question with `"`, AND, NEAR or `*` is just text. Empty when there is nothing to look for."""
+        terms = ['"' + w.replace('"', "") + '"*' for w in words if w.replace('"', "").strip()][:6]
+        return (" OR " if any_word else " ").join(terms)
+
     def docs_search(self, words: list[str], limit: int = 8, with_text: bool = True,
                     any_word: bool = False, full: bool = False) -> list[dict]:
         """Chunks containing all the words (prefix match), best first. with_text=False returns
         only where they are: that is all a caller without permission may see."""
-        terms = ['"' + w.replace('"', "") + '"*' for w in words if w.replace('"', "").strip()][:6]
-        if not terms:
+        q = self._fts_query(words, any_word)
+        if not q:
             return []
-        q = (" OR " if any_word else " ").join(terms)
         sel = ("" if not with_text else "substr(content, 1, 700) AS snippet, " if full
                else "snippet(doc_chunks, 0, '', '', ' … ', 40) AS snippet, ")
         # Own read-only connection (WAL: readers never wait for the writer), like docs_summary: ranking every chunk that
@@ -1031,6 +1037,50 @@ class DB:
             if len(out) >= limit:
                 break
         return out
+
+    def docs_search_in(self, words: list[str], docs: list[dict], limit: int) -> list[dict]:
+        """Chunks of these documents only that contain any of the words, best first, several per document:
+        [{node_id, path, seq, text}]. Restricted inside the MATCH by each document's rowid range (docs.first_rowid),
+        so other documents never take the LIMIT; a document indexed before first_rowid existed is filtered by
+        node_id/path instead. Own read-only connection, like docs_search."""
+        q = self._fts_query(words, True)
+        if not q or not docs:
+            return []
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            where, args = [], []
+            for d in docs:
+                r = c.execute("SELECT first_rowid, chunks FROM docs WHERE node_id = ? AND path = ?",
+                              (d["node_id"], d["path"])).fetchone()
+                if r is None or not r[1]:
+                    continue
+                if r[0] is None:
+                    where.append("(node_id = ? AND path = ?)")
+                    args += [d["node_id"], d["path"]]
+                else:
+                    where.append("rowid BETWEEN ? AND ?")
+                    args += [r[0], r[0] + r[1] - 1]
+            if not where:
+                return []
+            rows = c.execute(
+                f"SELECT node_id, path, seq, content AS text FROM doc_chunks WHERE doc_chunks MATCH ? "
+                f"AND ({' OR '.join(where)}) ORDER BY rank LIMIT ?", [q, *args, limit]).fetchall()
+            return [dict(r) for r in rows]
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            c.close()
+
+    def doc_info(self, node_id: str, path: str) -> Optional[dict]:
+        """One indexed document's row (node_id, path, chunks) by primary key, on its own read-only connection."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            r = c.execute("SELECT node_id, path, chunks FROM docs WHERE node_id = ? AND path = ?",
+                          (node_id, path)).fetchone()
+        finally:
+            c.close()
+        return None if r is None else {"node_id": r[0], "path": r[1], "chunks": r[2]}
 
     def docs_under(self, node_id: str, prefix: str, limit: int) -> list[dict]:
         """Indexed documents of a node whose path starts with prefix, case-insensitive, with `\\` read as `/` on both

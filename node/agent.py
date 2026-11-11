@@ -67,6 +67,7 @@ class ProblemBuffer(logging.Handler):
 
 PROBLEMS = ProblemBuffer()
 log.addHandler(PROBLEMS)
+logging.getLogger("ashur.policy").addHandler(PROBLEMS)   # a signal that cannot be read must show in Diagnóstico
 REALTIME_MODULES = {"llm"}            # answered within seconds, outside the heartbeat cycle
 ASLEEP_AFTER_S = 30                   # a wait that overruns by this much: the machine slept (or the OS froze the agent)
 

@@ -26,6 +26,7 @@ class Signals:
     idle_s: Optional[float]            # None = cannot be read on this OS
     fullscreen: bool = False
     locked: bool = False               # session locked or screen saver on: nobody is at the screen
+    fullscreen_app: Optional[str] = None   # the program in front when it covers the screen (for the reason)
     other_load_pct: float = 0.0
     on_battery: bool = False
     battery_pct: Optional[float] = None
@@ -62,7 +63,7 @@ def explain(s: Signals, t: Thresholds, mode: Mode, portable: bool) -> str:
         if portable and s.on_battery and s.battery_pct is not None and s.battery_pct < t.battery_off_pct:
             return f"con batería al {s.battery_pct:.0f}%: pausado hasta conectarlo"
         if s.fullscreen and not s.locked:
-            return "hay una app en pantalla completa"
+            return "hay una app en pantalla completa" + (f" ({s.fullscreen_app})" if s.fullscreen_app else "")
         return f"otros programas usan el {s.other_load_pct:.0f}% del procesador"
     if mode == Mode.LIGHT:
         if portable and s.on_battery and s.idle_s is not None and s.idle_s >= t.idle_for_full_s:
@@ -90,12 +91,73 @@ def _windows_idle_s() -> Optional[float]:
     return ((now - lii.dwTime) & 0xFFFFFFFF) / 1000.0
 
 
-def _windows_locked() -> bool:
-    """True when the session is locked or the screen saver runs. Three looks, any one is enough: the screen saver
-    flag; the input desktop is not «Default» (it is «Winlogon» while locked, and a locked desktop often cannot even be
-    opened); the window in front belongs to LockApp.exe (the Windows 10/11 lock screen)."""
+def _windows_session_lock() -> Optional[bool]:
+    """The documented answer: WTSQuerySessionInformation(WTSSessionInfoEx).SessionFlags, 0 = locked, 1 = unlocked
+    (Windows 8 and later; Windows 7 had the two values swapped, so it is not trusted there). None when unknown.
+    0.47.3 relied on the input desktop and LockApp.exe; on Sergio's Ryzen 9 neither fired while it was locked."""
+    import ctypes
+    import sys
+    from ctypes import wintypes
+
+    if sys.getwindowsversion().build < 9200:
+        return None
+    wts = ctypes.WinDLL("wtsapi32")
+    buf, size = ctypes.c_void_p(), wintypes.DWORD()
+    # WTS_CURRENT_SERVER_HANDLE = 0, WTS_CURRENT_SESSION = -1, WTSSessionInfoEx = 25
+    if not wts.WTSQuerySessionInformationW(None, wintypes.DWORD(0xFFFFFFFF), 25, ctypes.byref(buf), ctypes.byref(size)):
+        return None
+    try:
+        if not buf.value or size.value < 20:
+            return None
+        # WTSINFOEXW: DWORD Level, then a union aligned to 8 (it holds LARGE_INTEGERs): SessionId at 8,
+        # SessionState at 12, SessionFlags at 16
+        level = ctypes.c_uint32.from_address(buf.value).value
+        flags = ctypes.c_int32.from_address(buf.value + 16).value
+        if level != 1 or flags not in (0, 1):
+            return None
+        return flags == 0
+    finally:
+        wts.WTSFreeMemory(buf)
+
+
+def _windows_front_app() -> Optional[str]:
+    """The program that owns the window in front, by file name («LockApp.exe», «javaw.exe»)."""
     import ctypes
     from ctypes import wintypes
+
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    proc = kernel32.OpenProcess(0x1000, False, pid)         # PROCESS_QUERY_LIMITED_INFORMATION
+    if not proc:
+        return None
+    try:
+        buf, size = ctypes.create_unicode_buffer(520), wintypes.DWORD(520)
+        if kernel32.QueryFullProcessImageNameW(wintypes.HANDLE(proc), 0, buf, ctypes.byref(size)):
+            return buf.value.replace("/", "\\").rsplit("\\", 1)[-1]
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(proc))
+    return None
+
+
+def _windows_locked() -> bool:
+    """True when the session is locked or the screen saver runs. The session's own lock flag first; then, where it
+    cannot be read, the older looks: the screen saver flag, the input desktop not «Default» (access denied to it),
+    the lock screen (LockApp.exe) in front."""
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        state = _windows_session_lock()
+    except Exception as e:
+        log.warning("could not read the session's lock flag: %s", e)
+        state = None
+    if state:
+        return True
 
     user32, kernel32 = ctypes.WinDLL("user32", use_last_error=True), ctypes.windll.kernel32
     user32.OpenInputDesktop.restype = wintypes.HANDLE
@@ -113,19 +175,7 @@ def _windows_locked() -> bool:
             return True                                      # UOI_NAME
     finally:
         user32.CloseDesktop(desk)
-    hwnd = user32.GetForegroundWindow()
-    if hwnd:
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        proc = kernel32.OpenProcess(0x1000, False, pid)     # PROCESS_QUERY_LIMITED_INFORMATION
-        if proc:
-            try:
-                buf, size = ctypes.create_unicode_buffer(520), wintypes.DWORD(520)
-                if kernel32.QueryFullProcessImageNameW(proc, 0, buf, ctypes.byref(size)):
-                    return buf.value.replace("/", "\\").rsplit("\\", 1)[-1].lower() == "lockapp.exe"
-            finally:
-                kernel32.CloseHandle(proc)
-    return False
+    return (_windows_front_app() or "").lower() == "lockapp.exe"
 
 
 def _windows_fullscreen() -> bool:
@@ -221,7 +271,7 @@ class SignalReader:
             # and the reading is noise (a self-test once saw "off" from it). Take a real sample.
             time.sleep(1.0)
             self._sampled = True
-        idle, fullscreen, locked = None, False, False
+        idle, fullscreen, locked, app = None, False, False, None
         if self.windows:
             try:
                 idle, fullscreen = _windows_idle_s(), _windows_fullscreen()
@@ -231,6 +281,11 @@ class SignalReader:
                 locked = _windows_locked()
             except Exception as e:  # unknown: as before, the full-screen check decides
                 log.warning("could not tell if the screen is locked: %s", e)
+            if fullscreen and not locked:
+                try:
+                    app = _windows_front_app()
+                except Exception:
+                    pass
         elif self.mac:
             try:
                 idle = _mac_idle_s()           # fullscreen is not detected on macOS yet
@@ -244,7 +299,7 @@ class SignalReader:
             batt = self.psutil.sensors_battery()
         except Exception:
             pass
-        return Signals(idle_s=idle, fullscreen=fullscreen, locked=locked, other_load_pct=other,
+        return Signals(idle_s=idle, fullscreen=fullscreen, locked=locked, fullscreen_app=app, other_load_pct=other,
                        on_battery=bool(batt and not batt.power_plugged),
                        battery_pct=batt.percent if batt else None)
 

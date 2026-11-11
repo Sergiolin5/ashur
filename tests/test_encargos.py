@@ -814,3 +814,177 @@ def test_worker_runs_in_background_once(tmp_path, fast_local):
     finally:
         node.close()
     assert c.db.encargo_get(eid)["status"] == "kept" and len(node.payloads) == 2
+
+
+# --- connector tools (Task 4) ---------------------------------------------------------------
+
+from tests.test_mcp import tool_text, tools_app, wait_for
+
+
+def encargar(c, **kw):
+    args = {"operacion": "resumir", "busqueda": "gatos", "devolver_a_claude": False, "motivo": "para el informe"}
+    args.update(kw)
+    return tool_text(c, "ashur_encargar", args)
+
+
+def tools_c(tmp_path, texts=None, **kw):
+    c, _ = tools_app(tmp_path, **kw)
+    if texts is not None:
+        c.db.docs_apply("mac-m1", [{"path": p, "modified": 1.0, "chunks": ch} for p, ch in texts.items()], [])
+    return c
+
+
+GATOS = {"/d/gatos.txt": ["Los gatos duermen mucho."], "/d/gatos2.txt": ["Más gatos."]}
+
+
+def test_encargar_creates_request_and_lists_names(tmp_path):
+    sent = []
+    c = tools_c(tmp_path, GATOS, push_fn=lambda sub, p: (sent.append(p), "ok")[1])
+    c.tailnet.post("/api/push/subscribe", headers=A, json=SUB)
+    text, err = encargar(c, devolver_a_claude=True)
+    assert err is False
+    assert text.startswith("Encargo #1 pedido: 2 documentos (") and "gatos.txt" in text and "gatos2.txt" in text
+    assert text.endswith("tiempo desconocido. Sergio lo aprueba en el panel.")
+    e = c.db.encargo_get(1)
+    assert (e["op"], e["status"], e["to_claude"], e["reason"]) == ("resumir", "pending_approval", True, "para el informe")
+    r = c.db.claude_request_get(1)
+    assert (r["action"], r["args"], r["status"]) == ("encargo", {"encargo": 1}, "pending")
+    assert wait_for(lambda: sent)
+    assert sent[0]["title"] == "Claude pide: resumir 2 documentos (tiempo desconocido)" and sent[0]["url"] == "/#pedidos"
+    c.db.set_setting("encargo_s_per_unit", "90")
+    text, _ = encargar(c, busqueda="gatos")
+    assert "~3 min." in text                                  # two windows × 90 s
+    # same switch as the other requests
+    c.tailnet.put("/api/notify", headers=A, json={"cats": {"claude": False}})
+    n = len(sent)
+    assert not encargar(c, busqueda="gatos")[1]
+    time.sleep(0.3)
+    assert len(sent) == n
+    assert [ev for ev in c.db.log_rows(50) if ev["event"] == "claude_request"]
+
+
+def test_encargar_caps_and_validation(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    bad = [{"operacion": "borrar"}, {"operacion": None}, {"busqueda": "  "}, {"busqueda": None},
+           {"busqueda": "gatos", "equipo": "mac-m1", "carpeta": "/d"},
+           {"busqueda": "zzzzzz"},                                           # no documents
+           {"pregunta": "¿qué?"},                                            # only responder
+           {"operacion": "responder"}, {"operacion": "responder", "pregunta": ""},
+           {"operacion": "responder", "pregunta": "x" * 501},
+           {"categorias": ["a"]},                                            # only clasificar
+           {"operacion": "clasificar", "categorias": ["a"] * 11}, {"operacion": "clasificar", "categorias": ["x" * 41]},
+           {"operacion": "clasificar", "categorias": "a"}, {"operacion": "clasificar", "categorias": [1]},
+           {"devolver_a_claude": "si"}, {"devolver_a_claude": None},
+           {"motivo": "no"}, {"motivo": "x" * 301}, {"motivo": None}]
+    for extra in bad:
+        text, err = encargar(c, **extra)
+        assert err is True, extra
+    assert tool_text(c, "ashur_encargar", {"operacion": "resumir", "busqueda": "gatos", "motivo": "ok ok"})[1] is True
+    assert c.db.encargos() == [] and c.db.claude_requests_pending_count() == 0
+    assert not encargar(c, operacion="responder", pregunta="¿qué hacen?")[1]
+    assert not encargar(c, operacion="clasificar", categorias=["animales", "otro"])[1]
+    assert c.db.encargo_get(2)["params"] == {"categorias": ["animales", "otro"]}
+    assert c.db.encargo_get(1)["params"] == {"pregunta": "¿qué hacen?"}
+    # three unfinished: the fourth is refused; a finished one frees a slot
+    assert not encargar(c)[1]
+    assert encargar(c) == ("Ya hay 3 encargos sin terminar; espera o cancela uno.", True)
+    c.db.encargo_set(1, status="kept")
+    assert not encargar(c)[1]
+
+
+def test_encargar_pending_requests_cap(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    for n in range(1, 6):
+        c.db.claude_request_add(1.0, "subir_tarea", {"tarea": n}, "x")
+    assert encargar(c) == ("Ya hay 5 pedidos esperando a Sergio; espera a que decida.", True)
+    assert c.db.encargos() == []
+
+
+def test_encargar_by_folder(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    text, err = encargar(c, busqueda=None, equipo="mac-m1", carpeta="/d")
+    assert not err and "2 documentos" in text
+    assert encargar(c, busqueda=None, equipo="mac-m1")[1] is True
+
+
+def put_status(c, eid, status, **kw):
+    assert c.db.encargo_set(eid, status=status, **kw)
+
+
+def test_ver_encargo_never_leaks_before_release(tmp_path):
+    secret = "CANARIO-CONTENIDO-SECRETO"
+    c = tools_c(tmp_path, {"/d/gatos.txt": [f"{secret} gatos"]})
+    encargar(c, devolver_a_claude=True, motivo="motivo normal")
+    leak = {"result": f"- {secret}", "state": {"bullets": {"0": [secret]}, "answer": secret},
+            "error": "Un trozo falló 3 veces en mac-m1.", "devices": {"mac-m1": 1}, "total": 3, "done": 1}
+    c.db.encargo_set(1, units=[{"x": secret}], **leak)
+    seen = {}
+    for status in ("pending_approval", "queued", "running", "paused", "done", "kept", "rejected", "cancelled", "failed"):
+        put_status(c, 1, status)
+        text, err = tool_text(c, "ashur_ver_encargo", {"id": 1})
+        seen[status] = text
+        assert err is False and secret not in text, status
+    assert seen["pending_approval"] == "Encargo #1: esperando que Sergio lo apruebe."
+    assert seen["queued"] == "Encargo #1: aprobado, en cola."
+    assert seen["running"] == "Encargo #1: en curso, trozo 2 de 3, en mac-m1."
+    assert seen["paused"] == "Encargo #1: en pausa."
+    assert seen["done"] == "Encargo #1: Terminado; esperando que Sergio lo libere."
+    assert seen["kept"] == "Encargo #1: Se quedó en el panel."
+    assert seen["rejected"] == "Encargo #1: Sergio lo rechazó." and seen["cancelled"] == "Encargo #1: cancelado."
+    assert seen["failed"] == "Encargo #1: falló. Un trozo falló 3 veces en mac-m1."
+    put_status(c, 1, "released")
+    text, _ = tool_text(c, "ashur_ver_encargo", {"id": 1})
+    assert secret in text and text.startswith("Encargo #1: liberado por Sergio.\n")
+    c.db.encargo_set(1, status="failed", error=None)
+    assert tool_text(c, "ashur_ver_encargo", {"id": 1})[0] == "Encargo #1: falló." and secret not in "falló."
+
+
+def test_ver_encargo_done_without_to_claude_and_kept(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    encargar(c, devolver_a_claude=False)
+    put_status(c, 1, "done", result="CANARIO")
+    text, _ = tool_text(c, "ashur_ver_encargo", {"id": 1})
+    assert "CANARIO" not in text and "Se quedó en el panel" in text
+
+
+def test_ver_encargo_validation(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    for bad in ({}, {"id": "1"}, {"id": True}, {"id": 1.5}, {"id": 99}):
+        assert tool_text(c, "ashur_ver_encargo", bad)[1] is True
+    assert tool_text(c, "ashur_ver_encargo", {"id": 99})[0] == "No existe el encargo #99."
+
+
+def test_ver_encargo_cuts_at_12000(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    encargar(c, devolver_a_claude=True)
+    put_status(c, 1, "released", result="a" * 12000)
+    text, _ = tool_text(c, "ashur_ver_encargo", {"id": 1})
+    assert text == "Encargo #1: liberado por Sergio.\n" + "a" * 12000
+    put_status(c, 1, "released", result="a" * 12000 + "Z")
+    text, _ = tool_text(c, "ashur_ver_encargo", {"id": 1})
+    assert text.endswith("a" * 12000 + "\n(el resto está en el panel)") and "Z" not in text
+
+
+def test_pedir_cancelar_encargo(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    encargar(c)
+    pedir = lambda **kw: tool_text(c, "ashur_pedir", {"motivo": "porque sí", **kw})
+    assert pedir(accion="cancelar_encargo", encargo=1) == ("Pedido #2 enviado; Sergio lo aprueba en el panel.", False)
+    assert c.db.claude_request_get(2)["args"] == {"encargo": 1}
+    assert pedir(accion="cancelar_encargo", encargo=1)[0] == "Ya estaba pedido: #2"
+    for bad in ({"accion": "cancelar_encargo"}, {"accion": "cancelar_encargo", "encargo": "1"},
+                {"accion": "cancelar_encargo", "encargo": True}, {"accion": "cancelar_encargo", "encargo": 0},
+                {"accion": "cancelar_encargo", "encargo": 1, "tarea": 1},
+                {"accion": "cancelar_tarea", "tarea": 1, "encargo": 1},
+                {"accion": "pausar_cola", "encargo": 1},
+                {"accion": "encargo", "encargo": 1}):
+        assert pedir(**bad)[1] is True, bad
+    listed = c.post("/mcp", headers={"Authorization": "Bearer " + c.key},
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]
+    schema = next(t for t in listed if t["name"] == "ashur_pedir")["inputSchema"]
+    assert "cancelar_encargo" in schema["properties"]["accion"]["enum"] and "encargo" not in schema["properties"]["accion"]["enum"]
+    assert schema["properties"]["encargo"]["type"] == "integer"
+    assert {"ashur_encargar", "ashur_ver_encargo"} <= {t["name"] for t in listed}
+    # approving it cancels the encargo
+    r = c.tailnet.post("/api/claude-requests/2/approve", headers=A)
+    assert r.json()["status"] == "approved" and c.db.encargo_get(1)["status"] == "cancelled"

@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
 from core.db import DB, hash_token
-from core.encargos import MAX_WINDOWS, OPERATIONS, best_fragments, windows
+from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, EncargoError, best_fragments, resolve_docs, windows
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
@@ -2730,10 +2730,17 @@ def create_app(
                 raise ToolError(str(e))
             return f"{text}\n\n(respondió {node})"
 
+        def launch_push(rid: int, title: str, body: str) -> None:
+            # its own switch and no quiet hours: a request waits for Sergio, so he hears of it even at night
+            if db.setting("notify_claude", "1") == "1" and db.push_subs():
+                payload = {"title": title, "body": body[:180], "url": "/#pedidos", "tag": f"claude-{rid}"}
+                threading.Thread(target=_push_all, args=(payload,), daemon=True, name="claude-push").start()
+
         def pedir(args: dict) -> str:
-            accion, motivo, tarea = args.get("accion"), args.get("motivo"), args.get("tarea")
-            if accion not in ACTIONS:
-                raise ToolError("«accion» debe ser una de: " + ", ".join(ACTIONS) + ".")
+            accion, motivo, tarea, encargo = args.get("accion"), args.get("motivo"), args.get("tarea"), args.get("encargo")
+            allowed = [a for a in ACTIONS if a != "encargo"]         # «encargo» is created only by ashur_encargar
+            if accion not in allowed:
+                raise ToolError("«accion» debe ser una de: " + ", ".join(allowed) + ".")
             if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
                 raise ToolError("«motivo» debe ser un texto de 3 a 300 caracteres.")
             if "{tarea}" in ACTIONS[accion]:
@@ -2742,8 +2749,14 @@ def create_app(
                 req_args = {"tarea": tarea}
             elif tarea is not None:
                 raise ToolError("«tarea» solo va con cancelar_tarea, subir_tarea o bajar_tarea.")
+            elif "{encargo}" in ACTIONS[accion]:
+                if not isinstance(encargo, int) or isinstance(encargo, bool) or encargo < 1:
+                    raise ToolError(f"«encargo» (el número del encargo) es obligatorio para {accion}.")
+                req_args = {"encargo": encargo}
             else:
                 req_args = {}
+            if encargo is not None and "{encargo}" not in ACTIONS[accion]:
+                raise ToolError("«encargo» solo va con cancelar_encargo.")
             with request_lock:                  # check, count and add as one step: two calls cannot both slip in
                 same = db.claude_request_pending_same(accion, req_args)
                 if same:
@@ -2753,11 +2766,77 @@ def create_app(
                 rid = db.claude_request_add(clock(), accion, req_args, motivo.strip())
             label = action_label(accion, req_args)
             db.log(clock(), None, "claude_request", {"id": rid, "action": accion, "label": label})
-            # its own switch and no quiet hours: a request waits for Sergio, so he hears of it even at night
-            if db.setting("notify_claude", "1") == "1" and db.push_subs():
-                payload = {"title": f"Claude pide: {label}", "body": motivo.strip()[:180], "url": "/#pedidos", "tag": f"claude-{rid}"}
-                threading.Thread(target=_push_all, args=(payload,), daemon=True, name="claude-push").start()
+            launch_push(rid, f"Claude pide: {label}", motivo.strip())
             return f"Pedido #{rid} enviado; Sergio lo aprueba en el panel."
+
+        def encargar(args: dict) -> str:
+            op, motivo, back = args.get("operacion"), args.get("motivo"), args.get("devolver_a_claude")
+            busqueda, equipo, carpeta = args.get("busqueda"), args.get("equipo"), args.get("carpeta")
+            pregunta, cats = args.get("pregunta"), args.get("categorias")
+            if op not in OPERATIONS:
+                raise ToolError("«operacion» debe ser una de: " + ", ".join(OPERATIONS) + ".")
+            if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
+                raise ToolError("«motivo» debe ser un texto de 3 a 300 caracteres.")
+            if not isinstance(back, bool):
+                raise ToolError("«devolver_a_claude» debe ser verdadero o falso.")
+            if any(x is not None and not isinstance(x, str) for x in (busqueda, equipo, carpeta)):
+                raise ToolError("«busqueda», «equipo» y «carpeta» deben ser texto.")
+            params: dict = {}
+            if op == "responder":
+                if not isinstance(pregunta, str) or not 1 <= len(pregunta.strip()) <= 500:
+                    raise ToolError("«pregunta» (de 1 a 500 caracteres) es obligatoria para responder.")
+                params["pregunta"] = pregunta.strip()
+            elif pregunta is not None:
+                raise ToolError("«pregunta» solo va con responder.")
+            if cats is not None:
+                if op != "clasificar":
+                    raise ToolError("«categorias» solo va con clasificar.")
+                if not isinstance(cats, list) or not 1 <= len(cats) <= 10 or not all(
+                        isinstance(x, str) and 1 <= len(x.strip()) <= 40 for x in cats):
+                    raise ToolError("«categorias» son de 1 a 10 textos de hasta 40 caracteres.")
+                params["categorias"] = [x.strip() for x in cats]
+            with request_lock:                  # count, check and add as one step, like pedir
+                if db.encargos_unfinished_count() >= MAX_UNFINISHED:
+                    raise ToolError(f"Ya hay {MAX_UNFINISHED} encargos sin terminar; espera o cancela uno.")
+                if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                    raise ToolError("Ya hay 5 pedidos esperando a Sergio; espera a que decida.")
+                try:
+                    docs = resolve_docs(db, busqueda, equipo, carpeta)
+                except EncargoError as e:
+                    raise ToolError(str(e))
+                eid = db.encargo_add(clock(), op, params, back, motivo.strip(), docs)
+                rid = db.claude_request_add(clock(), "encargo", {"encargo": eid}, motivo.strip())
+            label = OPERATIONS[op].label(len(docs))
+            est = encargo_estimate(db.encargo_get(eid, light=True))
+            db.log(clock(), None, "claude_request", {"id": rid, "action": "encargo", "label": action_label("encargo", {"encargo": eid})})
+            launch_push(rid, f"Claude pide: {label} ({est})", motivo.strip())
+            names = ", ".join(d["name"] for d in docs)
+            return f"Encargo #{eid} pedido: {len(docs)} documento{'s' if len(docs) != 1 else ''} ({names}), {est}. Sergio lo aprueba en el panel."
+
+        def ver_encargo(args: dict) -> str:
+            eid = args.get("id")
+            if not isinstance(eid, int) or isinstance(eid, bool):
+                raise ToolError("«id» debe ser un número entero.")
+            e = db.encargo_get(eid, light=True)
+            if not e:
+                raise ToolError(f"No existe el encargo #{eid}.")
+            st, head = e["status"], f"Encargo #{eid}: "
+            # Only «released» ever returns text derived from the documents; every other line is fixed words or counts.
+            if st == "released":
+                res = e["result"] or ""
+                cut = len(res) > CLAUDE_CUT
+                return head + "liberado por Sergio.\n" + res[:CLAUDE_CUT] + ("\n(el resto está en el panel)" if cut else "")
+            if st == "running":
+                where = f", en {list(e['devices'])[-1]}" if e["devices"] else ""
+                part = f", trozo {min(e['done'] + 1, e['total'])} de {e['total']}" if e["total"] else ""
+                return head + "en curso" + part + where + "."
+            if st == "done":
+                return head + ("Terminado; esperando que Sergio lo libere." if e["to_claude"] else "Se quedó en el panel.")
+            if st == "failed":
+                return head + "falló." + (f" {e['error']}" if e["error"] else "")
+            return head + {"pending_approval": "esperando que Sergio lo apruebe.", "queued": "aprobado, en cola.",
+                           "paused": "en pausa.", "kept": "Se quedó en el panel.", "rejected": "Sergio lo rechazó.",
+                           "cancelled": "cancelado."}.get(st, st + ".")
 
         return [
             Tool("ashur_estado", "Estado de los equipos de Sergio, la cola de tareas y la versión de Ashur.", NO_ARGS, estado),
@@ -2774,12 +2853,32 @@ def create_app(
                  {"type": "object", "properties": {"pregunta": {"type": "string", "minLength": 1, "maxLength": 2000}},
                   "required": ["pregunta"], "additionalProperties": False}, preguntar_local, local=True),
             Tool("ashur_pedir", "Pide a Sergio que apruebe una acción en Ashur. Nada se hace hasta que él la aprueba en el panel; "
-                 "consulta cómo va con ashur_ver_pedido. «tarea» solo para cancelar_tarea, subir_tarea y bajar_tarea.",
-                 {"type": "object", "properties": {"accion": {"type": "string", "enum": list(ACTIONS)},
+                 "consulta cómo va con ashur_ver_pedido. «tarea» solo para cancelar_tarea, subir_tarea y bajar_tarea; "
+                 "«encargo» solo para cancelar_encargo.",
+                 {"type": "object", "properties": {"accion": {"type": "string", "enum": [a for a in ACTIONS if a != "encargo"]},
                                                    "motivo": {"type": "string", "minLength": 3, "maxLength": 300,
                                                               "description": "Por qué lo pides, para Sergio"},
-                                                   "tarea": {"type": "integer", "minimum": 1, "description": "Número de la tarea"}},
+                                                   "tarea": {"type": "integer", "minimum": 1, "description": "Número de la tarea"},
+                                                   "encargo": {"type": "integer", "minimum": 1, "description": "Número del encargo"}},
                   "required": ["accion", "motivo"], "additionalProperties": False}, pedir),
+            Tool("ashur_encargar", "Pide a Sergio un trabajo de texto sobre sus documentos leídos (resumir, responder una pregunta o "
+                 "clasificar), hecho por los modelos locales. Nada empieza hasta que él lo aprueba en el panel; hasta máximo "
+                 f"{MAX_DOCS} documentos, indicados con «busqueda» o con «equipo» y «carpeta». El resultado solo te llega si Sergio lo libera "
+                 "(devolver_a_claude); míralo con ashur_ver_encargo.",
+                 {"type": "object", "properties": {
+                     "operacion": {"type": "string", "enum": list(OPERATIONS)},
+                     "busqueda": {"type": "string", "description": "Palabras del texto de los documentos"},
+                     "equipo": {"type": "string", "description": "Equipo, junto con «carpeta»"},
+                     "carpeta": {"type": "string", "description": "Carpeta del equipo, junto con «equipo»"},
+                     "pregunta": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Solo para responder"},
+                     "categorias": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 40},
+                                    "minItems": 1, "maxItems": 10, "description": "Solo para clasificar"},
+                     "devolver_a_claude": {"type": "boolean", "description": "Si Sergio puede liberarte el resultado"},
+                     "motivo": {"type": "string", "minLength": 3, "maxLength": 300, "description": "Por qué lo pides, para Sergio"}},
+                  "required": ["operacion", "devolver_a_claude", "motivo"], "additionalProperties": False}, encargar),
+            Tool("ashur_ver_encargo", "Cómo va un encargo; su resultado solo aparece si Sergio lo liberó.",
+                 {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"],
+                  "additionalProperties": False}, ver_encargo),
         ]
 
     mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,

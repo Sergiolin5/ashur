@@ -48,7 +48,18 @@ def prompt_tipo(names: list[str], kinds: list[str]) -> str:
         "descargados o recibidos de otra persona o empresa); duda solo si no hay ninguna pista>\n"
         "Decide solo por lo que dicen el texto y la ruta, sin inventar.")
 
-PASSES = {"tipo": "clasificar por tipo y autor"}
+PASSES = {"tipo": "clasificar por tipo y autor", "voz": "leer lo que escribió Sergio"}
+VOZ_CHARS = 6000             # one window per document: the 7B's context, with room for the prompt and the answer
+VOZ_ITEMS = 4
+
+# Pass C, for the persona: only documents the «tipo» pass marked as his. What he writes about and how he writes, never
+# facts about him: those would be memories, and memories have their own rules.
+VOZ = """Este es un texto que escribió Sergio; la primera línea es su ruta.
+Responde exactamente tres líneas, sin nada más:
+temas: <de qué trata, hasta 4 temas de una a tres palabras, separados por comas>
+intereses: <qué le interesa o le importa a quien escribe, según el texto, hasta 3, separados por comas; si no se ve, ninguno>
+estilo: <cómo escribe, en menos de 12 palabras: registro (formal o informal), tono, rasgos que se repiten>
+Solo lo que muestra el texto, sin inventar. No escribas nombres de personas, números, datos de salud ni datos personales."""
 
 # What a path settles by itself, with no model: files a program, a game or the system wrote. Sergio wants them all
 # as knowledge (what he uses, what he plays), categorised; reading 70 000 of them with the model would only say
@@ -117,6 +128,57 @@ def in_scope(node_id: str, path: str, scope: dict) -> bool:
     if not scope.get("equipo"):
         return True
     return node_id == scope["equipo"] and _norm(path).startswith(_norm(scope["carpeta"]).rstrip("/") + "/")
+
+
+def parse_voz(answer: str) -> dict:
+    """{temas: [...], intereses: [...], estilo: str, crudo}. Missing lines are empty, never guessed."""
+    lines = [ln.strip() for ln in (answer or "").splitlines() if ln.strip()]
+    got = {"temas": [], "intereses": [], "estilo": ""}
+    for ln in lines:
+        m = re.match(r"^[\s*_#>`-]*(temas|intereses|estilo)[\s*_]*:[\s*_]*(.*)$", ln, re.I)
+        if not m:
+            continue
+        key, value = m.group(1).lower(), re.sub(r"[<>*_`\"']", "", m.group(2)).strip()
+        if key == "estilo":
+            got["estilo"] = value[:120]
+        else:
+            items = [re.sub(r"[^\w áéíóúñü/+#.-]", "", x.casefold()).strip(" .") for x in value.split(",")]
+            got[key] = [x[:40] for x in items if x and x not in ("ninguno", "ninguna", "nada")][:VOZ_ITEMS]
+    got["crudo"] = " | ".join(lines[:3])[:300]
+    return got
+
+
+def unit_voz(path: str, chunks: list[str]) -> dict:
+    return {"system": VOZ, "text": path + "\n" + "\n".join(chunks)[:VOZ_CHARS]}
+
+
+def summary_voz(rows, scope: dict) -> str:
+    """Topics and interests with how many documents show them and the folders they come from (the persona's
+    citations), and a sample of how he writes. One fact per line, so a health line can be held alone."""
+    depth = len(_norm(scope["carpeta"]).rstrip("/").split("/")) + 2 if scope.get("equipo") else FOLDER_DEPTH
+    temas, intereses, where, estilos = Counter(), Counter(), {}, Counter()
+    for node, path, value in rows:
+        v = json.loads(value)
+        f = f"{node}: {folder(path, depth)}"
+        for t in v.get("temas", []):
+            temas[t] += 1
+            where.setdefault(("t", t), Counter())[f] += 1
+        for t in v.get("intereses", []):
+            intereses[t] += 1
+            where.setdefault(("i", t), Counter())[f] += 1
+        if v.get("estilo"):
+            estilos[v["estilo"].casefold().rstrip(".")] += 1
+
+    def cite(kind, t):
+        return "; ".join(f"{f} ({n})" for f, n in where[(kind, t)].most_common(2))
+
+    lines = [f"Documentos leídos: {len(rows)}.", "Temas (documentos; de dónde salen):"]
+    lines += [f"- {t} ({n}; {cite('t', t)})" for t, n in temas.most_common(TOP)]
+    lines.append("Intereses (documentos; de dónde salen):")
+    lines += [f"- {t} ({n}; {cite('i', t)})" for t, n in intereses.most_common(TOP)]
+    lines.append("Cómo escribe (las descripciones más repetidas):")
+    lines += [f"- {e} ({n})" for e, n in estilos.most_common(15)]
+    return "\n".join(lines)
 
 
 def scope_label(scope: dict) -> str:

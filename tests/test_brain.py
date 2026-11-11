@@ -777,3 +777,30 @@ def test_a_chunk_that_always_fails_still_fails_the_notes():
     b.notes_retry_wait_s = 0
     with pytest.raises(LocalUnavailable):
         b.conversation_notes("hola", "Ana")
+
+
+PHOTO = "/9j/" + "A" * 200                                            # base64 of a few bytes; Claude is a fake here
+
+
+def test_a_photo_goes_to_claude_only_with_the_yes_and_is_never_stored(tmp_path):
+    import base64
+    from core.brain import BrainSettings as BS
+    clock = VirtualClock()
+    fake = FakeClaude([resp([text("Veo un circuito.")])])
+    app = create_app(str(tmp_path / "core.db"), "e", "a", clock=clock, sweep_every_s=None,
+                     brain_settings=BS(brain="local-first"), brain_client=fake)
+    c = TestClient(app)
+    r = c.post("/api/chat", headers=A, json={"message": "¿qué ves?", "imagen": PHOTO}).json()
+    assert r["needs_approval"] is True and "foto" in r["reply"] and fake.calls == []
+    r = c.post("/api/chat", headers=A, json={"message": "¿qué ves?", "imagen": PHOTO, "allow_claude": True}).json()
+    assert r["reply"] == "Veo un circuito." and r["provider"] == "claude"
+    sent = fake.calls[0]["messages"][-1]["content"]
+    assert sent[0]["type"] == "image" and sent[0]["source"]["data"] == PHOTO and sent[1]["text"] == "¿qué ves?"
+    h = c.get("/api/chat/history", headers=A).json()["messages"]
+    assert h[-2]["content"] == "¿qué ves? [foto]" and PHOTO not in json.dumps(h)
+    assert PHOTO not in json.dumps(app.state.db.log_rows(50))
+    assert c.post("/api/chat", headers=A, json={"message": "x", "imagen": "no es base64!"}).status_code == 422
+    big = base64.b64encode(b"x" * (5 * 1024 * 1024 + 1)).decode()
+    assert c.post("/api/chat", headers=A, json={"message": "x", "imagen": big}).status_code == 413
+    g = c.post("/api/guests", headers=A, json={"name": "Ana"}).json()["key"]
+    assert c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "x", "imagen": PHOTO}).status_code == 403

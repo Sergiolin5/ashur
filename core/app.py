@@ -30,7 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from core.brain import (health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
+from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
 from core import habits, lotes, signals
 from core.db import DB, hash_token
@@ -238,7 +238,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.48.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.49.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1328,6 +1328,8 @@ def create_app(
         allow_claude: bool = False           # local-first: Sergio approved Claude for this message
         share_docs: bool = False             # Sergio lets Claude read document fragments for this message
         share_diary: bool = False            # ...and diary entries
+        imagen: Optional[str] = Field(default=None, max_length=7_200_000)   # a photo from the phone, base64; never stored
+        imagen_tipo: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|png|webp|gif)$")
 
     # --- device personas (Sergio only; guests never see them) ---------------
     @app.get("/api/personas")
@@ -1427,11 +1429,23 @@ def create_app(
             raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
         if not guest:
             uso("chatear", body.persona)
+        image = None
+        if body.imagen is not None:
+            if guest:
+                raise HTTPException(403, "Los invitados no pueden mandar fotos.")
+            import base64, binascii
+            try:
+                raw = base64.b64decode(body.imagen, validate=True)
+            except (binascii.Error, ValueError):
+                raise HTTPException(422, "La foto no vino en base64.")
+            if not raw or len(raw) > IMAGE_MAX_BYTES:
+                raise HTTPException(413, "La foto pesa más de 5 MB; mándala más pequeña.")
+            image = {"media_type": body.imagen_tipo, "data": body.imagen}
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
                              allow_claude=body.allow_claude and guest is None,
                              share_docs=body.share_docs and guest is None,
-                             share_diary=body.share_diary and guest is None)
+                             share_diary=body.share_diary and guest is None, image=image)
             if guest:                     # which device answered and which tools ran stay Sergio's business
                 return {k: v for k, v in out.items() if k not in ("device", "tools", "model", "sources", "diary_used")}
             summarize_soon()
@@ -2784,7 +2798,8 @@ def create_app(
         rows = [r for r in db.signals(L["pase"]) if lotes.in_scope(r[0], r[1], L["scope"])]
         head = (f"Lote #{L['id']} ({lotes.PASSES.get(L['pase'], L['pase'])}; {lotes.scope_label(L['scope'])}): "
                 f"{L['done']} hechos, {L['skipped']} sin texto, {L['failed']} fallidos.")
-        lote_summaries[L["id"]] = (L["updated"], head + "\n" + lotes.summary_tipo(rows, L["scope"]))
+        summarize = lotes.summary_voz if L["pase"] == "voz" else lotes.summary_tipo
+        lote_summaries[L["id"]] = (L["updated"], head + "\n" + summarize(rows, L["scope"]))
         return lote_summaries[L["id"]][1]
 
     def lote_row(L: dict) -> dict:
@@ -2818,7 +2833,8 @@ def create_app(
                     db.lote_set(lid, expect=L["status"], status="paused")
                 return False
             if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
-                pending = [d for d in db.lote_pending(L["pase"], lid if L["scope"].get("rehacer") else None)
+                pending = [d for d in db.lote_pending(L["pase"], lid if L["scope"].get("rehacer") else None,
+                                                      mine_only=L["pase"] == "voz")
                            if lotes.in_scope(d[0], d[1], L["scope"])]
                 kinds = lote_kinds()
                 lote_queue.update(system=lotes.prompt_tipo(lote_names(), kinds), kinds=kinds)
@@ -2833,7 +2849,8 @@ def create_app(
             elif L["status"] != "running" and not db.lote_set(lid, expect=L["status"], status="running"):
                 return True
             docs = lote_queue["docs"]
-            if docs and lotes.rule(docs[0][1]):               # the path says it all: no model, up to 500 in one write
+            voz = L["pase"] == "voz"                          # pass C reads his own documents: no path rule, its own prompt
+            if docs and not voz and lotes.rule(docs[0][1]):               # the path says it all: no model, up to 500 in one write
                 n = next((i for i, d in enumerate(docs[:500]) if not lotes.rule(d[1])), min(len(docs), 500))
                 if not db.lote_set(lid, expect="running", done=L["done"] + n):
                     lote_forget()
@@ -2849,7 +2866,8 @@ def create_app(
                     db.lote_set(lid, expect="running", skipped=L["skipped"] + 1)
                     return True
                 t0 = time.monotonic()
-                how, answer, device = encargo_unit(lotes.unit_tipo(path, texts, lote_queue["system"]), pin=True)
+                unit = lotes.unit_voz(path, texts) if voz else lotes.unit_tipo(path, texts, lote_queue["system"])
+                how, answer, device = encargo_unit(unit, pin=True)
                 took = time.monotonic() - t0
                 if how == "wait":
                     if queue_paused():
@@ -2871,7 +2889,8 @@ def create_app(
                 if not db.lote_set(lid, expect="running", done=L["done"] + 1, seconds=L["seconds"] + took):
                     lote_forget()
                     return True                               # cancelled while the device worked: the answer is dropped
-                db.signal_put(node_id, path, L["pase"], lotes.parse_tipo(answer, lote_queue["kinds"]), lid, device, clock())
+                value = lotes.parse_voz(answer) if voz else lotes.parse_tipo(answer, lote_queue["kinds"])
+                db.signal_put(node_id, path, L["pase"], value, lid, device, clock())
                 prev = db.setting("lote_s_per_doc")
                 db.set_setting("lote_s_per_doc", f"{took if prev is None else 0.9 * float(prev) + 0.1 * took:.2f}")
                 L["done"] += 1
@@ -3295,8 +3314,9 @@ def create_app(
             scope = {"equipo": equipo.strip(), "carpeta": carpeta.strip()} if equipo else {}
             if redo:
                 scope["rehacer"] = True
-            todo = [d for d in db.lote_pending(pase, 0 if redo else None) if lotes.in_scope(d[0], d[1], scope)]
-            n, model = len(todo), sum(1 for d in todo if not lotes.rule(d[1]))
+            todo = [d for d in db.lote_pending(pase, 0 if redo else None, mine_only=pase == "voz")
+                    if lotes.in_scope(d[0], d[1], scope)]
+            n, model = len(todo), sum(1 for d in todo if pase == "voz" or not lotes.rule(d[1]))
             split = f"{n} documentos ({n - model} por la ruta, {model} por el modelo)"
             if not n:
                 raise ToolError("No hay documentos leídos por hacer ahí: o no hay ninguno, o ese pase ya los cubrió.")
@@ -3345,7 +3365,8 @@ def create_app(
 
         return [
             Tool("ashur_lote", "Pide a Sergio un lote: la misma pregunta para TODOS sus documentos leídos (o los de una carpeta de "
-                 "un equipo), de a uno en los modelos locales. «tipo» clasifica cada documento por tipo y por autor (Sergio u otro). "
+                 "un equipo), de a uno en los modelos locales. «tipo» clasifica cada documento por tipo y por autor (Sergio u otro); "
+                 "«voz» lee solo los que «tipo» marcó como suyos y saca temas, intereses y cómo escribe (para su persona). "
                  "Nada empieza hasta que él lo aprueba; va un lote a la vez y puede tardar días. El resumen solo te llega si "
                  "Sergio lo libera; míralo con ashur_ver_lote.",
                  {"type": "object", "properties": {

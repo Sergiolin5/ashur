@@ -339,3 +339,34 @@ def test_with_the_ryzen_away_a_bigger_model_on_cpu_beats_a_smaller_one_on_gpu(tm
     finally:
         mac.close()
         legion.close()
+
+
+def test_parse_voz_keeps_lists_short_and_never_guesses():
+    v = lotes.parse_voz("**Temas:** Iluminación, RETILAP, normas, cálculos, otra\nintereses: ninguno\nestilo: técnico y directo.")
+    assert v["temas"] == ["iluminación", "retilap", "normas", "cálculos"] and v["intereses"] == []
+    assert v["estilo"] == "técnico y directo." and v["crudo"].startswith("**Temas:**")
+    assert lotes.parse_voz("no sé") == {"temas": [], "intereses": [], "estilo": "", "crudo": "no sé"}
+
+
+def test_pass_c_reads_only_what_the_first_pass_called_his(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    ask(c)
+    node = FakeLLM(t, answer)                                     # a.txt and b.txt are his, manual.txt is not
+    try:
+        approve(c, t, 1)
+        run(c)
+        text, err = ask(c, pase="voz")
+        assert err is False and "2 documentos (0 por la ruta, 2 por el modelo)" in text
+        node.answer = lambda p, n: "temas: proyecto, diario\nintereses: tecnología\nestilo: informal y directo"
+        approve(c, t, 2)
+        run(c)
+    finally:
+        node.close()
+    voz = [p for p in node.payloads if p["system"] == lotes.VOZ]
+    assert len(voz) == 2 and not any("manual.txt" in json.dumps(p) for p in voz)
+    assert c.db.lote_get(2)["status"] == "done"
+    t.post("/api/lotes/2/release", headers=A)
+    seen = tool_text(c, "ashur_ver_lote", {"id": 2})[0]
+    assert "- proyecto (2; mac-m1: /Users/s/Documents/Diario (2))" in seen
+    assert "- tecnología (2;" in seen and "- informal y directo (2)" in seen
+    assert ask(c, pase="voz")[1] is True                            # nothing of his left to read

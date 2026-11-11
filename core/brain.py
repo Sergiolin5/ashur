@@ -94,6 +94,8 @@ NOTES_RETRY_WAIT_S = 30         # pause between tries: a busy or waking device g
 NOTES_BATCH_CHARS = 5000        # notes handed to the topic pass at a time, so a long talk's end is never cut off
 
 MAX_TOOL_ROUNDS = 4
+IMAGE_TOKENS = 1600             # what one phone photo costs Claude to read, roughly (for the estimate shown before)
+IMAGE_MAX_BYTES = 5 * 1024 * 1024   # Claude's limit for one image
 MAX_MEMORY_CHARS = 6000
 MAX_SUMMARY_CHARS = 4000
 VOICE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")        # conversation summaries in every prompt, newest first
@@ -714,7 +716,7 @@ class Brain:
 
     def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
              voice: Optional[str] = None, allow_claude: bool = False,
-             share_docs: bool = False, share_diary: bool = False) -> dict:
+             share_docs: bool = False, share_diary: bool = False, image: Optional[dict] = None) -> dict:
         voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice
         text = text.strip()
         now = self.clock()
@@ -728,8 +730,34 @@ class Brain:
         reply, cost, tools = "", 0.0, []
         doc_files: list[str] = []
         diary_n = 0
+        saved = text
 
-        if want_claude and not over_budget:
+        if image is not None:
+            # A photo from the phone: no local model reads images, so only Claude can, and in local-first only with
+            # Sergio's yes for this message. The photo itself is never stored: the history keeps «[foto]».
+            if guest is not None:
+                raise ValueError("los invitados no mandan fotos")
+            if not self._has_claude():
+                return {"reply": "Para ver una foto necesito a Claude, y no está configurado en el servidor.",
+                        "note": None, "provider": "none", "cost_usd": 0.0, **self.budget()}
+            if over_budget:
+                return {"reply": "Llegué al tope de gasto de este mes, así que no puedo mandarle la foto a Claude.",
+                        "note": None, "provider": "none", "cost_usd": 0.0, **self.budget()}
+            if local_first and not allow_claude:
+                est = round(self.estimate_usd(messages, voice) + IMAGE_TOKENS * self.s.price_in_per_mtok / 1e6, 3)
+                self.db.log(self.clock(), None, "claude_approval_asked", {"channel": channel, "estimate_usd": est, "image": True})
+                return {"reply": "Para ver la foto necesito a Claude. ¿Lo autorizas para este mensaje?", "note": None,
+                        "provider": "none", "needs_approval": True, "estimate_usd": est, "cost_usd": 0.0, **self.budget()}
+            msgs = [dict(m) for m in messages]
+            msgs[-1] = {"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": image["media_type"], "data": image["data"]}},
+                {"type": "text", "text": text}]}
+            reply, cost, tools = self._chat_claude(msgs, None, voice, share_docs, share_diary)
+            provider = "claude"
+            note = "Respondió Claude con tu autorización." if local_first else None
+            saved = text + " [foto]"
+
+        if provider is None and want_claude and not over_budget:
             try:
                 reply, cost, tools = self._chat_claude([dict(m) for m in messages], guest, voice, share_docs, share_diary)
                 provider = "claude"
@@ -782,12 +810,14 @@ class Brain:
 
         reply = (reply or "").strip() or "(Sin respuesta.)"
         end = self.clock()
-        self.db.add_message(now, channel, "user", text, user)
+        self.db.add_message(now, channel, "user", saved, user)
         self.db.add_message(end, channel, "assistant", reply, user)
         # the session log is paper data: lengths, cost and where it ran; never the words,
         # and a guest only as an anonymous number
         detail = {"channel": channel, "provider": provider, "chars_in": len(text),
                   "chars_out": len(reply), "cost_usd": round(cost, 5), "tools": tools}
+        if image is not None:
+            detail["image"] = True
         if doc_files and provider == "local":
             detail["docs_used"] = len(doc_files)
         if share_docs and provider == "claude" and "search_documents" in tools:

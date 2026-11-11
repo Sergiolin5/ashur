@@ -120,6 +120,13 @@ CREATE TABLE IF NOT EXISTS claude_requests (
     args TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'pending', decided_at REAL, result TEXT
 );
+CREATE TABLE IF NOT EXISTS encargos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, op TEXT NOT NULL,
+    params TEXT NOT NULL DEFAULT '{}', to_claude INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending_approval', docs TEXT NOT NULL DEFAULT '[]',
+    units TEXT NOT NULL DEFAULT '[]', done INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT '{}', result TEXT, devices TEXT NOT NULL DEFAULT '{}', error TEXT, updated REAL
+);
 CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          REAL NOT NULL,
@@ -1293,6 +1300,77 @@ class DB:
                 f"SELECT {self._CR_COLS} FROM claude_requests "
                 "ORDER BY (status = 'pending') DESC, id DESC LIMIT ?", (limit,)).fetchall()
         return [self._cr_row(r) for r in rows]
+
+    _ENC_JSON = ("params", "docs", "units", "state", "devices")
+    _ENC_COLS = ("id, ts, op, params, to_claude, reason, status, docs, done, total, state, result, devices, "
+                 "error, updated")
+    _ENC_UNFINISHED = "('pending_approval', 'queued', 'running', 'paused')"
+
+    @classmethod
+    def _enc_row(cls, r) -> dict:
+        d = dict(r)
+        for k in cls._ENC_JSON:
+            if k in d:
+                d[k] = json.loads(d[k])
+        d["to_claude"] = bool(d["to_claude"])
+        return d
+
+    def encargo_add(self, ts: float, op: str, params: dict, to_claude: bool, reason: str, docs: list[dict]) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO encargos (ts, op, params, to_claude, reason, docs) VALUES (?, ?, ?, ?, ?, ?)",
+                (ts, op, json.dumps(params, sort_keys=True), int(bool(to_claude)), reason, json.dumps(docs)))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def encargo_get(self, eid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(f"SELECT {self._ENC_COLS}, units FROM encargos WHERE id = ?", (eid,)).fetchone()
+        return self._enc_row(r) if r else None
+
+    def encargo_set(self, eid: int, expect: Optional[str] = None, **fields) -> bool:
+        """Update columns; with expect, only if the status is still that one (atomic). Always stamps updated."""
+        fields["updated"] = time.time()
+        vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in fields.values()]
+        sql = f"UPDATE encargos SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?"
+        args = vals + [eid]
+        if expect is not None:
+            sql += " AND status = ?"
+            args.append(expect)
+        with self.lock:
+            cur = self.conn.execute(sql, args)
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def encargos(self, limit: int = 50) -> list[dict]:
+        """Newest first, without units (heavy)."""
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT {self._ENC_COLS} FROM encargos ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [self._enc_row(r) for r in rows]
+
+    def encargos_unfinished_count(self) -> int:
+        with self.lock:
+            return self.conn.execute(
+                f"SELECT COUNT(*) FROM encargos WHERE status IN {self._ENC_UNFINISHED}").fetchone()[0]
+
+    def encargo_next(self) -> Optional[dict]:
+        """The running or paused one first (resume), else the oldest queued."""
+        with self.lock:
+            r = self.conn.execute(
+                f"SELECT {self._ENC_COLS}, units FROM encargos WHERE status IN ('running', 'paused', 'queued') "
+                "ORDER BY (status = 'queued'), id LIMIT 1").fetchone()
+        return self._enc_row(r) if r else None
+
+    def doc_texts(self, node_id: str, path: str) -> list[str]:
+        """A document's chunks in order, on its own read-only connection (never the shared lock)."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            rows = c.execute("SELECT content FROM doc_chunks WHERE node_id = ? AND path = ? "
+                             "ORDER BY CAST(seq AS INTEGER)", (node_id, path)).fetchall()
+        finally:
+            c.close()
+        return [r[0] for r in rows]
 
     def delete_memory(self, memory_id: int) -> bool:
         with self.lock:

@@ -37,6 +37,29 @@ ACTIONS = {
 }
 
 
+# Before 0.48.0 there was no «uso» event, but the log already said most of what he did. Read back, so the habits start
+# from his last two months instead of from zero. After the first «uso» event these are ignored (they would count twice).
+LEGACY_EVENTS = ("task_queued", "queue_paused", "queue_resumed", "diary_entry", "chat", "claude_request_decided",
+                 "encargo_released", "lote_released")
+
+
+def legacy(event: str, d: dict) -> tuple | None:
+    """(accion, dispositivo) for an older log event that was one of his actions, or None."""
+    if event == "task_queued" and d.get("reason") == "asked":
+        return {"inventory": ("repasar_inventario", None), "docs": ("releer_documentos", None)}.get(d.get("module"))
+    if event in ("queue_paused", "queue_resumed"):
+        return ("pausar_cola" if event == "queue_paused" else "reanudar_cola", None)
+    if event == "diary_entry" and d.get("source") != "audio":
+        return ("escribir_diario", None)
+    if event == "chat" and "guest" not in d:
+        return ("chatear", d.get("persona"))
+    if event == "claude_request_decided" and d.get("status") != "rejected":
+        return ("aprobar_pedido", None)
+    if event in ("encargo_released", "lote_released"):
+        return ("liberar_resultado", None)
+    return None
+
+
 def cell(lat: float, lon: float) -> str:
     """A place, to about a kilometre: two decimals of each coordinate. Finer than that is not needed for a habit."""
     return f"{round(lat, 2):.2f},{round(lon, 2):.2f}"

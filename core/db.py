@@ -1209,16 +1209,27 @@ class DB:
     def uso_events(self, since: float) -> list[dict]:
         """The «uso» events of the log since a time, on their own read-only connection (session_log has no index on
         event: the scan must not hold the shared lock)."""
+        from core.habits import LEGACY_EVENTS, legacy
         c = sqlite3.connect(self.path, timeout=30)
         try:
-            rows = c.execute("SELECT ts, detail FROM session_log WHERE event = 'uso' AND ts >= ? ORDER BY ts",
-                             (since,)).fetchall()
+            first = c.execute("SELECT MIN(ts) FROM session_log WHERE event = 'uso'").fetchone()[0]
+            marks = ",".join("?" * len(LEGACY_EVENTS))
+            rows = c.execute(f"SELECT ts, event, detail FROM session_log WHERE ts >= ? AND (event = 'uso' OR "
+                             f"(event IN ({marks}) AND ts < ?)) ORDER BY ts",
+                             (since, *LEGACY_EVENTS, first if first is not None else float("inf"))).fetchall()
         finally:
             c.close()
-        out = []
-        for ts, detail in rows:
+        out, last = [], {}
+        for ts, event, detail in rows:
             d = json.loads(detail or "{}")
-            out.append({"ts": ts, "accion": d.get("accion"), "dispositivo": d.get("dispositivo"), "lugar": d.get("lugar")})
+            if event == "uso":
+                out.append({"ts": ts, "accion": d.get("accion"), "dispositivo": d.get("dispositivo"), "lugar": d.get("lugar")})
+                continue
+            got = legacy(event, d)
+            if not got or ts - last.get(got[0], -1e18) < 60:      # one rescan queues a task per device: one action
+                continue
+            last[got[0]] = ts
+            out.append({"ts": ts, "accion": got[0], "dispositivo": got[1], "lugar": None})
         return out
 
     @staticmethod

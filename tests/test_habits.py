@@ -168,3 +168,20 @@ def test_examples_for_the_checkpoint(tmp_path):
     assert "Sueles repasar el inventario los lunes; ¿lo hago?" in got
     assert "Sueles escribir en el diario entre las 20:00 y las 22:00." in got
     assert "Sueles pausar la cola entre las 20:00 y las 22:00; ¿lo hago?" in got
+
+
+def test_habits_read_back_what_the_log_already_said(tmp_path):
+    """Before 0.48.0 there was no «uso» event: older events of his own actions count, once, and only before the first one."""
+    c = make(tmp_path, MONDAYS[0])
+    for ts in MONDAYS:                                                   # three Mondays, two devices each: one action each
+        for dev in ("zima", "ryzen9"):
+            c.db.log(ts, dev, "task_queued", {"task_id": 1, "module": "inventory", "reason": "asked"})
+        c.db.log(ts + 5, None, "task_queued", {"task_id": 2, "module": "inventory", "reason": "schedule"})   # not his
+        c.db.log(ts + 9, None, "chat", {"guest": 3})                                                       # a guest
+    ev = c.db.uso_events(0)
+    assert [e["accion"] for e in ev] == ["repasar_inventario"] * 3
+    c.clock.now = at(2026, 11, 23, 8)
+    assert c.get("/api/habits/sugerencias", headers=A).json()[0]["texto"] == "Sueles repasar el inventario los lunes; ¿lo hago?"
+    c.db.log(at(2026, 11, 20), None, "uso", {"accion": "chatear"})       # from now on «uso» says it all
+    c.db.log(at(2026, 11, 21), "zima", "task_queued", {"task_id": 9, "module": "inventory", "reason": "asked"})
+    assert [e["accion"] for e in c.db.uso_events(0)] == ["repasar_inventario"] * 3 + ["chatear"]

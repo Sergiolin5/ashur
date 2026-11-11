@@ -1,0 +1,5 @@
+name: vision
+version: 0.1.0
+os: [macos, windows, linux]
+tier: read          # runs a local vision model on an image the core sends; touches no file
+needs: {}

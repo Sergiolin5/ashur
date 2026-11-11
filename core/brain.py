@@ -207,7 +207,9 @@ def _get(obj: Any, name: str, default=None):
 class Brain:
     def __init__(self, db, data_dir: str, clock: Callable[[], float],
                  network: Callable[[], dict], settings: Optional[BrainSettings] = None,
-                 client: Any = None, local: Optional[Callable[[str, list], tuple[str, str]]] = None):
+                 client: Any = None, local: Optional[Callable[[str, list], tuple[str, str]]] = None,
+                 vision: Optional[Callable[..., tuple[str, str]]] = None):
+        self.vision = vision                 # (prompt, image_b64, system) -> (reply, device): the Ryzen's vision model
         self.db = db
         self.persona_path = Path(data_dir) / "persona.md"
         self.voices_dir = Path(data_dir) / "personas"     # one .md per device persona; edited from the panel
@@ -733,10 +735,20 @@ class Brain:
         saved = text
 
         if image is not None:
-            # A photo from the phone: no local model reads images, so only Claude can, and in local-first only with
-            # Sergio's yes for this message. The photo itself is never stored: the history keeps «[foto]».
+            # A photo from the phone. The Ryzen's vision model answers first when it is there; otherwise only Claude can,
+            # and in local-first only with Sergio's yes for this message. The photo is never stored: the history keeps
+            # «[foto]».
             if guest is not None:
                 raise ValueError("los invitados no mandan fotos")
+            if self.vision is not None and not allow_claude:
+                # the Ryzen's vision model first: the photo never leaves the house and costs nothing
+                try:
+                    reply, device = self.vision(text, image["data"], self._system(voice, local=True))
+                    provider = "local"
+                    saved = text + " [foto]"
+                except LocalUnavailable:
+                    pass
+        if image is not None and provider is None:
             if not self._has_claude():
                 return {"reply": "Para ver una foto necesito a Claude, y no está configurado en el servidor.",
                         "note": None, "provider": "none", "cost_usd": 0.0, **self.budget()}

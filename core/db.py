@@ -678,6 +678,26 @@ class DB:
     def last_inventory_task(self, node_id: str) -> Optional[dict]:
         return self.last_module_task("inventory", node_id)
 
+    def ensure_log_index(self) -> None:
+        """session_log had no index on ts: the activity list sorted the whole log under the shared lock on every panel
+        refresh (3.2 s on 2026-11-11, with heartbeats waiting behind it). Built once, on its own connection."""
+        c = sqlite3.connect(self.path, timeout=120)
+        try:
+            c.execute("CREATE INDEX IF NOT EXISTS session_log_ts ON session_log (ts)")
+            c.commit()
+        finally:
+            c.close()
+
+    def count_signals(self, pase: str, autor: Optional[str] = None) -> int:
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            if autor:
+                return c.execute("SELECT COUNT(*) FROM doc_signals WHERE pase = ? AND json_extract(value, '$.autor') = ?",
+                                 (pase, autor)).fetchone()[0]
+            return c.execute("SELECT COUNT(*) FROM doc_signals WHERE pase = ?", (pase,)).fetchone()[0]
+        finally:
+            c.close()
+
     def ensure_report_indexes(self) -> None:
         """The duplicates report looked each group up by hash with no index: one full pass over every inventory row
         per group (a million-plus rows, 30 groups). Small partial indexes make it read only the hashed files."""

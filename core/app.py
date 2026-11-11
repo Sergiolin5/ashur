@@ -202,9 +202,16 @@ def create_app(
         finally:
             sweep_lock.release()
 
+    def _quiet(fn) -> None:
+        try:
+            fn()
+        except Exception as e:
+            db.log(clock(), None, "periodic_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         task = None
+        threading.Thread(target=lambda: _quiet(db.ensure_log_index), daemon=True, name="log-index").start()
         if sweep_every_s:
             async def loop():
                 last_summary_check = 0.0
@@ -213,6 +220,7 @@ def create_app(
                     # These touch the database (sometimes the lock another thread holds for seconds). Run on the event
                     # loop they froze every request and heartbeat with them; in a worker thread only they wait.
                     sweep()
+                    app.state.maturity_tick()                     # time in «crecimiento pleno», counted on the server
                     app.state.encargos_due()                      # cheap when idle; an approved encargo starts within seconds
                     if due:
                         app.state.summarize_soon()
@@ -238,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.49.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.50.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1147,8 +1155,32 @@ def create_app(
         finally:
             db.clear_payload(tid)
 
+    def local_vision(prompt: str, image_b64: str, system: str = "") -> tuple[str, str]:
+        """Ask a device with the vision module (the Ryzen 9) about an image and wait. The image rides in the task and is
+        wiped from it as soon as the answer is in (or the wait ends), as local_complete does with text."""
+        sweep()
+        ready = [n for n in db.nodes() if "vision" in n["modules"] and n["mode"] in ("full", "light")]
+        if not ready:
+            raise NoLocalDevice("Ningún equipo con modelo de visión está disponible ahora.")
+        tid = db.add_task("vision", {"prompt": prompt, "image": image_b64, "system": system}, Weight.LIGHT.value, clock())
+        deadline = time.monotonic() + max(local_timeout_s, 240)    # a first load of the vision model takes a while
+        try:
+            while time.monotonic() < deadline:
+                t = db.get_task(tid)
+                if t["status"] == "done":
+                    return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]
+                if t["status"] in ("failed", "cancelled"):
+                    raise LocalFailed(f"El modelo de visión falló en {t['node_id']}.", t["node_id"])
+                time.sleep(0.2)
+            db.cancel_task(tid, "timeout", clock())
+            raise LocalUnavailable("El modelo de visión no respondió a tiempo.")
+        finally:
+            db.clear_payload(tid)
+
+    app.state.local_vision = local_vision
+
     brain = Brain(db, os.path.dirname(os.path.abspath(db_path)), clock, network_for_brain,
-                  settings=brain_settings, client=brain_client, local=local_complete)
+                  settings=brain_settings, client=brain_client, local=local_complete, vision=local_vision)
     app.state.brain = brain
 
     # conversation memory: old messages are summarized in the background, one at a time;
@@ -1735,6 +1767,85 @@ def create_app(
         if lugar:
             db.set_setting("habit_here", json.dumps({"lugar": lugar, "ts": clock()}))
         return {"ok": True}
+
+    # --- maturity (Sergio): growth plus time in «crecimiento pleno», every always-on device working at once ---
+    # His choice (2026-11-11): the always-on devices decide (by default the Ryzen 9 and the server); the Mac and the
+    # Legion Go add to «en línea» but never block. Counted on the server every few seconds; saved once a minute.
+    maturity = {"last": None, "pending": 0.0, "saved": 0.0}
+    MATURITY_DEFAULT = "ryzen9,zima-server"
+
+    def maturity_nodes() -> list[str]:
+        return [x for x in (db.setting("madurez_nodos") or MATURITY_DEFAULT).split(",") if x]
+
+    def maturity_now() -> tuple[bool, list[str]]:
+        online = sorted(n["id"] for n in db.nodes() if n["mode"] != Mode.OFFLINE.value and not n["simulated"])
+        need = maturity_nodes()
+        return bool(need) and all(x in online for x in need), online
+
+    def maturity_tick() -> None:
+        now = clock()
+        full, _ = maturity_now()
+        last = maturity["last"]
+        if full and last is not None and last[1]:
+            maturity["pending"] += min(now - last[0], 60.0)        # a gap (core down, a slow tick) never counts as more
+        maturity["last"] = (now, full)
+        if maturity["pending"] and now - maturity["saved"] >= 60:
+            total = float(db.setting("madurez_pleno_s") or 0) + maturity["pending"]
+            db.set_setting("madurez_pleno_s", f"{total:.0f}")
+            if not db.setting("madurez_pleno_desde"):
+                db.set_setting("madurez_pleno_desde", str(now))
+            maturity.update(pending=0.0, saved=now)
+
+    app.state.maturity_tick = maturity_tick
+
+    @app.get("/api/madurez", dependencies=[Depends(require_self)])
+    def maturity_get():
+        """For the app's presence (stage 3, i) and the panel: is Ashur whole right now, how long it has been whole, and
+        what it has learned. Counts only."""
+        full, online = maturity_now()
+        seconds = float(db.setting("madurez_pleno_s") or 0) + maturity["pending"]
+        return {"pleno_ahora": full, "nodos_requeridos": maturity_nodes(), "en_linea": online,
+                "horas_pleno": round(seconds / 3600, 1),
+                "crecimiento": {"recuerdos": len(db.memories()), "habitos": len(db.habits()),
+                                "documentos_clasificados": db.count_signals("tipo"),
+                                "documentos_suyos": db.count_signals("tipo", "sergio"),
+                                "documentos_leidos_voz": db.count_signals("voz")},
+                "nivel": db.setting("persona_maturity", "")}
+
+    class MaturityNodes(BaseModel):
+        nodos: list[str] = Field(min_length=1, max_length=10)
+
+    @app.put("/api/madurez/nodos", dependencies=[Depends(require_admin)])
+    def maturity_set_nodes(body: MaturityNodes):
+        known = {n["id"] for n in db.nodes()}
+        bad = [x for x in body.nodos if x not in known]
+        if bad:
+            raise HTTPException(422, "Equipos desconocidos: " + ", ".join(bad))
+        db.set_setting("madurez_nodos", ",".join(body.nodos))
+        return {"nodos_requeridos": maturity_nodes()}
+
+    # --- vision: any of Sergio's devices can ask the Ryzen's vision model about an image; never Claude ---
+    class VisionIn(BaseModel):
+        imagen: str = Field(min_length=8, max_length=7_200_000)
+        pregunta: str = Field(default="Describe la imagen.", min_length=1, max_length=2000)
+
+    @app.post("/api/vision", dependencies=[Depends(require_self)])
+    def vision_ask(body: VisionIn):
+        import base64, binascii
+        try:
+            raw = base64.b64decode(body.imagen, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(422, "La imagen no vino en base64.")
+        if len(raw) > IMAGE_MAX_BYTES:
+            raise HTTPException(413, "La imagen pesa más de 5 MB.")
+        try:
+            text, node = local_vision(body.pregunta, body.imagen)
+        except NoLocalDevice as e:
+            raise HTTPException(503, str(e))
+        except LocalUnavailable as e:
+            raise HTTPException(504, str(e))
+        db.log(clock(), node, "vision_answered", {"chars_out": len(text)})
+        return {"respuesta": text, "equipo": node}
 
     # --- health: what the phone reads from Apple Health, kept here and never sent to Claude ---
     # Nothing in the brain, the connector or a lote reads this table; the log carries counts only (Sergio's rule: health

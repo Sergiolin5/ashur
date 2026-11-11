@@ -161,6 +161,10 @@ class LocalUnavailable(Exception):
     """No device with a local model can answer right now; the message says why, in Spanish."""
 
 
+class NoLocalDevice(LocalUnavailable):
+    """No device with a local model is in full or light mode: nothing was asked, so it is not a failed try."""
+
+
 class LocalFailed(LocalUnavailable):
     """A device took the question and failed. The message carries the device's own error text; .node is the device."""
 

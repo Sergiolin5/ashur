@@ -31,7 +31,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from core.brain import (NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
-                        LocalUnavailable, api_error_reason, looks_like_secret, month_start)
+                        LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
 from core.db import DB, hash_token
 from core.encargos import MAX_WINDOWS, OPERATIONS, best_fragments, windows
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
@@ -164,6 +164,7 @@ def create_app(
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
 
     db = DB(db_path, echo=echo_events)
+    db.cancel_orphan_llm_tasks(clock())         # their askers died with the previous process
 
     sweep_lock = threading.Lock()
     started_at = clock()
@@ -1091,7 +1092,7 @@ def create_app(
         sweep()
         ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")]
         if not ready:
-            raise LocalUnavailable("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
+            raise NoLocalDevice("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
                                    "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
         target = best_llm_node(ready)
         tid = db.add_task("llm", {"system": system, "messages": messages}, Weight.LIGHT.value, clock(), target=target)
@@ -2394,7 +2395,7 @@ def create_app(
 
     def cancel_encargo(eid: int) -> str:
         for _ in range(5):                      # the runner may move it (queued → running) between the read and the write
-            e = db.encargo_get(eid) if isinstance(eid, int) else None
+            e = db.encargo_get(eid, light=True) if isinstance(eid, int) else None
             if not e:
                 raise HTTPException(404, "No existe ese encargo.")
             if e["status"] not in ENCARGO_UNFINISHED:
@@ -2404,25 +2405,45 @@ def create_app(
                 return f"Encargo #{eid} cancelado."
         raise HTTPException(409, "El encargo ya terminó.")
 
-    def encargo_unit(unit: dict) -> tuple[Optional[str], Optional[str]]:
-        """(answer, device), or (None, the last device that failed) after NOTES_TRIES tries."""
+    def encargo_unit(unit: dict) -> tuple[str, Optional[str], Optional[str]]:
+        """("ok", answer, device); ("failed", None, last device) after NOTES_TRIES tries; ("wait", None, None) when no
+        device is ready or the queue got paused between tries: neither uses up the unit's tries."""
         node = None
         for attempt in range(1, NOTES_TRIES + 1):
+            if attempt > 1:
+                time.sleep(app.state.encargo_retry_wait_s)
+                if queue_paused():
+                    return "wait", None, None
             try:
-                return local_complete(unit["system"], [{"role": "user", "content": unit["text"]}])
+                answer, node = local_complete(unit["system"], [{"role": "user", "content": unit["text"]}])
+                return "ok", answer, node
+            except NoLocalDevice:
+                return "wait", None, None
             except LocalFailed as ex:
                 node = ex.node
-            except LocalUnavailable:
+            except LocalUnavailable:              # timed out: a try
                 pass
-            if attempt < NOTES_TRIES:
-                time.sleep(app.state.encargo_retry_wait_s)
-        return None, node
+        return "failed", None, node
+
+    def encargo_fail(e: dict, op, state: dict, error: str, node: Optional[str] = None, done: int = 0) -> None:
+        """failed, with what was done so far rendered (if even that works), and a count-only log line."""
+        result = None
+        if op is not None:
+            try:
+                result = op.render(state, e["docs"], e["devices"])
+            except Exception:
+                result = None
+        for frm in (e["status"], "running"):
+            if db.encargo_set(e["id"], expect=frm, status="failed", result=result, error=error):
+                db.log(clock(), node, "encargo_failed", {"id": e["id"], "docs": len(e["docs"]), "units": done})
+                return
 
     def encargo_step() -> bool:
-        """Run the next unit of the encargo in course. False when there is nothing to run (or the queue is paused).
-        Progress (done, state) is saved only together with the answer, so a restart redoes the unit in flight."""
+        """Run the next unit of the encargo in course. False when there is nothing to run now (none, queue paused, or
+        no device ready). Progress (done, state) is saved only together with the answer, so a restart redoes the unit
+        in flight. An error in the operation's own code fails the encargo instead of being retried forever."""
         with encargo_lock:
-            e = db.encargo_next()
+            e = db.encargo_next(light=True)
             if not e:
                 return False
             eid, op, docs = e["id"], OPERATIONS.get(e["op"]), e["docs"]
@@ -2431,53 +2452,69 @@ def create_app(
                     db.encargo_set(eid, expect=e["status"], status="paused")
                 return False
             if op is None:
-                db.encargo_set(eid, expect=e["status"], status="failed", error="Operación desconocida.")
+                encargo_fail(e, None, {}, "Operación desconocida.")
                 return True
-            units = e["units"]
-            if not units and e["done"] == 0:                  # first start: the units, from one read of the index
-                fragments, texts = None, {}
-                if op.name == "responder":
-                    fragments = best_fragments(db, docs, e["params"].get("pregunta", ""))
-                else:
-                    texts = {d["node_id"] + "\n" + d["path"]: db.doc_texts(d["node_id"], d["path"]) for d in docs}
-                units = op.first_units(docs, texts, e["params"], fragments)
-                if not db.encargo_set(eid, expect=e["status"], status="running", units=units, total=len(units)):
-                    return True                                # cancelled meanwhile
-            elif e["status"] != "running" and not db.encargo_set(eid, expect=e["status"], status="running"):
+            state = e["state"]
+            try:
+                return encargo_run(e, op, state)
+            except sqlite3.Error:
+                raise
+            except Exception:                     # never the message: it may carry document text
+                encargo_fail(e, op, state, "Error interno al procesar el encargo.", done=e["done"])
                 return True
-            state, devices, done = e["state"], e["devices"], e["done"]
-            if done < len(units):
-                t0 = time.monotonic()
-                answer, node = encargo_unit(units[done])
-                took = time.monotonic() - t0
-                if answer is None:
-                    if db.encargo_set(eid, expect="running", status="failed", result=op.render(state, docs, devices),
-                                      error=f"Un trozo falló {NOTES_TRIES} veces en {node or 'ningún equipo disponible'}."):
-                        db.log(clock(), node, "encargo_failed", {"id": eid, "docs": len(docs), "units": done})
-                    return True
-                units = units + op.after(units[done], answer, state)
-                done += 1
-                devices[node] = devices.get(node, 0) + 1
-                state["_seconds"] = state.get("_seconds", 0) + took
-                if not db.encargo_set(eid, expect="running", units=units, total=len(units), done=done, state=state,
-                                      devices=devices):
-                    return True                                # cancelled while the device worked: the answer is dropped
-                prev = db.setting("encargo_s_per_unit")
-                db.set_setting("encargo_s_per_unit", f"{took if prev is None else 0.7 * float(prev) + 0.3 * took:.2f}")
-            if done >= len(units):
-                if db.encargo_set(eid, expect="running", status="done", result=op.render(state, docs, devices)):
-                    if not e["to_claude"]:
-                        db.encargo_set(eid, expect="done", status="kept")
-                    db.log(clock(), None, "encargo_done", {"id": eid, "docs": len(docs), "units": len(units),
-                                                           "seconds": round(state.get("_seconds", 0))})
+
+    def encargo_run(e: dict, op, state: dict) -> bool:
+        eid, docs, devices, done = e["id"], e["docs"], e["devices"], e["done"]
+        units = (db.encargo_get(eid) or {}).get("units") or []
+        if not units and done == 0:                       # first start: the units, from one read of the index
+            fragments, texts = None, {}
+            if op.name == "responder":
+                fragments = best_fragments(db, docs, e["params"].get("pregunta", ""))
+            else:
+                texts = {d["node_id"] + "\n" + d["path"]: db.doc_texts(d["node_id"], d["path"]) for d in docs}
+            units = op.first_units(docs, texts, e["params"], fragments)
+            if not db.encargo_set(eid, expect=e["status"], status="running", units=units, total=len(units)):
+                return True                                # cancelled meanwhile
+        elif e["status"] != "running" and not db.encargo_set(eid, expect=e["status"], status="running"):
             return True
+        e["status"] = "running"
+        if done < len(units):
+            t0 = time.monotonic()
+            how, answer, node = encargo_unit(units[done])
+            took = time.monotonic() - t0
+            if how == "wait":
+                if queue_paused():
+                    db.encargo_set(eid, expect="running", status="paused")
+                return False
+            if how == "failed":
+                encargo_fail(e, op, state, f"Un trozo falló {NOTES_TRIES} veces en {node or 'ningún equipo'}.",
+                             node=node, done=done)
+                return True
+            more = op.after(units[done], answer, state)
+            done += 1
+            devices[node] = devices.get(node, 0) + 1
+            state["_seconds"] = state.get("_seconds", 0) + took
+            grown = {"units": units + more} if more else {}   # units are heavy: written back only when they grow
+            units = units + more
+            if not db.encargo_set(eid, expect="running", total=len(units), done=done, state=state, devices=devices,
+                                  **grown):
+                return True                                # cancelled while the device worked: the answer is dropped
+            prev = db.setting("encargo_s_per_unit")
+            db.set_setting("encargo_s_per_unit", f"{took if prev is None else 0.7 * float(prev) + 0.3 * took:.2f}")
+        if done >= len(units):
+            if db.encargo_set(eid, expect="running", status="done", result=op.render(state, docs, devices)):
+                if not e["to_claude"]:
+                    db.encargo_set(eid, expect="done", status="kept")
+                db.log(clock(), None, "encargo_done", {"id": eid, "docs": len(docs), "units": len(units),
+                                                       "seconds": round(state.get("_seconds", 0))})
+        return True
 
     app.state.encargo_step = encargo_step
 
     def encargos_due() -> None:
         """From the maintenance loop: one worker thread while there is an encargo to run."""
         th = encargo_worker[0]
-        if (th and th.is_alive()) or not db.encargo_next():
+        if (th and th.is_alive()) or not db.encargo_next(light=True):
             return
 
         def work():
@@ -2485,7 +2522,7 @@ def create_app(
                 while True:
                     if encargo_step():
                         continue
-                    if queue_paused() and db.encargo_next():
+                    if db.encargo_next(light=True):          # paused, or no device ready: look again soon
                         time.sleep(5)
                         continue
                     return
@@ -2502,7 +2539,7 @@ def create_app(
         return [encargo_row(e) for e in db.encargos()]
 
     def encargo_move(eid: int, frm: str, to: str, why: str, need_claude: bool = False) -> dict:
-        e = db.encargo_get(eid)
+        e = db.encargo_get(eid, light=True)
         if not e:
             raise HTTPException(404, "No existe ese encargo.")
         if (need_claude and not e["to_claude"]) or not db.encargo_set(eid, expect=frm, status=to):
@@ -2570,7 +2607,7 @@ def create_app(
             if isinstance(tid, int) and (t := db.get_task(tid)):
                 row["module"] = t["module"]
             eid = r["args"].get("encargo")
-            if r["action"] == "encargo" and isinstance(eid, int) and (e := db.encargo_get(eid)):
+            if r["action"] == "encargo" and isinstance(eid, int) and (e := db.encargo_get(eid, light=True)):
                 row["encargo"] = {"op": e["op"], "label": encargo_label(e), "docs": [d["name"] for d in e["docs"]],
                                   "to_claude": e["to_claude"], "estimate": encargo_estimate(e)}
             out.append(row)

@@ -332,6 +332,7 @@ from fastapi.testclient import TestClient
 from core.app import create_app
 from core.brain import BOGOTA
 from core.events import describe
+from core.encargos import OPERATIONS as OPS
 from core.mcp import action_label
 from sim.scenario import VirtualClock
 
@@ -589,13 +590,108 @@ def test_unit_fails_three_times_marks_failed_with_partial(tmp_path, fast_local):
     assert listed["result"] == e["result"] and listed["error"] == e["error"]
 
 
-def test_no_device_marks_failed(tmp_path):
+def test_no_device_waits_then_finishes(tmp_path, fast_local):
     c = runner_app(tmp_path)
     eid, rid = order(c, seed(c, TWO))
     approve(c, rid)
-    assert c.step() is True
+    assert c.step() is False                                   # no device ready: not a try, it waits
     e = c.db.encargo_get(eid)
-    assert e["status"] == "failed" and e["error"] == "Un trozo falló 3 veces en ningún equipo disponible."
+    assert e["status"] == "running" and e["done"] == 0 and e["error"] is None
+    assert c.step() is False and c.db.encargo_get(eid)["status"] == "running"
+    node = FakeLLM(c, lambda p, n: "- idea")
+    try:
+        run_all(c)
+    finally:
+        node.close()
+    e = c.db.encargo_get(eid)
+    assert e["status"] == "kept" and e["done"] == 2 and len(node.payloads) == 2
+
+
+def test_pause_between_tries_keeps_the_unit(tmp_path, fast_local):
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, TWO))
+    approve(c, rid)
+
+    def answer(p, n):
+        if n == 1:                                             # fails once, and Sergio pauses before the retry
+            c.post("/api/queue/pause", headers=A, json={"paused": True})
+            return RuntimeError("model crashed")
+        return "- idea"
+    node = FakeLLM(c, answer)
+    try:
+        assert c.step() is False
+        e = c.db.encargo_get(eid)
+        assert e["status"] == "paused" and e["done"] == 0 and len(node.payloads) == 1
+        c.post("/api/queue/pause", headers=A, json={"paused": False})
+        run_all(c)
+    finally:
+        node.close()
+    assert c.db.encargo_get(eid)["status"] == "kept" and len(node.payloads) == 3
+
+
+def test_operation_error_marks_failed_and_stops(tmp_path, fast_local, monkeypatch):
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, TWO))
+    approve(c, rid)
+
+    def boom(unit, answer, state):
+        raise ValueError("CANARIO-ERR")
+    monkeypatch.setattr(OPS["resumir"], "after", boom)
+    node = FakeLLM(c, lambda p, n: "- idea")
+    try:
+        assert c.step() is True
+        assert c.step() is False                               # nothing left to run: no endless retry
+    finally:
+        node.close()
+    e = c.db.encargo_get(eid)
+    assert e["status"] == "failed" and e["error"] == "Error interno al procesar el encargo."
+    assert e["result"] is not None and len(node.payloads) == 1
+    failed = [ev for ev in c.db.log_rows(100) if ev["event"] == "encargo_failed"]
+    assert len(failed) == 1 and "CANARIO" not in json.dumps(failed)
+
+
+def test_unknown_operation_logs_failed(tmp_path):
+    c = runner_app(tmp_path)
+    eid = c.db.encargo_add(c.clock(), "inventar", {}, False, "x", [])
+    c.db.encargo_set(eid, status="queued")
+    assert c.step() is True
+    assert c.db.encargo_get(eid)["status"] == "failed"
+    assert [ev["detail"]["id"] for ev in c.db.log_rows(100) if ev["event"] == "encargo_failed"] == [eid]
+
+
+def test_light_reads_and_units_written_only_when_they_grow(tmp_path, fast_local):
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, TWO))
+    assert "units" not in c.db.encargo_get(eid, light=True)
+    approve(c, rid)
+    assert "units" not in c.db.encargo_next(light=True) and "units" in c.db.encargo_next()
+    writes, real = [], c.db.encargo_set
+
+    def spy(i, expect=None, **fields):
+        writes.append(set(fields))
+        return real(i, expect, **fields)
+    c.db.encargo_set = spy
+    node = FakeLLM(c, lambda p, n: "- idea")
+    try:
+        run_all(c)
+    finally:
+        node.close()
+    assert c.db.encargo_get(eid)["status"] == "kept"
+    assert sum("units" in w for w in writes) == 1               # built once; short answers add no units
+
+
+def test_restart_cancels_orphan_llm_tasks(tmp_path):
+    c = runner_app(tmp_path)
+    waiting = c.db.add_task("llm", {"system": "s", "messages": [{"role": "user", "content": "CANARIO"}]}, "light", 1.0)
+    taken = c.db.add_task("llm", {"system": "s", "messages": []}, "light", 1.0)
+    c.db.claim_task("mac-m1", ["llm"], ["light"], now=2.0)
+    other = c.db.add_task("inventory", {"disks": []}, "heavy", 1.0)
+    assert {c.db.get_task(t)["status"] for t in (waiting, taken)} == {"queued", "running"}
+    c2 = runner_app(tmp_path, clock=c.clock)
+    for t in (waiting, taken):
+        got = c2.db.get_task(t)
+        assert got["status"] == "failed" and got["payload"] == {}
+    assert c2.db.get_task(other)["status"] == "queued"
 
 
 def test_cancel_during_run_discards_answer(tmp_path, fast_local):
@@ -655,19 +751,19 @@ def test_done_notice_respects_quiet_hours(tmp_path, fast_local):
     clock = VirtualClock(dt.datetime(2026, 11, 10, 2, 0, tzinfo=BOGOTA).timestamp())
     c = runner_app(tmp_path, clock=clock)
     c.post("/api/push/subscribe", headers=A, json=SUB)
+    c.put("/api/notify", headers=A, json={"cats": {"tasks": False}})   # the device's own task failures are not this test's
     notify = c.app.state.notify_due
     assert notify(sync=True) == []                             # first run sets the cursor
     docs = seed(c, TWO)
     eid, rid = order(c, docs)
     approve(c, rid)
-    node = FakeLLM(c, lambda p, n: "- idea")
-    try:
-        run_all(c)
-    finally:
-        node.close()
     bad, rid2 = order(c, docs)
     approve(c, rid2)
-    run_all(c)                                                 # no device now: it fails
+    node = FakeLLM(c, lambda p, n: "- idea" if n <= 2 else RuntimeError("model crashed"))
+    try:
+        run_all(c)                                             # the first one finishes, the second one fails
+    finally:
+        node.close()
     assert c.db.encargo_get(bad)["status"] == "failed"
     assert notify(sync=True) == [] and c.sent == []           # 02:00: quiet hours
     clock.now = dt.datetime(2026, 11, 10, 8, 0, tzinfo=BOGOTA).timestamp()

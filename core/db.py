@@ -531,6 +531,17 @@ class DB:
             self.conn.execute("UPDATE tasks SET payload = '{}', result = NULL WHERE id = ?", (task_id,))
             self.conn.commit()
 
+    def cancel_orphan_llm_tasks(self, now: float) -> int:
+        """At core start: local-model questions still queued or taken have nobody waiting for their answer (the thread
+        that asked died with the old process). Fail them and drop their payload (it may hold Sergio's words)."""
+        with self.lock:
+            cur = self.conn.execute(
+                "UPDATE tasks SET status = 'failed', payload = '{}', result = ?, finished = ? "
+                "WHERE module = 'llm' AND status IN ('queued', 'running')",
+                (json.dumps({"ok": False, "error": "core restarted"}), now))
+            self.conn.commit()
+        return cur.rowcount
+
     def requeue_tasks_of(self, node_id: str) -> list[int]:
         """A node vanished mid-task: put its running tasks back in the queue. node_id stays as the last holder, so if
         the node was only out of touch and still finishes, its late result is kept (finish_late) instead of lost."""
@@ -1393,9 +1404,11 @@ class DB:
             self.conn.commit()
             return cur.lastrowid
 
-    def encargo_get(self, eid: int) -> Optional[dict]:
+    def encargo_get(self, eid: int, light: bool = False) -> Optional[dict]:
+        """light: without units (they can weigh megabytes) for status checks."""
         with self.lock:
-            r = self.conn.execute(f"SELECT {self._ENC_COLS}, units FROM encargos WHERE id = ?", (eid,)).fetchone()
+            r = self.conn.execute(f"SELECT {self._ENC_COLS}{'' if light else ', units'} FROM encargos WHERE id = ?",
+                                  (eid,)).fetchone()
         return self._enc_row(r) if r else None
 
     def encargo_set(self, eid: int, expect: Optional[str] = None, **fields) -> bool:
@@ -1427,11 +1440,11 @@ class DB:
             return self.conn.execute(
                 f"SELECT COUNT(*) FROM encargos WHERE status IN {self._ENC_UNFINISHED}").fetchone()[0]
 
-    def encargo_next(self) -> Optional[dict]:
-        """The running or paused one first (resume), else the oldest queued."""
+    def encargo_next(self, light: bool = False) -> Optional[dict]:
+        """The running or paused one first (resume), else the oldest queued. light: without units."""
         with self.lock:
             r = self.conn.execute(
-                f"SELECT {self._ENC_COLS}, units FROM encargos WHERE status IN ('running', 'paused', 'queued') "
+                f"SELECT {self._ENC_COLS}{'' if light else ', units'} FROM encargos WHERE status IN ('running', 'paused', 'queued') "
                 "ORDER BY (status = 'queued'), id LIMIT 1").fetchone()
         return self._enc_row(r) if r else None
 

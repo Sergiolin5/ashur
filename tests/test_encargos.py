@@ -80,16 +80,12 @@ def test_doc_texts_in_order(tmp_path):
     assert db.doc_texts("n1", "/e.txt") == []
 
 
-def test_doc_texts_fallback_without_first_rowid(tmp_path):
+def test_doc_texts_never_scans_without_first_rowid(tmp_path):
     db = make(tmp_path)
-    db.docs_apply("n1", [{"path": "/a.txt", "modified": 1.0, "chunks": ["x"]}], [])
-    db.conn.execute("DELETE FROM doc_chunks")
-    for seq, txt in [(2, "tres"), (0, "uno"), (10, "once"), (1, "dos")]:
-        db.conn.execute("INSERT INTO doc_chunks (content, node_id, path, seq) VALUES (?, ?, ?, ?)",
-                        (txt, "n1", "/a.txt", seq))
-    db.conn.execute("UPDATE docs SET first_rowid = NULL, chunks = 4")
+    db.docs_apply("n1", [{"path": "/a.txt", "modified": 1.0, "chunks": ["uno", "dos"]}], [])
+    db.conn.execute("UPDATE docs SET first_rowid = NULL")
     db.conn.commit()
-    assert db.doc_texts("n1", "/a.txt") == ["uno", "dos", "tres", "once"]
+    assert db.doc_texts("n1", "/a.txt") == []                   # indexed before 0.33.3: needs «Releer documentos»
 
 
 def test_set_rejects_unknown_field(tmp_path):
@@ -129,7 +125,8 @@ def test_docs_under_prefix_case_insensitive_and_capped(tmp_path):
 
 def test_resolve_by_search(tmp_path):
     db = indexed(tmp_path)
-    docs = E.resolve_docs(db, "el presupuesto", None, None)
+    docs, stale = E.resolve_docs(db, "el presupuesto", None, None)
+    assert stale == 0
     assert {(d["node_id"], d["path"]) for d in docs} == {
         ("n1", "C:\\Users\\s\\Docs\\informe.txt"), ("n1", "C:\\Users\\s\\Docs2\\otro.txt"), ("n2", "/home/s/docs/plan.md")}
     by = {d["path"]: d for d in docs}
@@ -144,7 +141,7 @@ def test_resolve_by_folder_normalizes_slashes_and_trailing(tmp_path):
     db = indexed(tmp_path)
     want = {"C:\\Users\\s\\Docs\\informe.txt", "C:\\Users\\s\\Docs\\sub\\notas.txt"}
     for carpeta in ["C:\\Users\\s\\Docs\\", "C:\\Users\\s\\Docs", "C:/Users/s/Docs/", "c:/users/s/docs"]:
-        docs = E.resolve_docs(db, None, "n1", carpeta)
+        docs, _ = E.resolve_docs(db, None, "n1", carpeta)
         assert {d["path"] for d in docs} == want, carpeta          # Docs2 is another folder, not a match
         assert all(d["node_id"] == "n1" and d["name"] for d in docs)
     with pytest.raises(E.EncargoError, match="No encontré"):
@@ -158,7 +155,7 @@ def test_resolve_folder_over_cap_errors(tmp_path):
         E.resolve_docs(db, None, "n1", "/d")
     assert str(e.value) == ("La carpeta tiene 21 documentos leídos; el tope es 20. Pide una carpeta más concreta.")
     db.docs_apply("n1", [], ["/d/f20.txt"])
-    assert len(E.resolve_docs(db, None, "n1", "/d/")) == 20
+    assert len(E.resolve_docs(db, None, "n1", "/d/")[0]) == 20
 
 
 def test_resolve_needs_exactly_one_selector(tmp_path):
@@ -215,7 +212,7 @@ def test_resumir_units_cap_and_condense():
 def test_responder_no_fragments_needs_no_model(tmp_path):
     db = indexed(tmp_path)
     op = E.OPERATIONS["responder"]
-    docs = E.resolve_docs(db, None, "n1", "C:\\Users\\s\\Fotos")
+    docs, _ = E.resolve_docs(db, None, "n1", "C:\\Users\\s\\Fotos")
     frags = E.best_fragments(db, docs, "¿cuál es el presupuesto?")
     assert frags == []
     assert op.first_units(docs, {}, {"pregunta": "¿cuál es el presupuesto?"}, frags) == []
@@ -225,7 +222,7 @@ def test_responder_no_fragments_needs_no_model(tmp_path):
 def test_responder_question_with_fts_operators(tmp_path):
     db = indexed(tmp_path)
     op = E.OPERATIONS["responder"]
-    docs = E.resolve_docs(db, None, "n1", "C:\\Users\\s\\Docs")
+    docs, _ = E.resolve_docs(db, None, "n1", "C:\\Users\\s\\Docs")
     assert E.best_fragments(db, docs, '"AND" NEAR *x') == []
     frags = E.best_fragments(db, docs, 'presupuesto "AND" NEAR *x')
     assert len(frags) == 1 and docs[frags[0]["doc"]]["name"] == "informe.txt"
@@ -275,7 +272,7 @@ def test_responder_keeps_best_six_fragments(tmp_path):
     db = make(tmp_path)
     db.docs_apply("n1", [{"path": f"/d/f{i}.txt", "modified": 1.0, "chunks": [f"presupuesto {i}"]} for i in range(10)], [])
     db.docs_apply("n1", [{"path": "/fuera.txt", "modified": 1.0, "chunks": ["presupuesto fuera"]}], [])
-    docs = E.resolve_docs(db, None, "n1", "/d")
+    docs, _ = E.resolve_docs(db, None, "n1", "/d")
     frags = E.best_fragments(db, docs, "presupuesto")
     assert len(frags) == E.ANSWER_FRAGMENTS and all(0 <= f["doc"] < len(docs) for f in frags)
     assert all("fuera" not in f["text"] for f in frags)
@@ -285,7 +282,7 @@ def test_fragments_several_from_one_long_document(tmp_path):
     db = make(tmp_path)
     db.docs_apply("n1", [{"path": "/largo.txt", "modified": 1.0,
                           "chunks": [f"parte {i} del presupuesto" for i in range(10)]}], [])
-    docs = E.resolve_docs(db, "presupuesto", None, None)
+    docs, _ = E.resolve_docs(db, "presupuesto", None, None)
     frags = E.best_fragments(db, docs, "presupuesto")
     assert len(frags) == E.ANSWER_FRAGMENTS and all(f["doc"] == 0 for f in frags)
     assert len({f["text"] for f in frags}) == E.ANSWER_FRAGMENTS
@@ -296,21 +293,60 @@ def test_fragments_common_word_still_finds_the_encargo_document(tmp_path):
     db.docs_apply("n1", [{"path": f"/otros/f{i}.txt", "modified": 1.0, "chunks": ["presupuesto presupuesto"] * 3}
                          for i in range(200)], [])
     db.docs_apply("n1", [{"path": "/mio/a.txt", "modified": 1.0, "chunks": ["intro", "el presupuesto es anual"]}], [])
-    docs = E.resolve_docs(db, None, "n1", "/mio")
+    docs, _ = E.resolve_docs(db, None, "n1", "/mio")
     frags = E.best_fragments(db, docs, "presupuesto")
     assert [f["text"] for f in frags] == ["el presupuesto es anual"] and frags[0]["doc"] == 0
 
 
-def test_docs_search_in_falls_back_without_first_rowid(tmp_path):
+def test_docs_search_in_skips_docs_without_first_rowid(tmp_path):
     db = make(tmp_path)
     db.docs_apply("n1", [{"path": "/a.txt", "modified": 1.0, "chunks": ["presupuesto uno", "presupuesto dos"]},
                          {"path": "/b.txt", "modified": 1.0, "chunks": ["presupuesto ajeno"]}], [])
-    db.conn.execute("UPDATE docs SET first_rowid = NULL")
+    both = [{"node_id": "n1", "path": "/a.txt"}, {"node_id": "n1", "path": "/b.txt"}]
+    db.conn.execute("UPDATE docs SET first_rowid = NULL WHERE path = '/a.txt'")
     db.conn.commit()
-    hits = db.docs_search_in(["presupuesto"], [{"node_id": "n1", "path": "/a.txt"}], 6)
-    assert sorted(h["text"] for h in hits) == ["presupuesto dos", "presupuesto uno"]
-    assert db.docs_search_in(['"AND"', "NEAR", "*x"], [{"node_id": "n1", "path": "/a.txt"}], 6) == []
+    assert [h["text"] for h in db.docs_search_in(["presupuesto"], both, 6)] == ["presupuesto ajeno"]
+    assert db.docs_search_in(['"AND"', "NEAR", "*x"], both, 6) == []
     assert db.docs_search_in(["presupuesto"], [], 6) == []
+
+
+def test_docs_search_in_raises_other_sqlite_errors(tmp_path):
+    import sqlite3
+    db = make(tmp_path)
+    db.docs_apply("n1", [{"path": "/a.txt", "modified": 1.0, "chunks": ["presupuesto uno"]}], [])
+    db.conn.execute("DROP TABLE doc_chunks")
+    db.conn.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.docs_search_in(["presupuesto"], [{"node_id": "n1", "path": "/a.txt"}], 6)
+
+
+def stale(db, *paths):
+    for p in paths:
+        db.conn.execute("UPDATE docs SET first_rowid = NULL WHERE path = ?", (p,))
+    db.conn.commit()
+
+
+def test_resolve_excludes_docs_needing_reread(tmp_path):
+    db = indexed(tmp_path)
+    stale(db, "C:\\Users\\s\\Docs2\\otro.txt")
+    docs, n = E.resolve_docs(db, "presupuesto", None, None)
+    assert n == 1 and "C:\\Users\\s\\Docs2\\otro.txt" not in {d["path"] for d in docs} and len(docs) == 2
+    stale(db, "C:\\Users\\s\\Docs\\sub\\notas.txt")
+    docs, n = E.resolve_docs(db, None, "n1", "C:\\Users\\s\\Docs")
+    assert n == 1 and [d["path"] for d in docs] == ["C:\\Users\\s\\Docs\\informe.txt"]
+    assert E.stale_note(1) == "1 documento necesita releerse (Ajustes → Documentos → Releer documentos)."
+    assert E.stale_note(3) == "3 documentos necesitan releerse (Ajustes → Documentos → Releer documentos)."
+
+
+def test_resolve_all_need_reread_errors(tmp_path):
+    db = indexed(tmp_path)
+    stale(db, "C:\\Users\\s\\Docs\\informe.txt", "C:\\Users\\s\\Docs\\sub\\notas.txt")
+    with pytest.raises(E.EncargoError) as ex:
+        E.resolve_docs(db, None, "n1", "C:\\Users\\s\\Docs")
+    assert str(ex.value) == "2 documentos necesitan releerse (Ajustes → Documentos → Releer documentos)."
+    db.docs_apply("n1", [{"path": "C:\\Users\\s\\Docs\\vacio.txt", "modified": 1.0, "chunks": []}], [])
+    docs, n = E.resolve_docs(db, None, "n1", "C:\\Users\\s\\Docs")
+    assert n == 2 and [d["name"] for d in docs] == ["vacio.txt"]     # an empty document is not one to reread
 
 
 def test_clasificar_joins_chunks_with_newline():
@@ -915,8 +951,8 @@ def test_ver_encargo_never_leaks_before_release(tmp_path):
     secret = "CANARIO-CONTENIDO-SECRETO"
     c = tools_c(tmp_path, {"/d/gatos.txt": [f"{secret} gatos"]})
     encargar(c, devolver_a_claude=True, motivo="motivo normal")
-    leak = {"result": f"- {secret}", "state": {"bullets": {"0": [secret]}, "answer": secret},
-            "error": "Un trozo falló 3 veces en mac-m1.", "devices": {"mac-m1": 1}, "total": 3, "done": 1}
+    leak = {"result": f"- {secret}", "state": {"bullets": {"0": [secret]}, "answer": secret, "_last_device": "mac-m1"},
+            "error": "Un trozo falló 3 veces en mac-m1.", "devices": {"mac-m1": 1, "pc-casa": 1}, "total": 3, "done": 1}
     c.db.encargo_set(1, units=[{"x": secret}], **leak)
     seen = {}
     for status in ("pending_approval", "queued", "running", "paused", "done", "kept", "rejected", "cancelled", "failed"):
@@ -936,7 +972,7 @@ def test_ver_encargo_never_leaks_before_release(tmp_path):
     text, _ = tool_text(c, "ashur_ver_encargo", {"id": 1})
     assert secret in text and text.startswith("Encargo #1: liberado por Sergio.\n")
     c.db.encargo_set(1, status="failed", error=None)
-    assert tool_text(c, "ashur_ver_encargo", {"id": 1})[0] == "Encargo #1: falló." and secret not in "falló."
+    assert tool_text(c, "ashur_ver_encargo", {"id": 1})[0] == "Encargo #1: falló."
 
 
 def test_ver_encargo_done_without_to_claude_and_kept(tmp_path):
@@ -1026,7 +1062,13 @@ def test_sweep_no_document_text_reaches_claude_unreleased(tmp_path, fast_local):
                                          "motivo": "prueba"})]
             calls += [("ashur_ver_encargo", {"id": eid}) for eid in ids.values()]
             assert {n for n, _ in calls} == tools
-            return [(n, a, tool_text(c, n, a)[0]) for n, a in calls]
+            out = []
+            for n, a in calls:
+                text, err = tool_text(c, n, a)
+                if n == "ashur_encargar":
+                    assert err is False, text
+                out.append((n, a, text))
+            return out
 
         statuses = {k: c.db.encargo_get(v)["status"] for k, v in ids.items()}
         assert statuses == {(op, True): "done" for op, _ in variants} | {(op, False): "kept" for op, _ in variants}
@@ -1040,3 +1082,111 @@ def test_sweep_no_document_text_reaches_claude_unreleased(tmp_path, fast_local):
             assert (canary in out) == (n == "ashur_ver_encargo" and a == {"id": released}), (n, a)
     finally:
         node.close()
+
+
+# --- final review fixes ---------------------------------------------------------------------
+
+import sqlite3
+
+
+def test_estimate_reads_no_document_text(tmp_path):
+    c = tools_c(tmp_path, {"/d/gatos.txt": ["gatos"] + ["x"] * 8, "/d/gatos2.txt": ["gatos"],
+                           "/d/gatos3.txt": ["gatos"] + ["x"] * 199})
+
+    def no_reads(*a, **k):
+        raise AssertionError("the estimate read the index")
+    c.db.doc_texts = no_reads
+    c.db.set_setting("encargo_s_per_unit", "60")
+    text, err = encargar(c)
+    assert not err and "~34 min." in text                      # 3 + 1 + 30 (capped) windows × 60 s
+    rows = c.tailnet.get("/api/claude-requests", headers=A).json()
+    assert rows[0]["encargo"]["estimate"] == "~34 min"
+
+
+def test_encargar_says_documents_need_reread(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    stale(c.db, "/d/gatos2.txt")
+    text, err = encargar(c)
+    assert not err and text.startswith("Encargo #1 pedido: 1 documento (gatos.txt)")
+    assert text.endswith("Sergio lo aprueba en el panel. "
+                         "1 documento necesita releerse (Ajustes → Documentos → Releer documentos).")
+    assert [d["name"] for d in c.db.encargo_get(1)["docs"]] == ["gatos.txt"]
+    stale(c.db, "/d/gatos.txt")
+    assert encargar(c) == ("2 documentos necesitan releerse (Ajustes → Documentos → Releer documentos).", True)
+
+
+def test_cancel_pending_encargo_decides_its_request(tmp_path):
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, TWO))
+    assert c.post(f"/api/encargos/{eid}/cancel", headers=A).status_code == 200
+    r = c.db.claude_request_get(rid)
+    assert (r["status"], r["result"]) == ("not_done", "Encargo cancelado.")
+    assert c.db.claude_requests_pending_count() == 0 and c.db.encargo_get(eid)["status"] == "cancelled"
+
+
+def test_units_kept_in_memory_between_steps(tmp_path, fast_local):
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, {"/d/a.txt": ["a" * 4000, "b" * 4000, "c" * 4000]}))
+    approve(c, rid)
+    node = FakeLLM(c, lambda p, n: "- idea")
+    try:
+        assert c.step() is True
+        full, real_get, real_next = [], c.db.encargo_get, c.db.encargo_next
+
+        def get(i, light=False):
+            full.extend([] if light else ["encargo_get"])
+            return real_get(i, light)
+
+        def nxt(light=False):
+            full.extend([] if light else ["encargo_next"])
+            return real_next(light)
+        c.db.encargo_get, c.db.encargo_next = get, nxt
+        assert c.step() is True and c.db.encargo_get(eid, light=True)["done"] == 2
+        assert full == []
+        run_all(c)
+    finally:
+        node.close()
+    assert c.db.encargo_get(eid)["status"] == "kept" and len(node.payloads) == 3
+
+
+def test_persistent_db_error_fails_encargo(tmp_path, fast_local):
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, TWO))
+    approve(c, rid)
+
+    def broken(*a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+    c.db.doc_texts = broken
+    for _ in range(2):
+        with pytest.raises(sqlite3.OperationalError):
+            c.step()
+        assert c.db.encargo_get(eid)["status"] == "queued"
+    assert c.step() is True
+    e = c.db.encargo_get(eid)
+    assert (e["status"], e["error"]) == ("failed", "Error de la base al procesar el encargo.")
+    assert [ev["detail"]["id"] for ev in c.db.log_rows(100) if ev["event"] == "encargo_failed"] == [eid]
+    assert c.step() is False
+
+
+def test_worker_waits_30_s_while_waiting(tmp_path):
+    c = runner_app(tmp_path)
+    assert c.app.state.encargo_idle_wait_s == 30
+
+
+def test_operacion_and_accion_must_be_text(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+    for bad in (["resumir"], {"resumir": 1}, 5):
+        text, err = encargar(c, operacion=bad)
+        assert err is True and text == "«operacion» debe ser una de: resumir, responder, clasificar.", bad
+        text, err = tool_text(c, "ashur_pedir", {"accion": bad, "motivo": "porque sí"})
+        assert err is True and text.startswith("«accion» debe ser una de: "), bad
+
+
+def test_encargar_request_failure_leaves_no_encargo(tmp_path):
+    c = tools_c(tmp_path, GATOS)
+
+    def broken(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    c.db.claude_request_add = broken
+    assert encargar(c)[1] is True
+    assert c.db.encargos_unfinished_count() == 0

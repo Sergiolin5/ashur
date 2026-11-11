@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
 from core.db import DB, hash_token
-from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, EncargoError, best_fragments, resolve_docs, windows
+from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
@@ -2367,20 +2367,26 @@ def create_app(
     encargo_lock = threading.Lock()             # one step at a time: a unit is never sent twice by two callers
     encargo_worker: list[Optional[threading.Thread]] = [None]
     app.state.encargo_retry_wait_s = NOTES_RETRY_WAIT_S      # tests set 0
+    app.state.encargo_idle_wait_s = 30          # worker's nap while no device is ready or the queue is paused
+    encargo_units: dict = {"id": None, "units": []}           # the running encargo's units, kept between its steps
+    encargo_db_errors: dict[int, int] = {}      # consecutive sqlite errors per encargo (3 → failed)
+    ENCARGO_DB_TRIES = 3
+    CHUNK_CHARS = 1200                          # a document chunk's size (the node's doc reader): for estimates only
 
     def encargo_label(e: dict) -> str:
         op = OPERATIONS.get(e["op"])
         return op.label(len(e["docs"])) if op else e["op"]
 
     def encargo_estimate(e: dict) -> str:
-        """«~N min» from the seconds a unit took lately; the units are counted from the windows if not built yet."""
+        """«~N min» from the seconds a unit took lately; before the units exist, the windows are estimated from each
+        document's stored chunk count: reading the index here (every poll of Pedidos) is far too slow."""
         per = db.setting("encargo_s_per_unit")
         if not per:
             return "tiempo desconocido"
         n = e["total"]
         if not n:
             if e["op"] == "resumir":
-                n = sum(min(len(windows(db.doc_texts(d["node_id"], d["path"]))), MAX_WINDOWS) for d in e["docs"])
+                n = sum(min(math.ceil((d.get("chunks") or 0) * CHUNK_CHARS / WINDOW), MAX_WINDOWS) for d in e["docs"])
             else:
                 n = 1 if e["op"] == "responder" else len(e["docs"])
         return f"~{max(1, math.ceil(n * float(per) / 60))} min"
@@ -2401,6 +2407,10 @@ def create_app(
             if e["status"] not in ENCARGO_UNFINISHED:
                 break
             if db.encargo_set(eid, expect=e["status"], status="cancelled"):
+                if e["status"] == "pending_approval":          # its launch request is moot: free that slot too
+                    rid = db.claude_request_pending_same("encargo", {"encargo": eid})
+                    if rid:
+                        db.claude_request_decide(rid, "not_done", clock(), "Encargo cancelado.")
                 db.log(clock(), None, "encargo_cancelled", {"id": eid})
                 return f"Encargo #{eid} cancelado."
         raise HTTPException(409, "El encargo ya terminó.")
@@ -2427,6 +2437,7 @@ def create_app(
 
     def encargo_fail(e: dict, op, state: dict, error: str, node: Optional[str] = None, done: int = 0) -> None:
         """failed, with what was done so far rendered (if even that works), and a count-only log line."""
+        encargo_units.update(id=None, units=[])
         result = None
         if op is not None:
             try:
@@ -2441,7 +2452,8 @@ def create_app(
     def encargo_step() -> bool:
         """Run the next unit of the encargo in course. False when there is nothing to run now (none, queue paused, or
         no device ready). Progress (done, state) is saved only together with the answer, so a restart redoes the unit
-        in flight. An error in the operation's own code fails the encargo instead of being retried forever."""
+        in flight. An error in the operation's own code fails the encargo instead of being retried forever; a sqlite error
+        is raised (the worker restarts) until ENCARGO_DB_TRIES in a row on the same encargo, which then fails."""
         with encargo_lock:
             e = db.encargo_next(light=True)
             if not e:
@@ -2456,16 +2468,25 @@ def create_app(
                 return True
             state = e["state"]
             try:
-                return encargo_run(e, op, state)
+                ran = encargo_run(e, op, state)
+                encargo_db_errors.pop(eid, None)
+                return ran
             except sqlite3.Error:
-                raise
+                encargo_db_errors[eid] = encargo_db_errors.get(eid, 0) + 1
+                if encargo_db_errors[eid] < ENCARGO_DB_TRIES:
+                    raise
+                encargo_db_errors.pop(eid, None)
+                encargo_fail(e, op, state, "Error de la base al procesar el encargo.", done=e["done"])
+                return True
             except Exception:                     # never the message: it may carry document text
                 encargo_fail(e, op, state, "Error interno al procesar el encargo.", done=e["done"])
                 return True
 
     def encargo_run(e: dict, op, state: dict) -> bool:
         eid, docs, devices, done = e["id"], e["docs"], e["devices"], e["done"]
-        units = (db.encargo_get(eid) or {}).get("units") or []
+        if encargo_units["id"] != eid or len(encargo_units["units"]) != e["total"]:    # another one, a restart, or grown
+            encargo_units.update(id=eid, units=(db.encargo_get(eid) or {}).get("units") or [])
+        units = encargo_units["units"]
         if not units and done == 0:                       # first start: the units, from one read of the index
             fragments, texts = None, {}
             if op.name == "responder":
@@ -2475,6 +2496,7 @@ def create_app(
             units = op.first_units(docs, texts, e["params"], fragments)
             if not db.encargo_set(eid, expect=e["status"], status="running", units=units, total=len(units)):
                 return True                                # cancelled meanwhile
+            encargo_units.update(id=eid, units=units)
         elif e["status"] != "running" and not db.encargo_set(eid, expect=e["status"], status="running"):
             return True
         e["status"] = "running"
@@ -2494,14 +2516,17 @@ def create_app(
             done += 1
             devices[node] = devices.get(node, 0) + 1
             state["_seconds"] = state.get("_seconds", 0) + took
+            state["_last_device"] = node                   # «en <equipo>» in ashur_ver_encargo
             grown = {"units": units + more} if more else {}   # units are heavy: written back only when they grow
             units = units + more
             if not db.encargo_set(eid, expect="running", total=len(units), done=done, state=state, devices=devices,
                                   **grown):
                 return True                                # cancelled while the device worked: the answer is dropped
+            encargo_units.update(id=eid, units=units)
             prev = db.setting("encargo_s_per_unit")
             db.set_setting("encargo_s_per_unit", f"{took if prev is None else 0.7 * float(prev) + 0.3 * took:.2f}")
         if done >= len(units):
+            encargo_units.update(id=None, units=[])
             if db.encargo_set(eid, expect="running", status="done", result=op.render(state, docs, devices)):
                 if not e["to_claude"]:
                     db.encargo_set(eid, expect="done", status="kept")
@@ -2523,7 +2548,7 @@ def create_app(
                     if encargo_step():
                         continue
                     if db.encargo_next(light=True):          # paused, or no device ready: look again soon
-                        time.sleep(5)
+                        time.sleep(app.state.encargo_idle_wait_s)
                         continue
                     return
             except Exception as ex:             # never the message: it may carry document text
@@ -2739,7 +2764,7 @@ def create_app(
         def pedir(args: dict) -> str:
             accion, motivo, tarea, encargo = args.get("accion"), args.get("motivo"), args.get("tarea"), args.get("encargo")
             allowed = [a for a in ACTIONS if a != "encargo"]         # «encargo» is created only by ashur_encargar
-            if accion not in allowed:
+            if not isinstance(accion, str) or accion not in allowed:
                 raise ToolError("«accion» debe ser una de: " + ", ".join(allowed) + ".")
             if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
                 raise ToolError("«motivo» debe ser un texto de 3 a 300 caracteres.")
@@ -2773,7 +2798,7 @@ def create_app(
             op, motivo, back = args.get("operacion"), args.get("motivo"), args.get("devolver_a_claude")
             busqueda, equipo, carpeta = args.get("busqueda"), args.get("equipo"), args.get("carpeta")
             pregunta, cats = args.get("pregunta"), args.get("categorias")
-            if op not in OPERATIONS:
+            if not isinstance(op, str) or op not in OPERATIONS:
                 raise ToolError("«operacion» debe ser una de: " + ", ".join(OPERATIONS) + ".")
             if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
                 raise ToolError("«motivo» debe ser un texto de 3 a 300 caracteres.")
@@ -2801,17 +2826,23 @@ def create_app(
                 if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
                     raise ToolError("Ya hay 5 pedidos esperando a Sergio; espera a que decida.")
                 try:
-                    docs = resolve_docs(db, busqueda, equipo, carpeta)
+                    docs, stale = resolve_docs(db, busqueda, equipo, carpeta)
                 except EncargoError as e:
                     raise ToolError(str(e))
                 eid = db.encargo_add(clock(), op, params, back, motivo.strip(), docs)
-                rid = db.claude_request_add(clock(), "encargo", {"encargo": eid}, motivo.strip())
+                try:
+                    rid = db.claude_request_add(clock(), "encargo", {"encargo": eid}, motivo.strip())
+                except Exception:               # no request to approve it: it must not hold one of the three slots
+                    db.encargo_set(eid, expect="pending_approval", status="cancelled")
+                    raise
             label = OPERATIONS[op].label(len(docs))
             est = encargo_estimate(db.encargo_get(eid, light=True))
             db.log(clock(), None, "claude_request", {"id": rid, "action": "encargo", "label": action_label("encargo", {"encargo": eid})})
             launch_push(rid, f"Claude pide: {label} ({est})", motivo.strip())
             names = ", ".join(d["name"] for d in docs)
-            return f"Encargo #{eid} pedido: {len(docs)} documento{'s' if len(docs) != 1 else ''} ({names}), {est}. Sergio lo aprueba en el panel."
+            note = " " + stale_note(stale) if stale else ""
+            return (f"Encargo #{eid} pedido: {len(docs)} documento{'s' if len(docs) != 1 else ''} ({names}), {est}. "
+                    f"Sergio lo aprueba en el panel.{note}")
 
         def ver_encargo(args: dict) -> str:
             eid = args.get("id")
@@ -2827,7 +2858,8 @@ def create_app(
                 cut = len(res) > CLAUDE_CUT
                 return head + "liberado por Sergio.\n" + res[:CLAUDE_CUT] + ("\n(el resto está en el panel)" if cut else "")
             if st == "running":
-                where = f", en {list(e['devices'])[-1]}" if e["devices"] else ""
+                last = e["state"].get("_last_device")
+                where = f", en {last}" if last else ""
                 part = f", trozo {min(e['done'] + 1, e['total'])} de {e['total']}" if e["total"] else ""
                 return head + "en curso" + part + where + "."
             if st == "done":

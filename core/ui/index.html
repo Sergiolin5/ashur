@@ -2174,6 +2174,7 @@
       else { const j = await r.json(); note.textContent = "Pedido #" + id + ": " + (CR_STATUS[j.status] || j.status).toLowerCase() + (j.result ? ". " + j.result : ""); }
     } catch (e) { note.textContent = "No pude decidir el pedido."; }
     loadClaudeRequests();
+    if ($("enc-open").childElementCount) loadEncargos();      // the Encargos page was loaded: its list changed too
   }
   document.querySelector('.menu-item[data-page="claude-requests"]').addEventListener("click", loadClaudeRequests);
 
@@ -2213,7 +2214,7 @@
       };
       put($("enc-open"), open.length ? open.map(draw) : [row({ title: "Nada en curso." })]);
       put($("enc-done"), done.length ? done.map(draw) : [row({ title: "Claude aún no ha encargado nada." })]);
-    } catch (e) {}
+    } catch (e) { const note = $("enc-status"); note.hidden = false; note.textContent = "No pude cargar los encargos."; }
   }
   const ENC_DONE_TEXT = { cancel: "cancelado", release: "enviado a Claude", keep: "se queda solo en el panel" };
   async function moveEncargo(id, what, buttons) {

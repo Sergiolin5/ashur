@@ -40,28 +40,42 @@ def _doc(row: dict) -> dict:
     return {"node_id": row["node_id"], "path": row["path"], "name": _name(row["path"]), "chunks": row["chunks"]}
 
 
-def resolve_docs(db, busqueda: Optional[str], equipo: Optional[str], carpeta: Optional[str]) -> list[dict]:
-    """The documents of an encargo: by a search over their text, or every indexed document under a device's folder."""
+def _needs_reread(row: dict) -> bool:
+    """Indexed before 0.33.3 (no first_rowid): its text can only be read by scanning all of doc_chunks, which froze
+    every device for minutes on the server; «Releer documentos» indexes it again with first_rowid."""
+    return bool(row["chunks"]) and row["first_rowid"] is None
+
+
+def stale_note(n: int) -> str:
+    return (f"{n} documento necesita releerse" if n == 1 else f"{n} documentos necesitan releerse") + \
+        " (Ajustes → Documentos → Releer documentos)."
+
+
+def resolve_docs(db, busqueda: Optional[str], equipo: Optional[str], carpeta: Optional[str]) -> tuple[list[dict], int]:
+    """The documents of an encargo: by a search over their text, or every indexed document under a device's folder.
+    Returns (documents, how many were left out because they need «Releer documentos»; see stale_note)."""
     by_search = bool(busqueda and busqueda.strip())
     by_folder = bool(equipo and carpeta and carpeta.strip())
     if (by_search and (equipo or carpeta)) or not (by_search or by_folder):
         raise EncargoError("Indica una búsqueda, o un equipo y su carpeta: una de las dos, no ambas.")
     if by_search:
-        docs = []
+        rows = []
         for hit in db.docs_search(Brain.file_words(busqueda.lower()), limit=MAX_DOCS, with_text=False, any_word=True):
             row = db.doc_info(hit["node_id"], hit["path"])
             if row:                                    # gone from docs between the two reads: skip it
-                docs.append(_doc(row))
+                rows.append(row)
     else:
         folder = _norm(carpeta.strip()).rstrip("/") + "/"      # «C:\Docs\», «C:/Docs», «c:/docs/» are one folder
-        docs = [_doc(r) for r in db.docs_under(equipo, folder, MAX_DOCS)]
-        if len(docs) > MAX_DOCS:
+        rows = db.docs_under(equipo, folder, MAX_DOCS)
+        if len(rows) > MAX_DOCS:
             n = len(db.docs_under(equipo, folder, 10 ** 9))
             raise EncargoError(f"La carpeta tiene {n} documentos leídos; el tope es {MAX_DOCS}. "
                                "Pide una carpeta más concreta.")
+    docs = [_doc(r) for r in rows if not _needs_reread(r)]
+    stale = len(rows) - len(docs)
     if not docs:
-        raise EncargoError("No encontré documentos leídos que coincidan.")
-    return docs
+        raise EncargoError(stale_note(stale) if stale else "No encontré documentos leídos que coincidan.")
+    return docs, stale
 
 
 def best_fragments(db, docs: list[dict], pregunta: str) -> list[dict]:

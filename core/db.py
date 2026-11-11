@@ -1052,8 +1052,10 @@ class DB:
     def docs_search_in(self, words: list[str], docs: list[dict], limit: int) -> list[dict]:
         """Chunks of these documents only that contain any of the words, best first, several per document:
         [{node_id, path, seq, text}]. Restricted inside the MATCH by each document's rowid range (docs.first_rowid),
-        so other documents never take the LIMIT; a document indexed before first_rowid existed is filtered by
-        node_id/path instead. Own read-only connection, like docs_search."""
+        so other documents never take the LIMIT. A document indexed before first_rowid existed (NULL) is not searched:
+        filtering by node_id/path reads all of doc_chunks (248 s with 600 k rows, every device silent meanwhile).
+        Only an FTS query-syntax error reads as «nothing found»; any other sqlite error is raised.
+        Own read-only connection, like docs_search."""
         q = self._fts_query(words, True)
         if not q or not docs:
             return []
@@ -1064,34 +1066,34 @@ class DB:
             for d in docs:
                 r = c.execute("SELECT first_rowid, chunks FROM docs WHERE node_id = ? AND path = ?",
                               (d["node_id"], d["path"])).fetchone()
-                if r is None or not r[1]:
+                if r is None or not r[1] or r[0] is None:
                     continue
-                if r[0] is None:
-                    where.append("(node_id = ? AND path = ?)")
-                    args += [d["node_id"], d["path"]]
-                else:
-                    where.append("rowid BETWEEN ? AND ?")
-                    args += [r[0], r[0] + r[1] - 1]
+                where.append("rowid BETWEEN ? AND ?")
+                args += [r[0], r[0] + r[1] - 1]
             if not where:
                 return []
             rows = c.execute(
                 f"SELECT node_id, path, seq, content AS text FROM doc_chunks WHERE doc_chunks MATCH ? "
                 f"AND ({' OR '.join(where)}) ORDER BY rank LIMIT ?", [q, *args, limit]).fetchall()
             return [dict(r) for r in rows]
-        except sqlite3.OperationalError:
-            return []
+        except sqlite3.OperationalError as ex:
+            msg = str(ex).lower()
+            if "fts5" in msg or "match" in msg:          # the words made a query FTS5 can't parse: nothing found
+                return []
+            raise
         finally:
             c.close()
 
     def doc_info(self, node_id: str, path: str) -> Optional[dict]:
-        """One indexed document's row (node_id, path, chunks) by primary key, on its own read-only connection."""
+        """One indexed document's row (node_id, path, chunks, first_rowid) by primary key, on its own read-only
+        connection."""
         c = sqlite3.connect(self.path, timeout=30)
         try:
-            r = c.execute("SELECT node_id, path, chunks FROM docs WHERE node_id = ? AND path = ?",
+            r = c.execute("SELECT node_id, path, chunks, first_rowid FROM docs WHERE node_id = ? AND path = ?",
                           (node_id, path)).fetchone()
         finally:
             c.close()
-        return None if r is None else {"node_id": r[0], "path": r[1], "chunks": r[2]}
+        return None if r is None else {"node_id": r[0], "path": r[1], "chunks": r[2], "first_rowid": r[3]}
 
     def docs_under(self, node_id: str, prefix: str, limit: int) -> list[dict]:
         """Indexed documents of a node whose path starts with prefix, case-insensitive, with `\\` read as `/` on both
@@ -1101,10 +1103,10 @@ class DB:
         c = sqlite3.connect(self.path, timeout=30)
         out = []
         try:
-            for nid, path, chunks in c.execute(
-                    "SELECT node_id, path, chunks FROM docs WHERE node_id = ? ORDER BY path", (node_id,)):
+            for nid, path, chunks, first in c.execute(
+                    "SELECT node_id, path, chunks, first_rowid FROM docs WHERE node_id = ? ORDER BY path", (node_id,)):
                 if path.replace("\\", "/").casefold().startswith(want):
-                    out.append({"node_id": nid, "path": path, "chunks": chunks})
+                    out.append({"node_id": nid, "path": path, "chunks": chunks, "first_rowid": first})
                     if len(out) > limit:
                         break
         finally:
@@ -1451,20 +1453,17 @@ class DB:
     def doc_texts(self, node_id: str, path: str) -> list[str]:
         """A document's chunks in order, on its own read-only connection (never the shared lock). doc_chunks has no
         index on node_id/path, so it reads by rowid range (docs.first_rowid; chunks are inserted in seq order by
-        docs_apply). Only a document indexed before first_rowid existed falls back to the filtered full scan."""
+        docs_apply). A document indexed before first_rowid existed (NULL) returns []: reading it by node_id/path scans
+        all of doc_chunks (248 s with 600 k rows, every device silent meanwhile); «Releer documentos» fixes it."""
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         try:
             c.execute("BEGIN")                         # one snapshot (WAL): a docs_apply between the two reads can't mix them
             d = c.execute("SELECT first_rowid, chunks FROM docs WHERE node_id = ? AND path = ?",
                           (node_id, path)).fetchone()
-            if d is None or not d[1]:
+            if d is None or not d[1] or d[0] is None:
                 return []
-            if d[0] is None:
-                rows = c.execute("SELECT content FROM doc_chunks WHERE node_id = ? AND path = ? "
-                                 "ORDER BY CAST(seq AS INTEGER)", (node_id, path)).fetchall()
-            else:
-                rows = c.execute("SELECT content FROM doc_chunks WHERE rowid BETWEEN ? AND ? ORDER BY rowid",
-                                 (d[0], d[0] + d[1] - 1)).fetchall()
+            rows = c.execute("SELECT content FROM doc_chunks WHERE rowid BETWEEN ? AND ? ORDER BY rowid",
+                             (d[0], d[0] + d[1] - 1)).fetchall()
         finally:
             if c.in_transaction:
                 c.rollback()

@@ -301,3 +301,21 @@ def test_redo_does_the_documents_again_and_resumes_without_repeating(tmp_path, f
     assert (L["status"], L["done"], L["total"]) == ("done", 2, 2) and "(rehacer)" in t.get("/api/lotes", headers=A).json()[0]["label"]
     assert len(node.payloads) == 3 + 2                              # three the first time, each of the two redone once
     assert {r[0]: r[1] for r in c.db.conn.execute("SELECT lote, COUNT(*) FROM doc_signals GROUP BY lote")} == {1: 1, 2: 2}
+
+
+def test_sample_shows_what_the_model_said_for_the_doubtful_ones(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    ask(c)
+    node = FakeLLM(t, lambda p, n: "No estoy seguro de qué es esto." if "manual.txt" in json.dumps(p) else answer(p, n))
+    try:
+        approve(c, t, 1)
+        run(c)
+    finally:
+        node.close()
+    assert t.get("/api/lotes/1/muestra").status_code == 401
+    got = t.get("/api/lotes/1/muestra", headers=A).json()
+    assert got["total"] == 1 and got["muestra"][0]["ruta"].endswith("manual.txt")
+    assert got["muestra"][0]["crudo"] == "No estoy seguro de qué es esto."
+    assert "No estoy seguro" not in tool_text(c, "ashur_ver_lote", {"id": 1})[0]      # never through the connector
+    assert lotes.rule("C:/Users/s/OneDrive/Documentos/My Games/Fallout3/x.ini")["tipo"] == "juego"
+    assert lotes.rule("C:/Users/s/OneDrive/Documentos/Electronic Arts/The Sims 4/log.txt")["tipo"] == "juego"

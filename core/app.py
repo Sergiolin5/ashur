@@ -2766,6 +2766,20 @@ def create_app(
         db.log(clock(), None, "lote_" + to, {"id": lid})
         return {"ok": True}
 
+    @app.get("/api/lotes/{lid}/muestra", dependencies=[Depends(require_admin)])
+    def lote_sample(lid: int, tipo: str = "otro", autor: str = "duda", n: int = 10):
+        """What the model actually answered for a few documents of one kind and author (the «crudo» lines), for Sergio
+        to judge whether a «duda» is the document or the reading of the answer. Panel only: never through the connector."""
+        if not db.lote_get(lid):
+            raise HTTPException(404, "No existe ese lote.")
+        rows = []
+        for node, path, value in db.lote_signals(lid):
+            v = json.loads(value)
+            if v.get("tipo") == tipo and v.get("autor") == autor:
+                rows.append({"equipo": node, "ruta": path, "crudo": v.get("crudo")})
+        step = max(1, len(rows) // max(1, min(n, 30)))           # spread over the list, not the first ten of one folder
+        return {"total": len(rows), "muestra": rows[::step][:min(n, 30)]}
+
     @app.post("/api/lotes/{lid}/release", dependencies=[Depends(require_admin)])
     def lote_release(lid: int):
         return lote_move(lid, ("done", "kept"), "released", "Solo se envía a Claude un lote terminado.")

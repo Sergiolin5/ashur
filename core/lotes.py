@@ -54,7 +54,8 @@ PASSES = {"tipo": "clasificar por tipo y autor"}
 # the same. Fragments are matched against the path with «/» and casefolded, so every one is a folder boundary.
 # Narrow on purpose: a folder that could hold his own writing (a «Revit» project folder, Downloads) is left to the model.
 RULES = (
-    ("juego", ("/steamapps/", "/steamlibrary/", "/zomboid/", "/saved games/", "/programas/steam/")),
+    ("juego", ("/steamapps/", "/steamlibrary/", "/zomboid/", "/saved games/", "/programas/steam/", "/my games/",
+               "/electronic arts/")),
     ("fototeca", (".photoslibrary/",)),
     ("software", ("/appdata/", "/library/application support/", "/program files/", "/program files (x86)/", "/programdata/",
                   "/addins/", "/lookup tables/", "/autodesk/", "/revit_20", "/.vscode/", "/.claude/", "/.codex/",

@@ -1048,6 +1048,17 @@
     const byId = Object.fromEntries(nodes.map((n) => [n.device_id, n]));
 
     // working now
+    const loteCard = [];
+    if (data.lote) {                                    // the lote in course: how far, how long so far, how long is left
+      const L = data.lote, w = el("div", "work"), [a, b] = loteLines(L), c = el("div", "count", nf.format(L.done));
+      c.append(" ", el("small", null, a.slice(a.indexOf(" de "))));
+      const more = el("div", "who", b); more.style.whiteSpace = "normal";
+      w.append(el("div", "who", "Lote #" + L.id + " · " + L.label), c, more);
+      const bar = el("div", "mapbar"), i = el("i");
+      i.style.width = (L.total ? Math.round(100 * Math.min(L.done + L.failed + L.skipped, L.total) / L.total) : 0) + "%";
+      bar.append(i); w.append(bar);
+      loteCard.push(w);
+    }
     const working = data.running.map((t) => {
       const w = el("div", "work");
       w.append(el("div", "who", (MODULE[t.module] || t.module) + " en " + t.node_id + ", " + duration(t.elapsed_s)));
@@ -1060,7 +1071,7 @@
           c = el("div", "count", nf.format(t.found || 0)); c.append(" ", el("small", null, "documentos encontrados, buscando más"));
         } else c = el("div", "count", "Empezando");
       } else {
-        c = el("div", "count", t.entries !== null && t.entries !== undefined ? nf.format(t.entries) : "Empezando");
+        c = el("div", "count", t.entries !== null && t.entries !== undefined ? nf.format(t.entries) : t.module === "llm" ? "Respondiendo" : "Empezando");
         if (t.entries !== null && t.entries !== undefined) {
           c.append(" ", el("small", null, t.entries === 1 ? "elemento" : "elementos"));
         }
@@ -1070,7 +1081,7 @@
       const bar = el("div", "bar"); bar.append(el("i")); w.append(bar);
       return w;
     });
-    fill("working", working, "Todo tranquilo. Nada en curso.");
+    fill("working", loteCard.concat(working), "Todo tranquilo. Nada en curso.");
 
     // waiting tasks, in the order devices will take them: Sergio can move or cancel each one, and pause the queue (0.41)
     const waiting = data.queued.length;
@@ -1110,7 +1121,7 @@
     qp.onclick = async () => { qp.disabled = true; try { await api("api/queue/pause", { method: "POST", body: JSON.stringify({ paused: !data.queue_paused }) }); } catch (e) {} qp.disabled = false; refresh(); };
 
     // figures strip (G, 0.46.1): what is running, waiting, connected and inventoried, from the same overview
-    $("kpi-run").textContent = nf.format(data.running.length);
+    $("kpi-run").textContent = nf.format(Math.max(data.running.length, data.lote && data.lote.status === "running" ? 1 : 0));   // a lote between two documents is still work
     $("kpi-queue").textContent = nf.format(data.queued.length);
     $("kpi-online").textContent = data.status.online + "/" + nodes.length;
     if (data.inventory === null) { $("kpi-inv").textContent = "…"; $("kpi-inv-b").textContent = "calculando"; }
@@ -2073,6 +2084,22 @@
       put($("enc-done"), done.length ? done.map(draw) : [row({ title: "Claude aún no ha encargado nada." })]);
     } catch (e) { const note = $("enc-status"); note.hidden = false; note.textContent = "No pude cargar los encargos."; }
   }
+  // «277 de 771 documentos (36 %)» and «lleva 12 min · faltan ~16 min · 2,1 s por documento · en ryzen9»
+  function loteLines(L) {
+    const seen = L.done + L.failed + L.skipped, pct = L.total ? Math.round(100 * Math.min(seen, L.total) / L.total) : 0;
+    const a = nf.format(L.done) + " de " + nf.format(L.total) + " documentos (" + pct + " %)";
+    const b = [];
+    if (L.status === "paused") b.push("en pausa con la cola");
+    if (L.status === "queued") b.push("por empezar");
+    if (L.elapsed_s != null) b.push("lleva " + duration(L.elapsed_s));
+    if (L.left != null && L.eta_s != null && L.left > 0) b.push("faltan ~" + duration(L.eta_s) + " con el equipo libre");
+    if (L.s_per_doc != null) b.push(L.s_per_doc.toFixed(1).replace(".", ",") + " s por documento");
+    if (L.device) b.push("en " + L.device);
+    if (L.failed) b.push(L.failed + " fallidos");
+    if (L.skipped) b.push(L.skipped + " sin texto");
+    if (L.took_s != null) b.push("tardó " + duration(L.took_s));
+    return [a, b.join(" · ")];
+  }
   async function loadLotes() {
     try {
       const list = await (await api("api/lotes")).json();
@@ -2080,11 +2107,12 @@
       put($("lotes-list"), list.map((L) => {
         const r = el("div", "row nrow"), m = el("div", "main"), open = ENC_OPEN.includes(L.status);
         m.append(el("div", "title", cap(L.label) + " · #" + L.id),
-                 el("div", "detail wrap", cap(ENC_STATUS[L.status] || L.status) + (L.error ? ": " + L.error : "") + (L.estimate ? " · faltan " + L.estimate : "") + " · " + whenText(L.updated || L.ts)));
+                 el("div", "detail wrap", cap(ENC_STATUS[L.status] || L.status) + (L.error ? ": " + L.error : "") + " · " + whenText(L.updated || L.ts)));
         if (L.total) {
-          const bar = el("div", "mapbar"), i = el("i"), seen = L.done + L.failed + L.skipped;
+          const bar = el("div", "mapbar"), i = el("i"), seen = L.done + L.failed + L.skipped, [a, b] = loteLines(L);
           i.style.width = Math.round(100 * Math.min(seen, L.total) / L.total) + "%"; bar.append(i);
-          m.append(bar, el("div", "detail", L.done + " de " + L.total + " documentos · " + L.failed + " fallidos · " + L.skipped + " sin texto"));
+          m.append(bar, el("div", "detail", a));
+          if (b) m.append(el("div", "detail wrap", b));
         }
         if (L.summary) m.append(el("div", "enc-result", L.summary));
         if (L.salud && L.salud.length) m.append(el("div", "detail wrap", "No va a Claude (salud), " + L.salud.length + (L.salud.length === 1 ? " línea" : " líneas") + "."));
@@ -2430,6 +2458,7 @@
     clearTimeout(timer);
     const visible = document.visibilityState === "visible";
     if (visible && (tab === "status" || tab === "settings" || !unlocked)) refresh();
+    if (visible && unlocked && tab === "settings" && !document.querySelector('.page[data-page="encargos"]').hidden) loadLotes();   // a lote moves by itself
     const base = visible ? 10000 : 60000;
     timer = setTimeout(loop, Math.min(60000, base * Math.pow(2, Math.min(failStreak, 3))));
   }

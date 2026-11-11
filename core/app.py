@@ -999,7 +999,9 @@ def create_app(
             p = progress.get(t["node_id"], {})
             running.append({**t, "elapsed_s": round(now - t["started"], 1) if t["started"] else None,
                             "entries": p.get("entries"), "folder": p.get("folder")})
+        active = db.lote_next()                           # the lote in course, with how far it is and how long is left
         return {"version": app.version, "now": now, "status": status(), "running": running,
+                "lote": lote_row(active) if active else None,
                 "queued": db.queued_tasks(), "queue_paused": queue_paused(), "inventory": inventory_summary_cached(),
                 "activity": db.log_rows(30), "budget": brain.budget(), "node_code_version": node_code()[0],
                 "node_code_label": db.code_label(node_code()[0])}
@@ -2601,10 +2603,10 @@ def create_app(
     app.state.encargo_step = encargo_step
 
     # --- lotes: every document of a scope, one at a time, after the encargos (core/lotes.py) ---
-    lote_queue = {"id": None, "docs": [], "fails": 0}       # the documents still to do, in memory: a restart reads them again
+    lote_queue = {"id": None, "docs": [], "fails": 0, "device": None}   # the documents still to do, in memory: a restart reads them again
 
     def lote_forget() -> None:
-        lote_queue.update(id=None, docs=[], fails=0)
+        lote_queue.update(id=None, docs=[], fails=0, device=None)
 
     app.state.lote_forget = lote_forget
 
@@ -2628,8 +2630,15 @@ def create_app(
 
     def lote_row(L: dict) -> dict:
         out = dict(L, label=f"{lotes.PASSES.get(L['pase'], L['pase'])} · {lotes.scope_label(L['scope'])}")
+        started = float(db.setting(f"lote_started:{L['id']}") or 0)
         if L["status"] in ("queued", "running", "paused"):
-            out["estimate"] = lote_estimate(max(L["total"] - L["done"] - L["failed"] - L["skipped"], 0))
+            left, per = max(L["total"] - L["done"] - L["failed"] - L["skipped"], 0), db.setting("lote_s_per_doc")
+            out["estimate"] = lote_estimate(left)
+            out.update(left=left, elapsed_s=round(clock() - started) if started else None,
+                       eta_s=round(left * float(per)) if per else None, s_per_doc=float(per) if per else None,
+                       device=lote_queue["device"] if lote_queue["id"] == L["id"] else None)
+        elif started and L["updated"]:
+            out["took_s"] = max(0, round(L["updated"] - started))
         if L["status"] in ("done", "kept", "released", "failed"):
             out["summary"] = lote_summary(L)
             if L["status"] in ("done", "released"):
@@ -2651,6 +2660,8 @@ def create_app(
                 return False
             if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
                 pending = [d for d in db.lote_pending(L["pase"]) if lotes.in_scope(d[0], d[1], L["scope"])]
+                if not db.setting(f"lote_started:{lid}"):
+                    db.set_setting(f"lote_started:{lid}", str(clock()))
                 pending.sort(key=lambda d: lotes.rule(d[1]) is None)     # what the path settles goes first: «faltan» is then the model's time
                 lote_queue.update(id=lid, docs=pending, fails=0)
                 L.update(total=L["done"] + len(pending), failed=0, skipped=0)
@@ -2694,7 +2705,7 @@ def create_app(
                     if not db.lote_set(lid, expect="running", failed=L["failed"] + 1):
                         lote_forget()
                     return True
-                lote_queue["fails"] = 0
+                lote_queue.update(fails=0, device=device)
                 if not db.lote_set(lid, expect="running", done=L["done"] + 1, seconds=L["seconds"] + took):
                     lote_forget()
                     return True                               # cancelled while the device worked: the answer is dropped
@@ -3136,8 +3147,11 @@ def create_app(
                 return head + "liberado por Sergio.\n" + res[:CLAUDE_CUT] + note
             if st in ("running", "paused"):
                 left = max(L["total"] - L["done"] - L["failed"] - L["skipped"], 0)
+                started = float(db.setting(f"lote_started:{lid}") or 0)
+                gone = clock() - started
+                took = "" if not started else f"; lleva {gone / 60:.0f} min" if gone >= 60 else f"; lleva {gone:.0f} s"
                 return (head + ("en curso" if st == "running" else "en pausa")
-                        + f", {L['done']} de {L['total']} documentos, {L['failed']} fallidos; faltan {lote_estimate(left)}.")
+                        + f", {L['done']} de {L['total']} documentos, {L['failed']} fallidos{took}; faltan {lote_estimate(left)}.")
             if st == "failed":
                 return head + "falló" + (f". {L['error']}" if L["error"] else ".")
             return head + {"pending_approval": "esperando que Sergio lo apruebe.", "queued": "aprobado, en cola.",

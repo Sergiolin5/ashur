@@ -4,7 +4,8 @@ import json
 
 from core import lotes
 from tests.test_brain import A
-from tests.test_encargos import FakeLLM, fast_local, tool_text, tools_c, wait_for  # noqa: F401 (fast_local is a fixture)
+from tests.test_encargos import FakeLLM, fast_local, tool_text, wait_for
+from tests.test_mcp import tools_app  # noqa: F401 (fast_local is a fixture)
 
 DOCS = {"/Users/s/Documents/Diario/a.txt": ["Hoy escribí sobre el proyecto."],
         "/Users/s/Documents/Diario/b.txt": ["Otra entrada mía."],
@@ -17,7 +18,8 @@ def answer(payload, n):
 
 
 def setup(tmp_path, texts=DOCS):
-    c = tools_c(tmp_path, texts)
+    c, c.clock = tools_app(tmp_path)
+    c.db.docs_apply("mac-m1", [{"path": p, "modified": 1.0, "chunks": ch} for p, ch in texts.items()], [])
     c.app.state.encargo_retry_wait_s = 0
     c.step = c.app.state.lote_step
     t = c.tailnet
@@ -220,3 +222,22 @@ def test_a_lote_does_not_spend_the_model_on_what_the_path_settles(tmp_path, fast
     assert by == {"regla": 4, "mac-m1": 3}
     row = t.get("/api/lotes", headers=A).json()[0]
     assert "Por la ruta, sin modelo: 4. Leídos por el modelo: 3." in row["summary"] and "- software (3)" in row["summary"]
+
+
+def test_panel_can_tell_how_far_a_lote_is_and_how_long_is_left(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    ask(c)
+    node = FakeLLM(t, answer)
+    try:
+        approve(c, t, 1)
+        assert c.step()                                              # one document done, two to go
+        c.clock.now += 40                                           # under the offline threshold: the node stays ready
+        L = t.get("/api/overview", headers=A).json()["lote"]
+        assert (L["id"], L["done"], L["total"], L["left"], L["device"]) == (1, 1, 3, 2, "mac-m1")
+        assert L["elapsed_s"] == 40 and L["s_per_doc"] > 0 and L["eta_s"] == round(2 * L["s_per_doc"])
+        assert "lleva 40 s" in tool_text(c, "ashur_ver_lote", {"id": 1})[0]
+        run(c)
+    finally:
+        node.close()
+    assert t.get("/api/overview", headers=A).json()["lote"] is None
+    assert "took_s" in t.get("/api/lotes", headers=A).json()[0]

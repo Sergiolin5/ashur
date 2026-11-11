@@ -127,6 +127,16 @@ CREATE TABLE IF NOT EXISTS encargos (
     units TEXT NOT NULL DEFAULT '[]', done INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
     state TEXT NOT NULL DEFAULT '{}', result TEXT, devices TEXT NOT NULL DEFAULT '{}', error TEXT, updated REAL
 );
+CREATE TABLE IF NOT EXISTS lotes (         -- one question for every document in a scope (core/lotes.py); counters only
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, pase TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '{}',
+    reason TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending_approval', total INTEGER NOT NULL DEFAULT 0,
+    done INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0, skipped INTEGER NOT NULL DEFAULT 0,
+    seconds REAL NOT NULL DEFAULT 0, error TEXT, updated REAL
+);
+CREATE TABLE IF NOT EXISTS doc_signals (   -- what a lote learned about one document; local only until Sergio releases
+    node_id TEXT NOT NULL, path TEXT NOT NULL, pase TEXT NOT NULL, value TEXT NOT NULL, lote INTEGER NOT NULL,
+    device TEXT, ts REAL NOT NULL, PRIMARY KEY (node_id, path, pase)
+);
 CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          REAL NOT NULL,
@@ -1094,6 +1104,89 @@ class DB:
         finally:
             c.close()
         return None if r is None else {"node_id": r[0], "path": r[1], "chunks": r[2], "first_rowid": r[3]}
+
+    # --- lotes: one question for every document in a scope ------------------
+    _LOTE_COLS = "id, ts, pase, scope, reason, status, total, done, failed, skipped, seconds, error, updated"
+    _LOTE_SETTABLE = frozenset({"status", "total", "done", "failed", "skipped", "seconds", "error"})
+    _LOTE_UNFINISHED = "('pending_approval', 'queued', 'running', 'paused')"
+
+    @staticmethod
+    def _lote_row(r) -> dict:
+        d = dict(r)
+        d["scope"] = json.loads(d["scope"])
+        return d
+
+    def lote_add(self, ts: float, pase: str, scope: dict, reason: str) -> int:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO lotes (ts, pase, scope, reason) VALUES (?, ?, ?, ?)",
+                                    (ts, pase, json.dumps(scope, sort_keys=True), reason))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def lote_get(self, lid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(f"SELECT {self._LOTE_COLS} FROM lotes WHERE id = ?", (lid,)).fetchone()
+        return self._lote_row(r) if r else None
+
+    def lotes(self, limit: int = 20) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(f"SELECT {self._LOTE_COLS} FROM lotes ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [self._lote_row(r) for r in rows]
+
+    def lote_set(self, lid: int, expect: Optional[str] = None, **fields) -> bool:
+        """Like encargo_set: with expect, only if the status is still that one (atomic)."""
+        bad = set(fields) - self._LOTE_SETTABLE
+        if bad:
+            raise ValueError(f"unknown lote field(s): {', '.join(sorted(bad))}")
+        fields["updated"] = time.time()
+        sql = f"UPDATE lotes SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?"
+        args = list(fields.values()) + [lid]
+        if expect is not None:
+            sql += " AND status = ?"
+            args.append(expect)
+        with self.lock:
+            cur = self.conn.execute(sql, args)
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def lote_unfinished_count(self) -> int:
+        with self.lock:
+            return self.conn.execute(f"SELECT COUNT(*) FROM lotes WHERE status IN {self._LOTE_UNFINISHED}").fetchone()[0]
+
+    def lote_next(self) -> Optional[dict]:
+        """The running or paused one first (resume), else the oldest queued."""
+        with self.lock:
+            r = self.conn.execute(f"SELECT {self._LOTE_COLS} FROM lotes WHERE status IN ('running', 'paused', 'queued') "
+                                  "ORDER BY (status = 'queued'), id LIMIT 1").fetchone()
+        return self._lote_row(r) if r else None
+
+    def lote_pending(self, pase: str) -> list[tuple]:
+        """(node_id, path, chunks, first_rowid) of every indexed document with no signal for this pass yet, in order.
+        Own read-only connection: it reads all of docs, which must never hold the shared lock."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            return c.execute(
+                "SELECT d.node_id, d.path, d.chunks, d.first_rowid FROM docs d LEFT JOIN doc_signals s "
+                "ON s.node_id = d.node_id AND s.path = d.path AND s.pase = ? WHERE s.path IS NULL "
+                "ORDER BY d.node_id, d.path", (pase,)).fetchall()
+        finally:
+            c.close()
+
+    def signal_put(self, node_id: str, path: str, pase: str, value: dict, lote: int, device: Optional[str], ts: float) -> None:
+        with self.lock:
+            self.conn.execute("INSERT OR REPLACE INTO doc_signals (node_id, path, pase, value, lote, device, ts) "
+                              "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                              (node_id, path, pase, json.dumps(value, ensure_ascii=False), lote, device, ts))
+            self.conn.commit()
+
+    def signals(self, pase: str) -> list[tuple]:
+        """(node_id, path, value json) of a pass, on its own read-only connection."""
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            return c.execute("SELECT node_id, path, value FROM doc_signals WHERE pase = ? ORDER BY node_id, path",
+                             (pase,)).fetchall()
+        finally:
+            c.close()
 
     def docs_profile(self) -> list[tuple]:
         """(node_id, path, modified) of every indexed document. Own read-only connection, like docs_summary: a full

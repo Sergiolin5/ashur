@@ -52,6 +52,23 @@ def test_saving_keeps_every_earlier_version(tmp_path):
     assert c.get("/api/persona/versions/20000101-000000", headers=A).status_code == 404
 
 
+def test_only_the_chosen_maturity_section_is_spoken(tmp_path):
+    c, fake, _ = make(tmp_path, [resp([text("ok")]), resp([text("ok")])])
+    (tmp_path / "persona.md").write_text(
+        "Eres Ashur.\n\n## Madurez: inicial\nPregunta mucho.\n\n## Madurez: plena\nSe anticipa.\n\n## Límites\nNunca miente.\n",
+        encoding="utf-8")
+    c.post("/api/chat", headers=A, json={"message": "hola"})
+    first = fake.calls[0]["system"]
+    assert "Pregunta mucho" not in first and "Se anticipa" not in first and "Nunca miente" in first
+    got = c.get("/api/persona", headers=A).json()
+    assert got["levels"] == ["inicial", "plena"] and got["level"] == ""
+    assert c.put("/api/persona/level", headers=A, json={"level": "sabio"}).status_code == 422
+    assert c.put("/api/persona/level", headers=A, json={"level": "plena"}).status_code == 200
+    c.post("/api/chat", headers=A, json={"message": "hola"})
+    second = fake.calls[1]["system"]
+    assert "Se anticipa" in second and "Pregunta mucho" not in second and "Nunca miente" in second
+
+
 def test_persona_endpoints_are_admin_only(tmp_path):
     c, _, _ = app_at(tmp_path)
     assert c.get("/api/persona").status_code == 401

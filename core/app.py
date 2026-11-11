@@ -32,10 +32,10 @@ from pydantic import BaseModel, Field
 
 from core.brain import (health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
-from core import signals
+from core import lotes, signals
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
-from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
+from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, OWN_TOOL, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
 from shared.protocol import (
@@ -736,7 +736,7 @@ def create_app(
 
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
                    "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem",
-                   "inventory_reset", "inventory_sweep", "inventory_sweep_failed", "encargo_failed"}
+                   "inventory_reset", "inventory_sweep", "inventory_sweep_failed", "encargo_failed", "lote_failed"}
     CONN_EVENTS = {"offline", "restart_requeued", "inventory_reset", "inventory_sweep"}   # not failures: comings, goings, upkeep
 
     # --- full self-test: runs the checks and a real question to every local model, returns one plain-text report ---
@@ -1346,7 +1346,20 @@ def create_app(
 
     @app.get("/api/persona", dependencies=[Depends(require_admin)])
     def persona_get():
-        return {"text": brain.persona_file(), "versions": brain.persona_versions()}
+        return {"text": brain.persona_file(), "versions": brain.persona_versions(),
+                "levels": brain.persona_levels(), "level": db.setting("persona_maturity", "")}
+
+    class PersonaLevel(BaseModel):
+        level: str = Field(max_length=60)
+
+    @app.put("/api/persona/level", dependencies=[Depends(require_admin)])
+    def persona_level(body: PersonaLevel):
+        """Which «## Madurez: …» section of the file Ashur speaks from. Sergio picks it by hand: nothing measures it yet."""
+        if body.level and body.level not in brain.persona_levels():
+            raise HTTPException(422, "Ese nivel no está en el archivo de persona.")
+        db.set_setting("persona_maturity", body.level)
+        db.log(clock(), None, "persona_level", {"level": body.level or "ninguno"})
+        return {"ok": True}
 
     @app.put("/api/persona", dependencies=[Depends(require_admin)])
     def persona_put(body: PersonaFileIn):
@@ -2017,6 +2030,10 @@ def create_app(
                 items.append(("Las notas fallaron", "No pude terminar las notas de tu conversación grabada; mira Diario → Voz.", "/#diario"))
             elif ev["event"] == "encargo_done" and cfg["cats"]["encargos"]:
                 items.append(("Encargo listo", f"El encargo #{d.get('id')} terminó.", "/#encargos"))
+            elif ev["event"] == "lote_done" and cfg["cats"]["encargos"]:
+                items.append(("Lote listo", f"El lote #{d.get('id')} terminó: {d.get('docs')} documentos.", "/#encargos"))
+            elif ev["event"] == "lote_failed" and cfg["cats"]["encargos"]:
+                items.append(("Un lote falló", f"El lote #{d.get('id')} se detuvo.", "/#encargos"))
             elif ev["event"] == "encargo_failed" and cfg["cats"]["encargos"]:
                 items.append(("Un encargo falló", f"El encargo #{d.get('id')} falló.", "/#encargos"))
             elif ev["event"] == "task_done" and cfg["cats"]["tasks"] and d.get("module") in NOTIFY_WATCHED:
@@ -2567,18 +2584,149 @@ def create_app(
 
     app.state.encargo_step = encargo_step
 
+    # --- lotes: every document of a scope, one at a time, after the encargos (core/lotes.py) ---
+    lote_queue = {"id": None, "docs": [], "fails": 0}       # the documents still to do, in memory: a restart reads them again
+
+    def lote_forget() -> None:
+        lote_queue.update(id=None, docs=[], fails=0)
+
+    app.state.lote_forget = lote_forget
+
+    def lote_estimate(n: int) -> str:
+        per = db.setting("lote_s_per_doc") or db.setting("encargo_s_per_unit")
+        if not per:
+            return "tiempo desconocido"
+        h = n * float(per) / 3600
+        return f"~{h:.0f} h" if h >= 2 else f"~{max(1, round(h * 60))} min"
+
+    lote_summaries: dict = {}                                # id -> (updated, text): a finished lote reads 100 k rows once
+
+    def lote_summary(L: dict) -> str:
+        if lote_summaries.get(L["id"], (None,))[0] == L["updated"]:
+            return lote_summaries[L["id"]][1]
+        rows = [r for r in db.signals(L["pase"]) if lotes.in_scope(r[0], r[1], L["scope"])]
+        head = (f"Lote #{L['id']} ({lotes.PASSES.get(L['pase'], L['pase'])}; {lotes.scope_label(L['scope'])}): "
+                f"{L['done']} hechos, {L['skipped']} sin texto, {L['failed']} fallidos.")
+        lote_summaries[L["id"]] = (L["updated"], head + "\n" + lotes.summary_tipo(rows))
+        return lote_summaries[L["id"]][1]
+
+    def lote_row(L: dict) -> dict:
+        out = dict(L, label=f"{lotes.PASSES.get(L['pase'], L['pase'])} · {lotes.scope_label(L['scope'])}")
+        if L["status"] in ("queued", "running", "paused"):
+            out["estimate"] = lote_estimate(max(L["total"] - L["done"] - L["failed"] - L["skipped"], 0))
+        if L["status"] in ("done", "kept", "released", "failed"):
+            out["summary"] = lote_summary(L)
+            if L["status"] in ("done", "released"):
+                out["salud"] = health_split(out["summary"])[1]
+        return out
+
+    def lote_step() -> bool:
+        """Do the next document of the lote in course. False when there is nothing to do now (none, queue paused, no
+        device ready). A document that fails its three tries is counted and left without a signal, so a later lote
+        takes it again; lotes.MAX_FAILS_IN_A_ROW of them one after another fail the lote: that is the model."""
+        with encargo_lock:
+            L = db.lote_next()
+            if not L:
+                return False
+            lid = L["id"]
+            if queue_paused():
+                if L["status"] != "paused":
+                    db.lote_set(lid, expect=L["status"], status="paused")
+                return False
+            if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
+                pending = [d for d in db.lote_pending(L["pase"]) if lotes.in_scope(d[0], d[1], L["scope"])]
+                lote_queue.update(id=lid, docs=pending, fails=0)
+                L.update(total=L["done"] + len(pending), failed=0, skipped=0)
+                if not db.lote_set(lid, expect=L["status"], status="running", total=L["total"], failed=0, skipped=0):
+                    lote_forget()
+                    return True                               # cancelled meanwhile
+            elif L["status"] != "running" and not db.lote_set(lid, expect=L["status"], status="running"):
+                return True
+            docs = lote_queue["docs"]
+            if docs:
+                node_id, path, chunks, first = docs[0]
+                texts = db.doc_texts(node_id, path) if chunks and first is not None else []
+                if not texts:                                 # no text, gone, or indexed before 0.33.3 (needs a reread)
+                    docs.pop(0)
+                    db.lote_set(lid, expect="running", skipped=L["skipped"] + 1)
+                    return True
+                t0 = time.monotonic()
+                how, answer, device = encargo_unit(lotes.unit_tipo(path, texts))
+                took = time.monotonic() - t0
+                if how == "wait":
+                    if queue_paused():
+                        db.lote_set(lid, expect="running", status="paused")
+                    return False
+                docs.pop(0)
+                if how == "failed":
+                    lote_queue["fails"] += 1
+                    if lote_queue["fails"] >= lotes.MAX_FAILS_IN_A_ROW:
+                        lote_forget()
+                        error = f"{lotes.MAX_FAILS_IN_A_ROW} documentos seguidos fallaron en {device or 'ningún equipo'}."
+                        if db.lote_set(lid, expect="running", status="failed", failed=L["failed"] + 1, error=error):
+                            db.log(clock(), device, "lote_failed", {"id": lid, "done": L["done"]})
+                        return True
+                    if not db.lote_set(lid, expect="running", failed=L["failed"] + 1):
+                        lote_forget()
+                    return True
+                lote_queue["fails"] = 0
+                if not db.lote_set(lid, expect="running", done=L["done"] + 1, seconds=L["seconds"] + took):
+                    lote_forget()
+                    return True                               # cancelled while the device worked: the answer is dropped
+                db.signal_put(node_id, path, L["pase"], lotes.parse_tipo(answer), lid, device, clock())
+                prev = db.setting("lote_s_per_doc")
+                db.set_setting("lote_s_per_doc", f"{took if prev is None else 0.9 * float(prev) + 0.1 * took:.2f}")
+                L["done"] += 1
+            if not docs:
+                lote_forget()
+                if db.lote_set(lid, expect="running", status="done"):
+                    db.log(clock(), None, "lote_done", {"id": lid, "docs": L["done"], "failed": L["failed"],
+                                                        "skipped": L["skipped"], "seconds": round(L["seconds"])})
+            return True
+
+    app.state.lote_step = lote_step
+
+    @app.get("/api/lotes", dependencies=[Depends(require_admin)])
+    def lotes_list():
+        return [lote_row(L) for L in db.lotes()]
+
+    def lote_move(lid: int, frm: tuple, to: str, why: str) -> dict:
+        L = db.lote_get(lid)
+        if not L:
+            raise HTTPException(404, "No existe ese lote.")
+        if L["status"] not in frm or not db.lote_set(lid, expect=L["status"], status=to):
+            raise HTTPException(409, why)
+        if to == "cancelled" and L["status"] == "pending_approval":      # its launch request is moot
+            rid = db.claude_request_pending_same("lote", {"lote": lid})
+            if rid:
+                db.claude_request_decide(rid, "not_done", clock(), "Lote cancelado.")
+        db.log(clock(), None, "lote_" + to, {"id": lid})
+        return {"ok": True}
+
+    @app.post("/api/lotes/{lid}/release", dependencies=[Depends(require_admin)])
+    def lote_release(lid: int):
+        return lote_move(lid, ("done", "kept"), "released", "Solo se envía a Claude un lote terminado.")
+
+    @app.post("/api/lotes/{lid}/keep", dependencies=[Depends(require_admin)])
+    def lote_keep(lid: int):
+        return lote_move(lid, ("done",), "kept", "Solo se deja en el panel un lote terminado que espera tu visto bueno.")
+
+    @app.post("/api/lotes/{lid}/cancel", dependencies=[Depends(require_admin)])
+    def lote_cancel(lid: int):
+        return lote_move(lid, ("pending_approval", "queued", "running", "paused"), "cancelled", "El lote ya terminó.")
+
     def encargos_due() -> None:
         """From the maintenance loop: one worker thread while there is an encargo to run."""
         th = encargo_worker[0]
-        if (th and th.is_alive()) or not db.encargo_next(light=True):
+        if (th and th.is_alive()) or not (db.encargo_next(light=True) or db.lote_next()):
             return
 
         def work():
             try:
                 while True:
-                    if encargo_step():
+                    if encargo_step() or lote_step():        # an encargo (short, Sergio waits for it) goes before the lote
                         continue
-                    if db.encargo_next(light=True):          # paused, or no device ready: look again soon
+                    if db.encargo_next(light=True) or db.lote_next():   # paused, or no device ready: look again soon
                         time.sleep(app.state.encargo_idle_wait_s)
                         continue
                     return
@@ -2627,6 +2775,11 @@ def create_app(
                 if not isinstance(eid, int) or not db.encargo_set(eid, expect="pending_approval", status="queued"):
                     return "not_done", "El encargo ya no espera aprobación."
                 return "approved", f"Encargo #{eid} en cola."
+            if action == "lote":
+                lid = req["args"].get("lote")
+                if not isinstance(lid, int) or not db.lote_set(lid, expect="pending_approval", status="queued"):
+                    return "not_done", "El lote ya no espera aprobación."
+                return "approved", f"Lote #{lid} en cola."
             if action == "cancelar_encargo":
                 return "approved", cancel_encargo(req["args"].get("encargo"))
             if action in ("pausar_cola", "reanudar_cola"):
@@ -2666,6 +2819,10 @@ def create_app(
             if r["action"] == "encargo" and isinstance(eid, int) and (e := db.encargo_get(eid, light=True)):
                 row["encargo"] = {"op": e["op"], "label": encargo_label(e), "docs": [d["name"] for d in e["docs"]],
                                   "to_claude": e["to_claude"], "estimate": encargo_estimate(e)}
+            lid = r["args"].get("lote")
+            if r["action"] == "lote" and isinstance(lid, int) and (L := db.lote_get(lid)):
+                row["lote"] = {"label": f"{lotes.PASSES.get(L['pase'], L['pase'])} · {lotes.scope_label(L['scope'])}",
+                               "documents": L["total"], "estimate": lote_estimate(L["total"])}
             out.append(row)
         return out
 
@@ -2688,6 +2845,8 @@ def create_app(
         req = db.claude_request_get(rid)
         if req["action"] == "encargo" and isinstance(req["args"].get("encargo"), int):   # frees its slot of the three
             db.encargo_set(req["args"]["encargo"], expect="pending_approval", status="rejected")
+        if req["action"] == "lote" and isinstance(req["args"].get("lote"), int):
+            db.lote_set(req["args"]["lote"], expect="pending_approval", status="rejected")
         db.log(clock(), None, "claude_request_decided", {"id": rid, "status": "rejected"})
         return {"ok": True}
 
@@ -2794,7 +2953,7 @@ def create_app(
 
         def pedir(args: dict) -> str:
             accion, motivo, tarea, encargo = args.get("accion"), args.get("motivo"), args.get("tarea"), args.get("encargo")
-            allowed = [a for a in ACTIONS if a != "encargo"]         # «encargo» is created only by ashur_encargar
+            allowed = [a for a in ACTIONS if a not in OWN_TOOL]      # those are created only by their own tool
             if not isinstance(accion, str) or accion not in allowed:
                 raise ToolError("«accion» debe ser una de: " + ", ".join(allowed) + ".")
             if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
@@ -2904,7 +3063,73 @@ def create_app(
                            "paused": "en pausa.", "kept": "Se quedó en el panel.", "rejected": "Sergio lo rechazó.",
                            "cancelled": "cancelado."}.get(st, st + ".")
 
+        def lote(args: dict) -> str:
+            pase, motivo, equipo, carpeta = args.get("pase"), args.get("motivo"), args.get("equipo"), args.get("carpeta")
+            if pase not in lotes.PASSES:
+                raise ToolError("«pase» debe ser uno de: " + ", ".join(lotes.PASSES) + ".")
+            if not isinstance(motivo, str) or not 3 <= len(motivo.strip()) <= 300:
+                raise ToolError("«motivo» debe ser un texto de 3 a 300 caracteres.")
+            if any(x is not None and (not isinstance(x, str) or not x.strip()) for x in (equipo, carpeta)):
+                raise ToolError("«equipo» y «carpeta» deben ser texto.")
+            if (equipo is None) != (carpeta is None):
+                raise ToolError("«equipo» y «carpeta» van juntos; sin ninguno, el lote cubre todos los documentos leídos.")
+            scope = {"equipo": equipo.strip(), "carpeta": carpeta.strip()} if equipo else {}
+            n = sum(1 for d in db.lote_pending(pase) if lotes.in_scope(d[0], d[1], scope))
+            if not n:
+                raise ToolError("No hay documentos leídos por hacer ahí: o no hay ninguno, o ese pase ya los cubrió.")
+            with request_lock:
+                if db.lote_unfinished_count():
+                    raise ToolError("Ya hay un lote sin terminar; va uno a la vez.")
+                if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                    raise ToolError("Ya hay 5 pedidos esperando a Sergio; espera a que decida.")
+                lid = db.lote_add(clock(), pase, scope, motivo.strip())
+                db.lote_set(lid, total=n)               # counted once here: Pedidos polls, and counting reads all of docs
+                rid = db.claude_request_add(clock(), "lote", {"lote": lid}, motivo.strip())
+            label = action_label("lote", {"lote": lid})
+            db.log(clock(), None, "claude_request", {"id": rid, "action": "lote", "label": label})
+            launch_push(rid, f"Claude pide: {label}", f"{n} documentos, {lote_estimate(n)}. {motivo.strip()}")
+            return (f"Lote #{lid} pedido (pedido #{rid}): {n} documentos, {lote_estimate(n)}. "
+                    "Sergio lo aprueba en el panel; míralo con ashur_ver_lote.")
+
+        def ver_lote(args: dict) -> str:
+            lid = args.get("id")
+            if not isinstance(lid, int) or isinstance(lid, bool):
+                raise ToolError("«id» debe ser un número entero.")
+            L = db.lote_get(lid)
+            if not L:
+                raise ToolError(f"No existe el lote #{lid}.")
+            st, head = L["status"], f"Lote #{lid}: "
+            # Only «released» ever returns anything derived from the documents; every other line is fixed words or counts.
+            if st == "released":
+                res, held = health_split(lote_summary(L))            # health never goes to Claude, released or not
+                note = (f"\n({len(held)} línea{'s' if len(held) != 1 else ''} de salud no se envi{'aron' if len(held) != 1 else 'ó'}.)"
+                        if held else "")
+                return head + "liberado por Sergio.\n" + res[:CLAUDE_CUT] + note
+            if st in ("running", "paused"):
+                left = max(L["total"] - L["done"] - L["failed"] - L["skipped"], 0)
+                return (head + ("en curso" if st == "running" else "en pausa")
+                        + f", {L['done']} de {L['total']} documentos, {L['failed']} fallidos; faltan {lote_estimate(left)}.")
+            if st == "failed":
+                return head + "falló" + (f". {L['error']}" if L["error"] else ".")
+            return head + {"pending_approval": "esperando que Sergio lo apruebe.", "queued": "aprobado, en cola.",
+                           "done": f"terminado ({L['done']} documentos); esperando que Sergio lo libere.",
+                           "kept": "se quedó en el panel.", "rejected": "Sergio lo rechazó.",
+                           "cancelled": "cancelado."}.get(st, st + ".")
+
         return [
+            Tool("ashur_lote", "Pide a Sergio un lote: la misma pregunta para TODOS sus documentos leídos (o los de una carpeta de "
+                 "un equipo), de a uno en los modelos locales. «tipo» clasifica cada documento por tipo y por autor (Sergio u otro). "
+                 "Nada empieza hasta que él lo aprueba; va un lote a la vez y puede tardar días. El resumen solo te llega si "
+                 "Sergio lo libera; míralo con ashur_ver_lote.",
+                 {"type": "object", "properties": {
+                     "pase": {"type": "string", "enum": list(lotes.PASSES)},
+                     "equipo": {"type": "string", "description": "Equipo, junto con «carpeta»"},
+                     "carpeta": {"type": "string", "description": "Carpeta del equipo, junto con «equipo»"},
+                     "motivo": {"type": "string", "minLength": 3, "maxLength": 300, "description": "Por qué lo pides, para Sergio"}},
+                  "required": ["pase", "motivo"], "additionalProperties": False}, lote),
+            Tool("ashur_ver_lote", "Cómo va un lote; su resumen solo aparece si Sergio lo liberó.",
+                 {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"],
+                  "additionalProperties": False}, ver_lote),
             Tool("ashur_estado", "Estado de los equipos de Sergio, la cola de tareas y la versión de Ashur.", NO_ARGS, estado),
             Tool("ashur_diagnostico", "Resumen del día y fallas de las últimas 24 horas, agrupadas.", NO_ARGS, diagnostico),
             Tool("ashur_buscar_archivo", "Dónde está un archivo, buscando por nombre en el inventario (solo rutas, nunca contenido).",
@@ -2921,7 +3146,7 @@ def create_app(
             Tool("ashur_pedir", "Pide a Sergio que apruebe una acción en Ashur. Nada se hace hasta que él la aprueba en el panel; "
                  "consulta cómo va con ashur_ver_pedido. «tarea» solo para cancelar_tarea, subir_tarea y bajar_tarea; "
                  "«encargo» solo para cancelar_encargo.",
-                 {"type": "object", "properties": {"accion": {"type": "string", "enum": [a for a in ACTIONS if a != "encargo"]},
+                 {"type": "object", "properties": {"accion": {"type": "string", "enum": [a for a in ACTIONS if a not in OWN_TOOL]},
                                                    "motivo": {"type": "string", "minLength": 3, "maxLength": 300,
                                                               "description": "Por qué lo pides, para Sergio"},
                                                    "tarea": {"type": "integer", "minimum": 1, "description": "Número de la tarea"},

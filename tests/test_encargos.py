@@ -1061,6 +1061,7 @@ def test_sweep_no_document_text_reaches_claude_unreleased(tmp_path, fast_local):
                      ("ashur_encargar", {"operacion": "resumir", "busqueda": "gatos", "devolver_a_claude": True,
                                          "motivo": "prueba"})]
             calls += [("ashur_ver_encargo", {"id": eid}) for eid in ids.values()]
+            calls += [("ashur_lote", {"pase": "tipo", "motivo": "prueba"}), ("ashur_ver_lote", {"id": 1})]
             assert {n for n, _ in calls} == tools
             out = []
             for n, a in calls:

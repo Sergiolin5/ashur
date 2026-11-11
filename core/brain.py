@@ -110,6 +110,8 @@ SECRET_WORDS = re.compile(r"(api[_ ]?key|password|contraseña|token|sk-ant-|enro
 
 SEEDS = Path(__file__).parent / "persona"                     # default.md seeds persona.md once; guest.md is what guests get
 SOURCE_LINE = re.compile(r"^\s*>")                            # «> fuente: …» under a trait: for Sergio, never in a prompt
+MATURITY = re.compile(r"^##\s*Madurez\s*:\s*(.+?)\s*$", re.I)   # one section per level; only the chosen one is spoken from
+HEADING = re.compile(r"^#{1,2}\s")
 VERSION_ID = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
 # Health never goes to Claude (Sergio's rule). Whole lines are held back, and on purpose it catches too much:
 # a line held by mistake stays in the panel, a line let through by mistake cannot be taken back.
@@ -231,9 +233,22 @@ class Brain:
             self.persona_path.write_text((SEEDS / "default.md").read_text(encoding="utf-8"), encoding="utf-8")
         return self.persona_path.read_text(encoding="utf-8-sig")
 
+    def persona_levels(self) -> list[str]:
+        return [m.group(1) for m in map(MATURITY.match, self.persona_file().splitlines()) if m]
+
     def persona(self) -> str:
-        """What goes in a prompt: the file without the lines that say where each trait came from."""
-        return "\n".join(ln for ln in self.persona_file().splitlines() if not SOURCE_LINE.match(ln))
+        """What goes in a prompt: the file without the lines that say where each trait came from, and with only the
+        «## Madurez: …» section of the level Sergio chose (setting persona_maturity; none chosen, none included)."""
+        level, out, skip = self.db.setting("persona_maturity", ""), [], False
+        for ln in self.persona_file().splitlines():
+            m = MATURITY.match(ln)
+            if m:
+                skip = m.group(1) != level
+            elif HEADING.match(ln):
+                skip = False
+            if not skip and not SOURCE_LINE.match(ln):
+                out.append(ln)
+        return "\n".join(out)
 
     def guest_persona(self, name: str) -> str:
         return (SEEDS / "guest.md").read_text(encoding="utf-8").strip().format(name=name)

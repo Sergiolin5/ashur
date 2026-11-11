@@ -602,7 +602,8 @@ def test_connector_never_returns_private_material(tmp_path, fast_local):
              ("ashur_preguntar_local", {"pregunta": "¿qué dice mi diario?"}),
              ("ashur_pedir", {"accion": "pausar_cola", "motivo": "prueba"}), ("ashur_ver_pedido", {"id": 1}),
              ("ashur_encargar", {"operacion": "resumir", "busqueda": "canario", "devolver_a_claude": True, "motivo": "prueba"}),
-             ("ashur_ver_encargo", {"id": 1})]
+             ("ashur_ver_encargo", {"id": 1}),
+             ("ashur_lote", {"pase": "tipo", "motivo": "prueba"}), ("ashur_ver_lote", {"id": 1})]
     assert {n for n, _ in calls} == {t["name"] for t in rpc(c, "tools/list", headers={
         "Authorization": "Bearer " + c.key}).json()["result"]["tools"]}
     results = [tool_text(c, n, a) for n, a in calls]

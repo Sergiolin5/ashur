@@ -74,6 +74,7 @@ def describe(event: str, d: dict) -> str:
         "chat_key_created": f"creaste una clave de chat para ti ({d.get('guest_id')})",
         "persona_saved": f"guardó la persona {d.get('persona')}",
         "persona_deleted": f"borró la persona {d.get('persona')}",
+        "persona_level": f"puso la madurez de Ashur en «{d.get('level')}»",
         "persona_signals": f"contó las señales de {d.get('documents')} documentos",
         "guest_created": f"creaste el invitado {d.get('guest_id')}",
         "guest_revoked": f"revocaste el invitado {d.get('guest_id')}",
@@ -91,6 +92,10 @@ def describe(event: str, d: dict) -> str:
         "encargo_done": f"terminó el encargo #{d.get('id')} ({d.get('docs')} documentos, {d.get('units')} trozos, {d.get('seconds')} s)",
         "encargo_failed": f"FALLÓ el encargo #{d.get('id')} ({d.get('units')} trozos hechos de {d.get('docs')} documentos)",
         "encargo_cancelled": f"se canceló el encargo #{d.get('id')}",
+        "lote_done": f"terminó el lote #{d.get('id')} ({d.get('docs')} documentos, {d.get('failed')} fallidos, {d.get('skipped')} sin texto, {d.get('seconds')} s)",
+        "lote_failed": f"FALLÓ el lote #{d.get('id')} tras {d.get('done')} documentos",
+        "lote_released": f"enviaste a Claude el resumen del lote #{d.get('id')}",
+        "lote_cancelled": f"cancelaste el lote #{d.get('id')}",
         "encargo_released": f"enviaste a Claude el resultado del encargo #{d.get('id')}",
         "encargo_kept": f"dejaste en el panel el resultado del encargo #{d.get('id')}",
         "mcp_key": "creaste una clave nueva para el conector de Claude" if d.get("action") == "created"

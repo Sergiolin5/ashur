@@ -701,6 +701,7 @@
         <textarea id="base-text" rows="14" maxlength="20000" aria-label="Persona de Ashur" style="width:100%;font:inherit;font-size:15px;color:var(--label);background:var(--field);border:0;border-radius:10px;padding:11px 12px;resize:vertical"></textarea>
         <button type="button" id="base-save">Guardar</button>
         <select id="base-versions" aria-label="Versiones anteriores" style="width:100%;font:inherit;font-size:15px;padding:10px;border-radius:10px;border:0;background:var(--field);color:var(--label);margin-top:8px" hidden></select>
+        <select id="base-level" aria-label="Nivel de madurez" style="width:100%;font:inherit;font-size:15px;padding:10px;border-radius:10px;border:0;background:var(--field);color:var(--label);margin-top:8px" hidden></select>
         <div id="base-result" class="note" style="margin:10px 0 0" hidden></div>
       </div>
     </section>
@@ -736,6 +737,8 @@
 
     <div class="page" data-page="encargos" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Encargos</div></div>
+      <section id="lotes-box" hidden><h2>Lotes</h2><div class="group" id="lotes-list"></div>
+        <div class="note">Un lote hace la misma pregunta a todos los documentos de un alcance, de a uno, cuando no hay un encargo esperando. Lo que aprende se queda aquí; a Claude solo llega el resumen si tú lo envías, y sin las líneas de salud.</div></section>
       <section><h2>En curso</h2><div class="group" id="enc-open"></div>
         <div class="note" id="enc-status" hidden></div>
         <div class="note" id="enc-note">Claude pide el encargo, tú lo apruebas en Pedidos de Claude y tus equipos lo hacen de a un trozo con los modelos locales. El resultado solo llega a Claude si tú lo envías.</div></section>
@@ -1539,7 +1542,7 @@
     if (t === "diary") loadDiary();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadUpdate(); loadTotp(); loadPersonas(); loadBase(); loadSpace(); loadDiag(); }
+    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadLotes(); loadUpdate(); loadTotp(); loadPersonas(); loadBase(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -1994,6 +1997,7 @@
         const label = cap(q.label) + (q.module ? " (" + q.module + ")" : "");
         if (q.status === "pending") {
           m.append(el("div", "title", label), el("div", "detail", (q.reason ? q.reason + " · " : "") + whenText(q.ts)));
+          if (q.lote) m.append(el("div", "detail wrap", cap(q.lote.label) + " · " + q.lote.documents + " documentos · " + q.lote.estimate));
           if (q.encargo) {
             const en = q.encargo;
             m.append(el("div", "detail", cap(en.label) + " · " + en.estimate), el("div", "detail wrap", en.docs.join(", ")));
@@ -2069,6 +2073,47 @@
       put($("enc-done"), done.length ? done.map(draw) : [row({ title: "Claude aún no ha encargado nada." })]);
     } catch (e) { const note = $("enc-status"); note.hidden = false; note.textContent = "No pude cargar los encargos."; }
   }
+  async function loadLotes() {
+    try {
+      const list = await (await api("api/lotes")).json();
+      $("lotes-box").hidden = !list.length;
+      put($("lotes-list"), list.map((L) => {
+        const r = el("div", "row nrow"), m = el("div", "main"), open = ENC_OPEN.includes(L.status);
+        m.append(el("div", "title", cap(L.label) + " · #" + L.id),
+                 el("div", "detail wrap", cap(ENC_STATUS[L.status] || L.status) + (L.error ? ": " + L.error : "") + (L.estimate ? " · faltan " + L.estimate : "") + " · " + whenText(L.updated || L.ts)));
+        if (L.total) {
+          const bar = el("div", "mapbar"), i = el("i"), seen = L.done + L.failed + L.skipped;
+          i.style.width = Math.round(100 * Math.min(seen, L.total) / L.total) + "%"; bar.append(i);
+          m.append(bar, el("div", "detail", L.done + " de " + L.total + " documentos · " + L.failed + " fallidos · " + L.skipped + " sin texto"));
+        }
+        if (L.summary) m.append(el("div", "enc-result", L.summary));
+        if (L.salud && L.salud.length) m.append(el("div", "detail wrap", "No va a Claude (salud), " + L.salud.length + (L.salud.length === 1 ? " línea" : " líneas") + "."));
+        const a = el("div", "acts");
+        if (open) {
+          const no = el("button", null, "Cancelar"); no.type = "button";
+          twice(no, "Toca otra vez para cancelar", () => moveLote(L.id, "cancel", [no]));
+          a.append(no);
+        } else if (L.status === "done" || L.status === "kept") {
+          const send = el("button", null, "Enviar a Claude"); send.type = "button";
+          twice(send, "Toca otra vez para enviar", () => moveLote(L.id, "release", [send]));
+          a.append(send);
+          if (L.status === "done") { const keep = el("button", null, "No enviar"); keep.type = "button"; keep.onclick = () => moveLote(L.id, "keep", [send, keep]); a.append(keep); }
+        }
+        if (a.childElementCount) m.append(a);
+        r.append(m); return r;
+      }));
+    } catch (e) {}
+  }
+  async function moveLote(id, what, buttons) {
+    for (const b of buttons) b.disabled = true;
+    const note = $("enc-status");
+    note.hidden = false;
+    try {
+      const r = await api("api/lotes/" + id + "/" + what, { method: "POST" });
+      note.textContent = r.ok ? "Lote #" + id + ": " + ENC_DONE_TEXT[what] + "." : await detailOf(r, "No pude cambiar el lote.");
+    } catch (e) { note.textContent = "No pude cambiar el lote."; }
+    loadLotes();
+  }
   const ENC_DONE_TEXT = { cancel: "cancelado", release: "enviado a Claude", keep: "se queda solo en el panel" };
   async function moveEncargo(id, what, buttons) {
     for (const b of buttons) b.disabled = true;
@@ -2080,7 +2125,7 @@
     } catch (e) { note.textContent = "No pude cambiar el encargo."; }
     loadEncargos();
   }
-  document.querySelector('.menu-item[data-page="encargos"]').addEventListener("click", loadEncargos);
+  document.querySelector('.menu-item[data-page="encargos"]').addEventListener("click", () => { loadEncargos(); loadLotes(); });
 
   // --- space: duplicates and largest files (computed by the core, at most every 6 h) ---
   async function loadDocs(q) {
@@ -2330,6 +2375,12 @@
       sel.options[0].value = "";
       p.versions.forEach((v, i) => { sel.options[i + 1].value = v.id; });
       sel.hidden = !p.versions.length;
+      const lv = $("base-level");                              // one «## Madurez: …» section per level; you pick which one speaks
+      lv.replaceChildren(el("option", null, "Madurez: ninguna sección"), ...p.levels.map((l) => el("option", null, "Madurez: " + l)));
+      lv.options[0].value = "";
+      p.levels.forEach((l, i) => { lv.options[i + 1].value = l; });
+      lv.value = p.levels.includes(p.level) ? p.level : "";
+      lv.hidden = !p.levels.length;
     } catch (e) {}
   }
   $("base-versions").addEventListener("change", async () => {
@@ -2347,6 +2398,12 @@
     out.textContent = r.ok ? "Guardada. La anterior quedó en Versiones." : await detailOf(r, "No pude guardar la persona.");
     out.hidden = false;
     if (r.ok) loadBase();
+  });
+  $("base-level").addEventListener("change", async () => {
+    const out = $("base-result");
+    const r = await api("api/persona/level", { method: "PUT", body: JSON.stringify({ level: $("base-level").value }) });
+    out.textContent = r.ok ? "Nivel de madurez guardado." : await detailOf(r, "No pude guardar el nivel.");
+    out.hidden = false;
   });
   let signalsText = "";
   $("signals-run").addEventListener("click", async () => {

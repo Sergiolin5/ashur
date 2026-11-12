@@ -246,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.54.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.54.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1437,6 +1437,29 @@ def create_app(
         node: str = Field(min_length=1, max_length=64)
         path: str = Field(min_length=1, max_length=1024)
         mark: Optional[str] = Field(default=None, pattern=r"^(mia|ruido)$")
+
+    class MarkScope(BaseModel):
+        node: str = Field(min_length=1, max_length=64)
+        path: str = Field(min_length=1, max_length=1024)
+
+    @app.post("/api/map/accept", dependencies=[Depends(require_admin)])
+    def accept_noise(m: MarkScope):
+        """One tap: «ruido» on every folder below `path` the rules suggest, only the topmost of each branch, and never
+        inside anything already marked (his marks win over the rules). Nothing moves."""
+        sep = "\\" if ("\\" in m.path or (len(m.path) >= 2 and m.path[1] == ":")) else "/"
+        prefix = m.path if m.path.endswith(sep) else m.path + sep
+        marks = db.folder_marks(m.node)
+        chosen, last = [], None
+        for path, summary in db.map_folders_under(m.node, prefix):
+            if last and path.startswith(last):
+                continue
+            if db.mark_under(marks, path)[0] or not noise_rule(path, summary):
+                continue
+            chosen.append(path)
+            last = path
+        db.folder_marks_add(m.node, chosen, "ruido", clock())
+        db.log(clock(), m.node, "folder_mark", {"path": prefix[-120:], "accepted": len(chosen)})
+        return {"ok": True, "marked": len(chosen)}
 
     @app.put("/api/map/mark", dependencies=[Depends(require_admin)])
     def folder_mark(m: FolderMark):

@@ -1458,3 +1458,26 @@ def test_folder_marks_mine_or_noise_cover_everything_below_and_rules_only_sugges
     db.inventory_add("pc", [{"path": "C:\\Users\\s\\Docs\\c.pdf", "kind": "file", "size": 1}])
     db.file_map_build("pc")                                                            # a rescan keeps the marks
     assert kids(get("C:\\Users\\s\\"))["Docs"]["mark"] == "mia"
+
+
+def test_accepting_the_noise_suggestions_marks_the_topmost_ones_and_never_overrides_him(env):
+    """0.54.1: one tap marks «ruido» every suggested folder below a path (the topmost of each branch only), skipping
+    whatever his own marks already cover."""
+    c, _ = env
+    db = c.app.state.db
+    db.inventory_add("pc", [{"path": "C:\\Users\\s\\proy1\\node_modules", "kind": "folder_summary", "size": 70},
+                            {"path": "C:\\Users\\s\\proy1\\a.py", "kind": "file", "size": 5},
+                            {"path": "C:\\Users\\s\\proy2\\node_modules", "kind": "folder_summary", "size": 60},
+                            {"path": "C:\\Users\\s\\AppData\\Local\\Temp\\t.tmp", "kind": "file", "size": 9},
+                            {"path": "C:\\Users\\s\\Docs\\a.pdf", "kind": "file", "size": 40}])
+    db.file_map_build("pc")
+    c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "C:\\Users\\s\\proy2\\", "mark": "mia"})
+    r = c.post("/api/map/accept", headers=A, json={"node": "pc", "path": "C:\\Users\\s\\"}).json()
+    assert r["marked"] == 2                                       # proy1\node_modules and AppData (not AppData\Local)
+    marks = db.folder_marks("pc")
+    assert marks["C:\\Users\\s\\proy1\\node_modules\\"] == "ruido" and marks["C:\\Users\\s\\AppData\\"] == "ruido"
+    assert "C:\\Users\\s\\AppData\\Local\\" not in marks          # covered by the folder above
+    assert "C:\\Users\\s\\proy2\\node_modules\\" not in marks     # inside his «mía»: his call, not the rule's
+    assert db.folder_mark_of("pc", "C:\\Users\\s\\Docs\\a.pdf") is None
+    assert c.post("/api/map/accept", headers=A, json={"node": "pc", "path": "C:\\Users\\s\\"}).json()["marked"] == 0
+    assert c.post("/api/map/accept", json={"node": "pc", "path": "C:\\"}).status_code == 401

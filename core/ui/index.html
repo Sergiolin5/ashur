@@ -2513,6 +2513,19 @@
         if (!k.summary) { r.style.cursor = "pointer"; r.addEventListener("click", () => mapLoad(node, k.path)); }
         rows.push(r);
       }
+      if (d.children.length && d.mark_here !== "mia") {      // the rules' «ruido», all of it below here, in one go
+        const acc = el("button", "link", "Marcar como ruido todo lo sugerido aquí adentro"); acc.type = "button";
+        twice(acc, "Toca otra vez para marcar", async () => {
+          try {
+            const res = await api("api/map/accept", { method: "POST", body: JSON.stringify({ node, path: d.path }) });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const n = (await res.json()).marked;
+            await mapLoad(node, d.path);
+            $("map-path").textContent += " · " + (n ? nf.format(n) + (n === 1 ? " carpeta marcada ruido" : " carpetas marcadas ruido") : "nada sugerido sin marcar");
+          } catch (e) { $("map-path").textContent = "No pude marcar (" + ((e && e.message) || "error") + ")."; }
+        });
+        rows.push(acc);
+      }
       if (d.files_here) rows.push(row({ title: "Archivos sueltos aquí", detail: nf.format(d.files_here) + " archivos", value: bytes(d.bytes_here) }));
       if (d.more) rows.push(row({ title: "y " + d.more + " carpetas más pequeñas" }));
       fill("map-list", rows.length ? rows : [], "Carpeta vacía.");

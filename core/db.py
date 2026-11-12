@@ -978,15 +978,36 @@ class DB:
     @staticmethod
     def mark_under(marks: dict[str, str], path: str) -> tuple[Optional[str], bool]:
         """The mark that covers `path` (its own or the deepest folder above it), and whether it is its own."""
-        best = None
-        for m in marks:
-            if path.startswith(m) and (best is None or len(m) > len(best)):
-                best = m
-        return (marks[best], best == path) if best is not None else (None, False)
+        if path in marks:                     # only its own ancestors can cover it: a few lookups, however many marks
+            return marks[path], True
+        for i in range(len(path) - 2, -1, -1):
+            if path[i] in "/\\" and path[:i + 1] in marks:
+                return marks[path[:i + 1]], False
+        return None, False
 
     def folder_mark_of(self, node_id: str, path: str) -> Optional[str]:
         """What the consolidation asks of one file or folder: «mia», «ruido», or None (not reviewed: it stays put)."""
         return self.mark_under(self.folder_marks(node_id), path)[0]
+
+    def map_folders_under(self, node_id: str, prefix: str) -> list[tuple[str, bool]]:
+        """Every folder of the device's built map below `prefix` (itself excluded), in path order, with its summary flag."""
+        meta = self.file_map_meta(node_id)
+        if not meta:
+            return []
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            return [(r[0], bool(r[1])) for r in c.execute(
+                "SELECT path, summary FROM folder_map WHERE node_id = ? AND gen = ? AND path > ? AND path < ? ORDER BY path",
+                (node_id, meta["gen"], prefix, prefix + "\uffff"))]
+        finally:
+            c.close()
+
+    def folder_marks_add(self, node_id: str, paths: list[str], mark: str, ts: float) -> None:
+        for i in range(0, len(paths), self.MAP_WRITE_ROWS):
+            with self.lock:
+                self.conn.executemany("INSERT OR IGNORE INTO folder_marks (node_id, path, mark, ts) VALUES (?, ?, ?, ?)",
+                                      [(node_id, p, mark, ts) for p in paths[i:i + self.MAP_WRITE_ROWS]])
+                self.conn.commit()
 
     MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
 

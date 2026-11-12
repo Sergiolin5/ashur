@@ -617,6 +617,11 @@
       <div class="group" id="map-list"></div>
       <div class="note" id="map-note">Tamaño por carpeta, según el último inventario. Toca una carpeta para entrar. «Mía» o «Ruido» vale para todo lo que tiene adentro; lo que no marques no entra al consolidado. Ashur no mueve ni borra nada desde aquí.</div>
     </section>
+    <section>
+      <h2>Mudanzas al servidor</h2>
+      <div class="group" id="map-moves"></div>
+      <div class="note">Cada carpeta «Mía» que mandes al servidor queda aquí como propuesta hasta que la apruebes. «Copiar» deja el original donde está; «Mover» lo manda a _cuarentena_ashur en su mismo disco cuando la copia esté verificada. Por ahora solo se proponen y aprueban: la copia llega en la siguiente etapa.</div>
+    </section>
     </div>
 
     <div class="page" data-page="docs" hidden>
@@ -2513,6 +2518,29 @@
         if (!k.summary) { r.style.cursor = "pointer"; r.addEventListener("click", () => mapLoad(node, k.path)); }
         rows.push(r);
       }
+      if (d.mark_here === "mia" && d.path) {                // this folder is his: offer to send it to the server
+        const box = el("div", "row");
+        const m = el("div", "main"); m.append(el("div", "title", "Mudar esta carpeta al servidor"));
+        m.append(el("div", "detail", "Destino: Consolidado/" + node + "/…  Se crea una propuesta; nada viaja hasta que la apruebes."));
+        box.append(m);
+        const bs = el("div", "qbtns");
+        for (const [modo, label] of [["copiar", "Copiar"], ["mover", "Mover"]]) {
+          const b = el("button", "tog", label); b.type = "button";
+          b.addEventListener("click", async () => {
+            b.disabled = true;
+            try {
+              const res = await api("api/mudanzas", { method: "POST", body: JSON.stringify({ node, path: d.path, modo }) });
+              if (!res.ok) { let msg = "HTTP " + res.status; try { msg = (await res.json()).detail || msg; } catch (e) {} throw new Error(msg); }
+              await loadMoves();
+              $("map-moves").scrollIntoView({ behavior: "smooth", block: "start" });
+            } catch (e) { $("map-path").textContent = "No pude crear la propuesta: " + ((e && e.message) || "error"); }
+            b.disabled = false;
+          });
+          bs.append(b);
+        }
+        box.append(bs);
+        rows.push(box);
+      }
       if (d.children.length && d.mark_here !== "mia") {      // the rules' «ruido», all of it below here, in one go
         const acc = el("button", "link", "Marcar como ruido todo lo sugerido aquí adentro"); acc.type = "button";
         twice(acc, "Toca otra vez para marcar", async () => {
@@ -2533,7 +2561,31 @@
       $("map-path").textContent = "No pude leer el mapa (" + (e && e.name === "AbortError" ? "el núcleo tardó demasiado" : (e && e.message) || "error") + "). Toca otra vez en un momento.";
     }
   }
-  document.querySelector('.menu-item[data-page="map"]').addEventListener("click", () => mapLoad(mapState.node, ""));
+  const MOVE_STATE = { propuesta: "propuesta", aprobada: "aprobada · espera la etapa de copia", en_curso: "en curso",
+                      hecha: "hecha", fallida: "falló", cancelada: "cancelada" };
+  async function loadMoves() {
+    try {
+      const r = await api("api/mudanzas");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const list = await r.json();
+      fill("map-moves", list.map((m) => {
+        const r2 = row({ title: nm(m.node_id) + "  " + m.path, value: bytes(m.bytes),
+                         detail: (m.modo === "mover" ? "mover" : "copiar") + " · " + nf.format(m.files) + (m.files === 1 ? " archivo" : " archivos") +
+                                 " · → " + m.dest + " · " + (MOVE_STATE[m.estado] || m.estado) + (m.error ? " · " + m.error : "") });
+        const bs = el("div", "qbtns");
+        const act = async (what) => {
+          const res = await api("api/mudanzas/" + m.id + "/" + what, { method: "POST" });
+          if (!res.ok) { let msg = "HTTP " + res.status; try { msg = (await res.json()).detail || msg; } catch (e) {} $("map-path").textContent = msg; }
+          await loadMoves();
+        };
+        if (m.estado === "propuesta") { const b = el("button", "tog", "Aprobar"); b.type = "button"; twice(b, "¿Seguro?", () => act("aprobar")); bs.append(b); }
+        if (m.estado === "propuesta" || m.estado === "aprobada") { const b = el("button", "tog", "Cancelar"); b.type = "button"; twice(b, "¿Seguro?", () => act("cancelar")); bs.append(b); }
+        if (bs.children.length) r2.insertBefore(bs, r2.querySelector(".value"));
+        return r2;
+      }), "Ninguna todavía.", 6);
+    } catch (e) { fill("map-moves", [], "No pude leer las mudanzas."); }
+  }
+  document.querySelector('.menu-item[data-page="map"]').addEventListener("click", () => { mapLoad(mapState.node, ""); loadMoves(); });
 
   // --- device personas ---------------------------------------------------------
   let personas = [];

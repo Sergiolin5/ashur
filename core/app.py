@@ -246,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.54.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.55.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1437,6 +1437,63 @@ def create_app(
         node: str = Field(min_length=1, max_length=64)
         path: str = Field(min_length=1, max_length=1024)
         mark: Optional[str] = Field(default=None, pattern=r"^(mia|ruido)$")
+
+    # --- the consolidation, stage 1 (0.55.0): Sergio proposes and approves; nothing travels yet --------------------
+    CONSOLIDADO = "/DATA/Consolidado/"
+
+    def mirror_dest(node: str, path: str) -> str:
+        """Espejo por equipo (his choice): /DATA/Consolidado/<device>/<disk>/<path>/; «S:\\a\\» → «S/a/»."""
+        rel = path.replace("\\", "/").replace(":", "").strip("/")
+        return CONSOLIDADO + node + "/" + (rel + "/" if rel else "")
+
+    class MudanzaIn(BaseModel):
+        node: str = Field(min_length=1, max_length=64)
+        path: str = Field(min_length=1, max_length=1024)
+        modo: str = Field(pattern=r"^(copiar|mover)$")
+
+    @app.post("/api/mudanzas", dependencies=[Depends(require_admin)])
+    def mudanza_propose(m: MudanzaIn):
+        sep = "\\" if ("\\" in m.path or (len(m.path) >= 2 and m.path[1] == ":")) else "/"
+        path = m.path if m.path.endswith(sep) else m.path + sep
+        marks = db.folder_marks(m.node)
+        if db.mark_under(marks, path)[0] != "mia":
+            raise HTTPException(422, "solo se mudan carpetas marcadas «Mía»")
+        for a in db.mudanzas_active(m.node):
+            if a["path"].startswith(path) or path.startswith(a["path"]):
+                raise HTTPException(409, f"ya hay una mudanza para {a['path']} ({a['estado']})")
+        noise, last = [], None                                  # the topmost «Ruido» folders inside it stay behind
+        for p, mk in sorted(marks.items()):
+            if mk == "ruido" and p.startswith(path) and p != path and not (last and p.startswith(last)):
+                noise.append(p)
+                last = p
+        tot = db.map_totals(m.node, [path] + noise)
+        if path not in tot:
+            raise HTTPException(409, "el mapa de este equipo todavía no tiene esa carpeta")
+        size = tot[path][0] - sum(tot[p][0] for p in noise if p in tot)
+        files = tot[path][1] - sum(tot[p][1] for p in noise if p in tot)
+        out = db.mudanza_add(m.node, path, mirror_dest(m.node, path), m.modo, files, size, clock())
+        db.log(clock(), m.node, "mudanza", {"id": out["id"], "estado": "propuesta", "modo": m.modo, "bytes": size})
+        return out
+
+    @app.get("/api/mudanzas", dependencies=[Depends(require_admin)])
+    def mudanzas_list():
+        return db.mudanzas()
+
+    @app.post("/api/mudanzas/{mid}/aprobar", dependencies=[Depends(require_admin)])
+    def mudanza_approve(mid: int):
+        out = db.mudanza_state(mid, ("propuesta",), "aprobada", clock())
+        if not out:
+            raise HTTPException(409, "solo se aprueba una propuesta")
+        db.log(clock(), out["node_id"], "mudanza", {"id": mid, "estado": "aprobada"})
+        return out
+
+    @app.post("/api/mudanzas/{mid}/cancelar", dependencies=[Depends(require_admin)])
+    def mudanza_cancel(mid: int):
+        out = db.mudanza_state(mid, ("propuesta", "aprobada"), "cancelada", clock())
+        if not out:
+            raise HTTPException(409, "solo se cancela lo que todavía no empezó")
+        db.log(clock(), out["node_id"], "mudanza", {"id": mid, "estado": "cancelada"})
+        return out
 
     class MarkScope(BaseModel):
         node: str = Field(min_length=1, max_length=64)

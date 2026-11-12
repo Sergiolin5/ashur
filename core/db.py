@@ -110,6 +110,38 @@ CREATE TABLE IF NOT EXISTS folder_marks (  -- Sergio's own review in the map (0.
     ts          REAL NOT NULL,
     PRIMARY KEY (node_id, path)
 );
+CREATE TABLE IF NOT EXISTS mudanzas (     -- the consolidation (0.55.0): one per «Mía» folder Sergio sends to the server
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id     TEXT NOT NULL,
+    path        TEXT NOT NULL,              -- the folder on its device, ending in its separator
+    dest        TEXT NOT NULL,              -- /DATA/Consolidado/<device>/<disk>/<path>/
+    modo        TEXT NOT NULL CHECK (modo IN ('copiar', 'mover')),
+    estado      TEXT NOT NULL CHECK (estado IN ('propuesta', 'aprobada', 'en_curso', 'hecha', 'fallida', 'cancelada')),
+    files       INTEGER NOT NULL,           -- estimate from the map, without its «Ruido» subfolders
+    bytes       INTEGER NOT NULL,
+    done_files  INTEGER NOT NULL DEFAULT 0,
+    done_bytes  INTEGER NOT NULL DEFAULT 0,
+    created     REAL NOT NULL,
+    approved    REAL,
+    finished    REAL,
+    error       TEXT
+);
+CREATE TABLE IF NOT EXISTS mudanza_archivos (  -- every file of a move: to resume and to audit
+    mudanza_id  INTEGER NOT NULL,
+    src         TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    sha256      TEXT,
+    dest        TEXT,
+    estado      TEXT NOT NULL,              -- pendiente | copiado | enlazado | en_cuarentena | fallido
+    ts          REAL NOT NULL,
+    PRIMARY KEY (mudanza_id, src)
+);
+CREATE TABLE IF NOT EXISTS sha_servidor (  -- what /DATA/Consolidado already holds, so nothing travels twice
+    sha256      TEXT PRIMARY KEY,
+    path        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    ts          REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS memory (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created     REAL NOT NULL,
@@ -1008,6 +1040,56 @@ class DB:
                 self.conn.executemany("INSERT OR IGNORE INTO folder_marks (node_id, path, mark, ts) VALUES (?, ?, ?, ?)",
                                       [(node_id, p, mark, ts) for p in paths[i:i + self.MAP_WRITE_ROWS]])
                 self.conn.commit()
+
+    def map_totals(self, node_id: str, paths: list[str]) -> dict[str, tuple[int, int]]:
+        """(bytes, files) of these folders in the device's built map."""
+        meta = self.file_map_meta(node_id)
+        if not meta or not paths:
+            return {}
+        out = {}
+        with self.lock:
+            for p in paths:
+                r = self.conn.execute("SELECT bytes, files FROM folder_map WHERE node_id = ? AND gen = ? AND path = ?",
+                                      (node_id, meta["gen"], p)).fetchone()
+                if r:
+                    out[p] = (r[0], r[1])
+        return out
+
+    # --- the consolidation (0.55.0) ------------------------------------------------------------
+    MUDANZA_ACTIVE = ("propuesta", "aprobada", "en_curso")
+
+    def mudanza_add(self, node_id: str, path: str, dest: str, modo: str, files: int, size: int, ts: float) -> dict:
+        with self.lock:
+            cur = self.conn.execute("INSERT INTO mudanzas (node_id, path, dest, modo, estado, files, bytes, created) "
+                                    "VALUES (?, ?, ?, ?, 'propuesta', ?, ?, ?)", (node_id, path, dest, modo, files, size, ts))
+            self.conn.commit()
+            return dict(self.conn.execute("SELECT * FROM mudanzas WHERE id = ?", (cur.lastrowid,)).fetchone())
+
+    def mudanzas(self, limit: int = 200) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute("SELECT * FROM mudanzas ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+
+    def mudanza(self, mid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM mudanzas WHERE id = ?", (mid,)).fetchone()
+        return dict(r) if r else None
+
+    def mudanzas_active(self, node_id: str) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT * FROM mudanzas WHERE node_id = ? AND estado IN (?, ?, ?)", (node_id, *self.MUDANZA_ACTIVE)).fetchall()]
+
+    def mudanza_state(self, mid: int, frm: tuple, to: str, ts: float) -> Optional[dict]:
+        """Moves a mudanza from one of `frm` to `to`; None if it was not in one of them (nothing changes)."""
+        with self.lock:
+            col = {"aprobada": "approved", "hecha": "finished", "fallida": "finished", "cancelada": "finished"}.get(to)
+            q = "UPDATE mudanzas SET estado = ?" + (f", {col} = ?" if col else "") + \
+                " WHERE id = ? AND estado IN (" + ",".join("?" * len(frm)) + ")"
+            args = [to] + ([ts] if col else []) + [mid, *frm]
+            if self.conn.execute(q, args).rowcount != 1:
+                return None
+            self.conn.commit()
+            return dict(self.conn.execute("SELECT * FROM mudanzas WHERE id = ?", (mid,)).fetchone())
 
     MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
 

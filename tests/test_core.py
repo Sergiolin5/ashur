@@ -1481,3 +1481,48 @@ def test_accepting_the_noise_suggestions_marks_the_topmost_ones_and_never_overri
     assert db.folder_mark_of("pc", "C:\\Users\\s\\Docs\\a.pdf") is None
     assert c.post("/api/map/accept", headers=A, json={"node": "pc", "path": "C:\\Users\\s\\"}).json()["marked"] == 0
     assert c.post("/api/map/accept", json={"node": "pc", "path": "C:\\"}).status_code == 401
+
+
+def _pc_with_marks(c):
+    db = c.app.state.db
+    db.inventory_add("pc", [{"path": "S:\\Proyectos\\casa\\plano.pdf", "kind": "file", "size": 400},
+                            {"path": "S:\\Proyectos\\casa\\fotos\\a.jpg", "kind": "file", "size": 300},
+                            {"path": "S:\\Proyectos\\casa\\node_modules", "kind": "folder_summary", "size": 5000},
+                            {"path": "S:\\Juegos\\g.exe", "kind": "file", "size": 9000}])
+    db.file_map_build("pc")
+    c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\", "mark": "mia"})
+    c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\casa\\node_modules\\", "mark": "ruido"})
+    return db
+
+
+def test_a_move_is_only_proposed_for_his_own_folders_and_waits_for_his_approval(env):
+    """0.55.0, stage 1 of the consolidation: a proposal per «Mía» folder, mirror destination per device, size without
+    its «Ruido» subfolders; nothing travels."""
+    c, _ = env
+    _pc_with_marks(c)
+    r = c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\casa\\", "modo": "copiar"})
+    assert r.status_code == 200, r.text
+    m = r.json()
+    assert m["estado"] == "propuesta" and m["modo"] == "copiar"
+    assert m["dest"] == "/DATA/Consolidado/pc/S/Proyectos/casa/"
+    assert m["bytes"] == 700 and m["files"] == 2                          # node_modules («Ruido») left out
+    assert c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\Juegos\\", "modo": "copiar"}).status_code == 422
+    assert c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\", "modo": "mover"}).status_code == 409
+    assert c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\casa\\fotos\\", "modo": "mover"}).status_code == 409
+    assert c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\casa\\", "modo": "borrar"}).status_code == 422
+    lst = c.get("/api/mudanzas", headers=A).json()
+    assert [x["id"] for x in lst] == [m["id"]]
+    a = c.post(f"/api/mudanzas/{m['id']}/aprobar", headers=A).json()
+    assert a["estado"] == "aprobada" and a["approved"]
+    assert c.post(f"/api/mudanzas/{m['id']}/aprobar", headers=A).status_code == 409   # only a proposal is approved
+    assert c.post(f"/api/mudanzas/{m['id']}/cancelar", headers=A).json()["estado"] == "cancelada"
+    ok = c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\", "modo": "mover"})
+    assert ok.status_code == 200 and ok.json()["bytes"] == 700           # a cancelled one no longer blocks
+    assert c.get("/api/mudanzas").status_code == 401
+    assert any(e["event"] == "mudanza" for e in c.app.state.db.log_rows(50))
+
+
+def test_new_consolidation_tables_exist(env):
+    c, _ = env
+    names = {r[0] for r in c.app.state.db.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"mudanzas", "mudanza_archivos", "sha_servidor"} <= names

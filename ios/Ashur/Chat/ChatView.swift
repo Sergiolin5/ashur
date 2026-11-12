@@ -1,9 +1,8 @@
 import SwiftUI
 
 struct ChatView: View {
-    @State var model: ChatModel
+    @Bindable var model: ChatModel
     @Environment(Session.self) private var session
-    @State private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -61,25 +60,25 @@ struct ChatView: View {
         } message: {
             Text(model.error ?? "")
         }
-        .task { await model.loadHistory() }
+        .task { if model.lines.isEmpty { await model.loadHistory() } }
     }
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Escribe a Ashur", text: $draft, axis: .vertical)
+            TextField("Escribe a Ashur", text: $model.draft, axis: .vertical)
                 .lineLimit(1...5)
                 .focused($focused)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
             Button {
-                let text = draft
-                draft = ""
+                let text = model.draft
+                model.draft = ""
                 Task { await model.send(text) }
             } label: {
                 Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
             }
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.sending)
+            .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.sending)
             .accessibilityLabel("Enviar")
         }
         .padding(.horizontal)

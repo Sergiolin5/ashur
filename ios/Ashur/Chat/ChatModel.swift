@@ -21,6 +21,7 @@ final class ChatModel {
     private(set) var sending = false
     private(set) var loading = false
     var pendingApproval: ClaudeApproval?
+    var draft = ""            // sobrevive a abrir y cerrar el teléfono
     var error: String?
 
     init(api: APIClient) { self.api = api }

@@ -14,18 +14,29 @@ struct AshurApp: App {
 }
 
 /// Estado de la sesión: la clave (leída del Keychain) y el cliente del núcleo.
+/// Los modelos viven aquí y no en las vistas: al abrir o cerrar el teléfono cambia la jerarquía de vistas,
+/// pero la conversación (y lo que Sergio estaba escribiendo) no se pierde.
 @Observable
 final class Session {
-    private(set) var api: APIClient?
+    private(set) var api: APIClient? {
+        didSet {
+            chat = api.map(ChatModel.init(api:))
+            panel = api.map(PanelModel.init(api:))
+        }
+    }
+    private(set) var chat: ChatModel?
+    private(set) var panel: PanelModel?
     var problem: String?
 
     init() {
         do {
-            if let key = try KeyStore.read() { api = APIClient(key: key) }
+            if let key = try KeyStore.read() { setAPI(APIClient(key: key)) }
         } catch {
             problem = error.localizedDescription
         }
     }
+
+    private func setAPI(_ api: APIClient?) { self.api = api }   // didSet no corre dentro de init
 
     /// Comprueba la clave una sola vez con /api/whoami y, si es la admin, la guarda.
     func connect(with key: String) async -> String? {
@@ -53,12 +64,37 @@ struct RootView: View {
     @Environment(Session.self) private var session
 
     var body: some View {
-        if let api = session.api {
-            NavigationStack {
-                ChatView(model: ChatModel(api: api))
-            }
+        if let chat = session.chat, let panel = session.panel {
+            AdaptiveRoot(chat: chat, panel: panel)
         } else {
             KeySetupView()
+        }
+    }
+}
+
+/// Funcionalidad (b). Se decide por size class (guía de Apple), no por orientación ni por el tamaño de pantalla:
+/// pantalla externa del Duo (cerrado) → compacto, solo conversación;
+/// pantalla interna (abierto) → regular, dos paneles: conversación | memoria, hábitos y pedidos.
+/// No se usa la bisagra: con size classes basta.
+struct AdaptiveRoot: View {
+    let chat: ChatModel
+    let panel: PanelModel
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var columns: NavigationSplitViewVisibility = .all
+
+    var body: some View {
+        if sizeClass == .regular {
+            NavigationSplitView(columnVisibility: $columns) {
+                ChatView(model: chat)
+                    .navigationSplitViewColumnWidth(min: 320, ideal: 420)
+            } detail: {
+                NavigationStack { PanelView(model: panel) }
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else {
+            NavigationStack {
+                ChatView(model: chat)
+            }
         }
     }
 }

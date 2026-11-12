@@ -22,6 +22,42 @@ struct ChatReply: Decodable {
     let estimate_usd: Double?
 }
 
+/// GET /api/memory
+struct MemoryItem: Decodable, Identifiable {
+    let id: Int
+    let text: String
+    let source: String?
+    let tier: String?
+}
+
+/// GET /api/habits (fila de la tabla habits + descripcion y puede_hacer)
+struct Habit: Decodable, Identifiable {
+    let id: Int
+    let accion: String
+    let descripcion: String?
+    let veces: Int
+    let dias: Int
+    let estado: String
+}
+
+/// GET /api/claude-requests: los Pedidos (Claude y hábitos)
+struct Pedido: Decodable, Identifiable {
+    let id: Int
+    let ts: Double
+    let action: String
+    let reason: String
+    let status: String
+    let result: String?
+    let label: String?
+
+    var isPending: Bool { status == "pending" }
+}
+
+struct ApproveResult: Decodable {
+    let status: String
+    let result: String?
+}
+
 struct ChatHistory: Decodable {
     struct Message: Decodable {
         let ts: Double

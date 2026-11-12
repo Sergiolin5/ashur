@@ -246,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.51.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.51.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1340,9 +1340,11 @@ def create_app(
 
     @app.get("/api/map", dependencies=[Depends(require_admin)])
     def file_map(node: str = "", path: str = Query(default="", max_length=1024)):
-        if not node:
-            return {"nodes": [{"node_id": r["node_id"], "bytes": r["bytes"], "entries": r["entries"]}
-                              for r in db.inventory_summary_readonly()]}
+        if not node:                       # the panel's background count: never wait for the full table
+            rows = inventory_summary_cached()
+            return {"counting": rows is None,
+                    "nodes": [{"node_id": r["node_id"], "bytes": r["bytes"], "entries": r["entries"]}
+                              for r in rows or []]}
         key, now = (node, path), clock()
         hit = _fmap.get(key)
         if hit and now - hit[0] < 300:

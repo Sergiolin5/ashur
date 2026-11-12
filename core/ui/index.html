@@ -2404,23 +2404,37 @@
 
   // --- file map ---------------------------------------------------------------
   const mapState = { node: null };
+  function mapGet(url) {                   // a level of a big disk can take long; never wait forever
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 60000);
+    return api(url, { signal: ctl.signal }).finally(() => clearTimeout(t));
+  }
   async function mapLoad(node, path) {
     mapState.node = node;
     try {
       if (!node) {
-        const d = await (await api("api/map")).json();
+        const r = await mapGet("api/map");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const d = await r.json();
         const have = d.nodes.filter((n) => n.entries);
         $("map-nodes").replaceChildren(...have.map((n) => {
           const b = el("button", "tog", nm(n.node_id) + " · " + bytes(n.bytes)); b.type = "button";
           b.addEventListener("click", () => mapLoad(n.node_id, ""));
           return b;
         }));
-        $("map-path").textContent = have.length ? "" : "Todavía no hay inventarios.";
+        if (d.counting) {                  // the core is still counting the inventory: ask again shortly
+          $("map-path").textContent = "Contando el inventario…";
+          setTimeout(() => { if (mapState.node === null && !$("map-nodes").children.length) mapLoad(null, ""); }, 4000);
+        } else {
+          $("map-path").textContent = have.length ? "" : "Todavía no hay inventarios.";
+        }
         fill("map-list", [], "Elige un equipo.");
         return;
       }
       for (const b of $("map-nodes").children) b.classList.toggle("on", b.textContent.startsWith(nm(node) + " ·"));
-      const d = await (await api("api/map?node=" + encodeURIComponent(node) + "&path=" + encodeURIComponent(path || ""))).json();
+      $("map-path").textContent = nm(node) + "  " + (path || "") + " · leyendo…";
+      const r = await mapGet("api/map?node=" + encodeURIComponent(node) + "&path=" + encodeURIComponent(path || ""));
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
       $("map-path").textContent = nm(node) + "  " + (d.path || "") + " · " + bytes(d.total_bytes) +
         (d.protected ? " · " + d.protected + (d.protected === 1 ? " elemento protegido" : " elementos protegidos") + " (no se miden)" : "");
       const rows = [];
@@ -2442,7 +2456,9 @@
       if (d.files_here) rows.push(row({ title: "Archivos sueltos aquí", detail: nf.format(d.files_here) + " archivos", value: bytes(d.bytes_here) }));
       if (d.more) rows.push(row({ title: "y " + d.more + " carpetas más pequeñas" }));
       fill("map-list", rows.length ? rows : [], "Carpeta vacía.");
-    } catch (e) {}
+    } catch (e) {                          // say it, never leave the page blank
+      $("map-path").textContent = "No pude leer el mapa (" + (e && e.name === "AbortError" ? "el núcleo tardó demasiado" : (e && e.message) || "error") + "). Toca otra vez en un momento.";
+    }
   }
   document.querySelector('.menu-item[data-page="map"]').addEventListener("click", () => mapLoad(mapState.node, ""));
 

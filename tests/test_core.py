@@ -1256,3 +1256,29 @@ def test_battery_is_shown_while_online_and_dropped_when_silent(env):
     c.post("/nodes/mac/heartbeat", headers=h, json={"mode": "light", "battery_pct": 64.5, "on_power": True})
     clock.now += 46
     assert c.get("/status", headers=A).json()["nodes"][0]["battery_pct"] is None   # offline: no number, like CPU
+
+
+def test_file_map_first_screen_never_waits_for_a_slow_count(tmp_path):
+    """The map's first screen counted the whole inventory on every visit; on the server's disk
+    that never came back and the page stayed blank. It uses the panel's background count now."""
+    import time as _t
+    from fastapi.testclient import TestClient as TC
+    app = create_app(str(tmp_path / "m.db"), ENROLL, ADMIN, sweep_every_s=None, inventory_in_background=True)
+    app.state.db.inventory_add("zima", [{"path": "/host/DATA/a.txt", "kind": "file", "size": 5}])
+    real = app.state.db.inventory_summary_readonly
+
+    def slow():
+        _t.sleep(3)
+        return real()
+    app.state.db.inventory_summary_readonly = slow
+    c = TC(app)
+    t0 = _t.monotonic()
+    first = c.get("/api/map", headers=A).json()
+    assert _t.monotonic() - t0 < 1.5
+    assert first["nodes"] == [] and first["counting"] is True      # no numbers yet: the panel says so
+    for _ in range(40):                                            # the background count lands
+        _t.sleep(0.2)
+        d = c.get("/api/map", headers=A).json()
+        if d["nodes"]:
+            break
+    assert [n["node_id"] for n in d["nodes"]] == ["zima"] and d["counting"] is False

@@ -13,7 +13,7 @@ struct ChatView: View {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     ForEach(model.lines) { line in
-                        Bubble(line: line).id(line.id)
+                        Bubble(line: line, readAloud: { model.speaker.say(line.text) }).id(line.id)
                     }
                     if model.sending {
                         HStack(spacing: 6) {
@@ -44,6 +44,8 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Toggle("Leer respuestas en voz alta", systemImage: "speaker.wave.2",
+                           isOn: Binding(get: { model.speaker.readAloud }, set: { model.speaker.readAloud = $0 }))
                     Button("Recargar historial", systemImage: "arrow.clockwise") {
                         Task { await model.loadHistory() }
                     }
@@ -65,13 +67,25 @@ struct ChatView: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Escribe a Ashur", text: $model.draft, axis: .vertical)
+            let listening = model.dictation.listening
+            Button {
+                focused = false
+                Task { await model.toggleDictation() }
+            } label: {
+                Image(systemName: listening ? "stop.circle.fill" : "mic.circle")
+                    .font(.system(size: 32))
+                    .foregroundStyle(listening ? Color.red : Color.accentColor)
+            }
+            .disabled(model.sending)
+            .accessibilityLabel(listening ? "Dejar de dictar" : "Dictar")
+            TextField(listening ? "Escuchando…" : "Escribe a Ashur", text: $model.draft, axis: .vertical)
                 .lineLimit(1...5)
                 .focused($focused)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
             Button {
+                model.dictation.stop()
                 let text = model.draft
                 model.draft = ""
                 Task { await model.send(text) }
@@ -90,6 +104,7 @@ struct ChatView: View {
 /// Texto plano: Ashur no responde con markdown, así que se muestra tal cual (sin interpretar asteriscos).
 private struct Bubble: View {
     let line: ChatLine
+    let readAloud: () -> Void
 
     var body: some View {
         switch line.role {
@@ -110,6 +125,10 @@ private struct Bubble: View {
                     .foregroundStyle(mine ? Color.white : Color.primary)
                     .background(mine ? Color.accentColor : Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 18))
+                    .contextMenu {
+                        if !mine { Button("Leer en voz alta", systemImage: "speaker.wave.2", action: readAloud) }
+                        Button("Copiar", systemImage: "doc.on.doc") { UIPasteboard.general.string = line.text }
+                    }
                 if !mine { Spacer(minLength: 40) }
             }
         }

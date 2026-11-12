@@ -23,6 +23,8 @@ final class ChatModel {
     var pendingApproval: ClaudeApproval?
     var draft = ""            // sobrevive a abrir y cerrar el teléfono
     var error: String?
+    let dictation = Dictation()
+    let speaker = Speaker()
 
     init(api: APIClient) { self.api = api }
 
@@ -52,6 +54,7 @@ final class ChatModel {
         do {
             let r: ChatReply = try await api.post("/api/chat", body: ChatRequest(message: text, allow_claude: allowClaude))
             lines.append(ChatLine(role: .ashur, text: r.reply, date: .now))
+            if speaker.readAloud { speaker.say(r.reply) }
             if let note = r.note, !note.isEmpty {
                 lines.append(ChatLine(role: .aviso, text: note, date: .now))
             }
@@ -59,6 +62,20 @@ final class ChatModel {
                 pendingApproval = ClaudeApproval(message: text, estimateUSD: r.estimate_usd)
             }
             error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// El dictado se escribe en el borrador (detrás de lo que ya hubiera); Sergio lo revisa y lo envía él.
+    func toggleDictation() async {
+        if dictation.listening { dictation.stop(); return }
+        speaker.stop()
+        let before = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try await dictation.start { [weak self] text in
+                self?.draft = before.isEmpty ? text : before + " " + text
+            }
         } catch {
             self.error = error.localizedDescription
         }

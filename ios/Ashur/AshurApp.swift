@@ -61,8 +61,10 @@ final class Session {
             }
             locked = false
             problem = api == nil ? problem : nil
+        } catch KeyStore.Failure.cancelled {
+            problem = nil                             // Sergio canceló: se queda en la pantalla de desbloqueo, sin aviso
         } catch {
-            problem = error.localizedDescription      // nil si Sergio canceló: se queda en la pantalla de desbloqueo
+            problem = error.localizedDescription
         }
     }
 

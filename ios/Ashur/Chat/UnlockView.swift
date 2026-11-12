@@ -4,6 +4,7 @@ import SwiftUI
 /// Pantalla de inicio cuando ya hay clave: se abre con Touch ID (Duo) o Face ID (15 Pro).
 struct UnlockView: View {
     @Environment(Session.self) private var session
+    @Environment(\.scenePhase) private var phase
 
     var body: some View {
         VStack(spacing: 24) {
@@ -28,7 +29,8 @@ struct UnlockView: View {
                 .font(.footnote)
         }
         .padding(32)
-        .task { await session.unlock() }
+        // Pide la biometría solo con la app en primer plano (al volver de segundo plano, no antes).
+        .task(id: phase) { if phase == .active { await session.unlock() } }
     }
 
     private var biometryType: LABiometryType {

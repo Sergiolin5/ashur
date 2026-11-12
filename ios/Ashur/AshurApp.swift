@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct AshurApp: App {
     @State private var session = Session()
+    @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
@@ -10,18 +11,28 @@ struct AshurApp: App {
                 .environment(session)
                 .tint(Color.accentColor)
         }
+        .onChange(of: phase) {
+            if phase == .background { session.lock() }
+        }
     }
 }
 
 /// Estado de la sesión: la clave (leída del Keychain) y el cliente del núcleo.
 /// Los modelos viven aquí y no en las vistas: al abrir o cerrar el teléfono cambia la jerarquía de vistas,
 /// pero la conversación (y lo que Sergio estaba escribiendo) no se pierde.
+/// Tampoco se pierden al bloquear: solo sueltan el cliente (y con él la clave) hasta el siguiente desbloqueo.
 @Observable
 final class Session {
     private(set) var api: APIClient? {
         didSet {
-            chat = api.map(ChatModel.init(api:))
-            panel = api.map(PanelModel.init(api:))
+            guard let api else { return }
+            if let chat, let panel {
+                chat.api = api
+                panel.api = api
+            } else {
+                chat = ChatModel(api: api)
+                panel = PanelModel(api: api)
+            }
         }
     }
     private(set) var chat: ChatModel?
@@ -55,6 +66,19 @@ final class Session {
         }
     }
 
+    /// Al pasar a segundo plano: la clave sale de la memoria y la app vuelve a la pantalla de desbloqueo.
+    /// La conversación y el borrador se conservan.
+    func lock() {
+        guard api != nil else { return }
+        chat?.dictation.stop()
+        chat?.speaker.stop()
+        chat?.api = nil
+        panel?.api = nil
+        api = nil
+        problem = nil
+        locked = true
+    }
+
     /// Comprueba la clave una sola vez con /api/whoami y, si es la admin, la guarda protegida con biometría.
     func connect(with key: String) async -> String? {
         let candidate = APIClient(key: key)
@@ -75,6 +99,8 @@ final class Session {
     func forgetKey() {
         KeyStore.delete()
         api = nil
+        chat = nil
+        panel = nil
         locked = false
     }
 }
@@ -83,10 +109,10 @@ struct RootView: View {
     @Environment(Session.self) private var session
 
     var body: some View {
-        if let chat = session.chat, let panel = session.panel {
-            AdaptiveRoot(chat: chat, panel: panel)
-        } else if session.locked {
+        if session.locked {
             UnlockView()
+        } else if session.api != nil, let chat = session.chat, let panel = session.panel {
+            AdaptiveRoot(chat: chat, panel: panel)
         } else {
             KeySetupView()
         }

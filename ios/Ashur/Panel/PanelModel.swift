@@ -8,7 +8,7 @@ final class PanelModel {
         var id: Self { self }
     }
 
-    private let api: APIClient
+    var api: APIClient?        // nil mientras la app está bloqueada
     var tab: Tab = .pedidos
     private(set) var memories: [MemoryItem] = []
     private(set) var habits: [Habit] = []
@@ -46,7 +46,7 @@ final class PanelModel {
 
     /// Rechazar no ejecuta nada en el servidor, así que no pide biometría (la clave ya está desbloqueada).
     func reject(_ p: Pedido) async {
-        guard deciding == nil else { return }
+        guard let api, deciding == nil else { return }
         deciding = p.id
         defer { deciding = nil }
         do {
@@ -58,6 +58,7 @@ final class PanelModel {
     }
 
     func load(_ tab: Tab) async {
+        guard let api else { return }
         loading = true
         defer { loading = false }
         do {

@@ -16,7 +16,7 @@ struct ClaudeApproval: Equatable {
 
 @Observable
 final class ChatModel {
-    private let api: APIClient
+    var api: APIClient?        // nil mientras la app está bloqueada
     private(set) var lines: [ChatLine] = []
     private(set) var sending = false
     private(set) var loading = false
@@ -29,6 +29,7 @@ final class ChatModel {
     init(api: APIClient) { self.api = api }
 
     func loadHistory() async {
+        guard let api else { return }
         loading = true
         defer { loading = false }
         do {
@@ -46,7 +47,7 @@ final class ChatModel {
     /// Claude no responde solo: `allowClaude` solo es true cuando Sergio lo autoriza para este mensaje.
     func send(_ text: String, allowClaude: Bool = false) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !sending else { return }
+        guard let api, !text.isEmpty, !sending else { return }
         if !allowClaude { lines.append(ChatLine(role: .sergio, text: text, date: .now)) }
         pendingApproval = nil
         sending = true

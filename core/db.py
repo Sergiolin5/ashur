@@ -88,6 +88,21 @@ CREATE TABLE IF NOT EXISTS inventory (
     approved    INTEGER NOT NULL DEFAULT 0,  -- gates Ashur's tool list
     PRIMARY KEY (node_id, path)
 );
+CREATE TABLE IF NOT EXISTS folder_map (    -- the file map, built once per finished scan (0.52.0); one generation is live
+    node_id     TEXT NOT NULL,
+    gen         INTEGER NOT NULL,
+    path        TEXT NOT NULL,              -- the folder, ending in its separator; the root is '' (Windows) or '/'
+    parent      TEXT NOT NULL,              -- the root's parent is a NUL character
+    bytes       INTEGER NOT NULL,           -- everything below it
+    files       INTEGER NOT NULL,
+    here_files  INTEGER NOT NULL,           -- entries directly inside it
+    here_bytes  INTEGER NOT NULL,
+    protected   INTEGER NOT NULL,           -- sensitive entries below it: counted, never named
+    summary     INTEGER NOT NULL,           -- a folder the scan summarised whole
+    kinds       TEXT NOT NULL,              -- JSON {category: bytes}
+    PRIMARY KEY (node_id, gen, path)
+);
+CREATE INDEX IF NOT EXISTS folder_map_parent ON folder_map (node_id, gen, parent, bytes);
 CREATE TABLE IF NOT EXISTS memory (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created     REAL NOT NULL,
@@ -771,10 +786,37 @@ class DB:
     }
     MAP_EXT = {e: cat for cat, exts in MAP_CATEGORIES.items() for e in exts}
 
+    def file_map_meta(self, node_id: str) -> Optional[dict]:
+        """The live generation of a device's precomputed map, or None if it was never built."""
+        raw = self.setting("map_gen:" + node_id)
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError:
+            return None
+
     def file_map_readonly(self, node_id: str, path: str = "", limit: int = 60) -> dict:
         """Size of every direct child of `path` (a folder of the inventory), split by kind of file.
         A folder with a single subfolder and no files of its own is skipped through, so the first
-        screen is where the data actually starts. Sensitive entries are only counted, never named."""
+        screen is where the data actually starts. Sensitive entries are only counted, never named.
+        Reads the map built after the last scan (0.52.0); a device never built falls back to the live walk."""
+        meta = self.file_map_meta(node_id)
+        if not meta:
+            return {**self.file_map_live(node_id, path, limit), "built": None}
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            for _ in range(12):
+                res = self._map_level_built(c, node_id, meta, path, limit)
+                if res["files_here"] or len(res["children"]) != 1 or res["folders_total"] != 1:
+                    break
+                path = res["children"][0]["path"]
+            res["built"] = meta.get("built")
+            return res
+        finally:
+            c.close()
+
+    def file_map_live(self, node_id: str, path: str = "", limit: int = 60) -> dict:
+        """The map walked straight from the inventory rows: every level reads all the device's rows below it."""
         c = sqlite3.connect(self.path, timeout=30)
         try:
             for _ in range(12):
@@ -785,6 +827,128 @@ class DB:
             return res
         finally:
             c.close()
+
+    def _map_level_built(self, c, node_id: str, meta: dict, path: str, limit: int) -> dict:
+        sep, gen = meta["sep"], meta["gen"]
+        root = "/" if sep == "/" else ""
+        prefix = path if (not path or path.endswith(sep)) else path + sep
+        if not prefix:
+            prefix = root
+        me = c.execute("SELECT here_files, here_bytes, protected FROM folder_map WHERE node_id = ? AND gen = ? AND path = ?",
+                       (node_id, gen, prefix)).fetchone()
+        n, total = c.execute("SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM folder_map WHERE node_id = ? AND gen = ? AND parent = ?",
+                             (node_id, gen, prefix)).fetchone()
+        rows = c.execute("SELECT path, bytes, files, summary, kinds FROM folder_map WHERE node_id = ? AND gen = ? AND parent = ? "
+                         "ORDER BY bytes DESC, path LIMIT ?", (node_id, gen, prefix, limit)).fetchall()
+        children = []
+        for r in rows:
+            kinds = json.loads(r["kinds"])
+            children.append({"name": r["path"][len(prefix):-len(sep)], "bytes": r["bytes"], "files": r["files"],
+                             "summary": bool(r["summary"]), "path": r["path"],
+                             "kinds": dict(sorted(kinds.items(), key=lambda kv: -kv[1])[:4])})
+        here_n, here_b, protected = (me["here_files"], me["here_bytes"], me["protected"]) if me else (0, 0, 0)
+        parent = ""
+        if prefix and prefix != "/":
+            trimmed = prefix[:-1]
+            cut = trimmed.rfind(sep)
+            parent = trimmed[:cut + 1] if cut >= 0 else ""
+        return {"node_id": node_id, "path": prefix, "parent": parent, "total_bytes": total + here_b,
+                "files_here": here_n, "bytes_here": here_b, "folders_total": n,
+                "children": children, "more": max(0, n - limit), "protected": protected}
+
+    MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
+
+    def file_map_build(self, node_id: str) -> int:
+        """One pass over the device's inventory rows in path order (the primary key, so no sort) on its own connection.
+        A folder's rows are contiguous in that order, so only the open branch is kept in memory and each folder is
+        written as soon as the walk leaves it: a million-row device built in ~1 GB of RAM the other way, on a 4 GB
+        server. The new generation goes in short chunks (the shared lock is never held long: 2026-11-02 and 11-07
+        froze every device for minutes) and is switched on at once; the old one is deleted the same way. Returns folders."""
+        old = self.file_map_meta(node_id)
+        gen = (old["gen"] + 1) if old else 1
+        buf: list = []
+        written = [0]
+
+        def flush() -> None:
+            if buf:
+                with self.lock:
+                    self.conn.executemany("INSERT OR REPLACE INTO folder_map (node_id, gen, path, parent, bytes, files, here_files, "
+                                          "here_bytes, protected, summary, kinds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", buf)
+                    self.conn.commit()
+                written[0] += len(buf)
+                buf.clear()
+
+        def close(e: list) -> None:          # [path, parent, bytes, files, here_n, here_b, protected, summary, kinds, real]
+            if e[9]:
+                buf.append((node_id, gen, e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], json.dumps(e[8], ensure_ascii=False)))
+                if len(buf) >= self.MAP_WRITE_ROWS:
+                    flush()
+
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            first = c.execute("SELECT path FROM inventory WHERE node_id = ? LIMIT 1", (node_id,)).fetchone()
+            sep = "\\" if first and "\\" in first[0] else "/"
+            root = "/" if sep == "/" else ""
+            top = [root, "\x00", 0, 0, 0, 0, 0, 0, {}, True]
+            stack: list = []                                              # the open branch below the root
+            seen = 0
+            for p, size, kind in c.execute("SELECT path, size, kind FROM inventory WHERE node_id = ? ORDER BY path", (node_id,)):
+                seen += 1
+                if seen % 20000 == 0:
+                    time.sleep(0.02)                                     # leave the disk to everyone else now and then
+                if root and not p.startswith(root):
+                    continue
+                rel = p[len(root):].rstrip(sep)
+                if not rel:
+                    continue
+                segs = rel.split(sep)
+                folders, acc = [], root
+                for s_ in segs[:-1]:
+                    acc = acc + s_ + sep
+                    folders.append(acc)
+                summary = kind == "folder_summary"
+                if summary:
+                    folders.append(root + rel + sep)                     # the summarised folder is a child of its parent
+                keep = 0
+                while keep < len(stack) and keep < len(folders) and stack[keep][0] == folders[keep]:
+                    keep += 1
+                while len(stack) > keep:
+                    close(stack.pop())
+                for f in folders[keep:]:
+                    stack.append([f, stack[-1][0] if stack else root, 0, 0, 0, 0, 0, 0, {}, False])
+                chain = [top] + stack
+                if kind == "sensitive":
+                    for e in chain:
+                        e[6] += 1
+                    continue
+                size = size or 0
+                cat = "resumen" if summary else self.MAP_EXT.get(os.path.splitext(segs[-1])[1].lower(), "otros")
+                for e in stack:
+                    e[2] += size
+                    e[3] += 1 if kind == "file" else 0
+                    e[8][cat] = e[8].get(cat, 0) + size
+                    e[9] = True
+                if summary:
+                    stack[-1][7] = 1
+                else:
+                    d = chain[-1]
+                    d[4] += 1
+                    d[5] += size
+        finally:
+            c.close()
+        while stack:
+            close(stack.pop())
+        close(top)
+        flush()
+        self.set_setting("map_gen:" + node_id, json.dumps({"gen": gen, "sep": sep, "built": time.time(), "folders": written[0]}))
+        while True:                                                       # the old generations go, a chunk at a time
+            with self.lock:
+                cur = self.conn.execute("DELETE FROM folder_map WHERE rowid IN (SELECT rowid FROM folder_map "
+                                        "WHERE node_id = ? AND gen <> ? LIMIT ?)", (node_id, gen, self.MAP_WRITE_ROWS))
+                self.conn.commit()
+            if cur.rowcount < self.MAP_WRITE_ROWS:
+                break
+        return written[0]
 
     def _map_level(self, c, node_id: str, path: str, limit: int) -> dict:
         sep = "\\" if ("\\" in path or (len(path) >= 2 and path[1] == ":")) else "/"

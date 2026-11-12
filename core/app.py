@@ -246,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.51.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.52.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -610,6 +610,23 @@ def create_app(
         return {"ok": True}
 
     sweeping: set = set()
+    _fmap: dict = {}
+    _map_building = {"node": None}
+    _map_lock = threading.Lock()
+
+    def build_map(node_id: str) -> None:
+        """Folder totals for the file map, one device at a time: the server is the one doing the arithmetic."""
+        with _map_lock:
+            t0 = time.monotonic()
+            _map_building["node"] = node_id
+            try:
+                n = db.file_map_build(node_id)
+                db.log(clock(), node_id, "file_map_built", {"folders": n, "s": round(time.monotonic() - t0, 1)})
+            except Exception as e:
+                db.log(clock(), node_id, "file_map_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+            finally:
+                _map_building["node"] = None
+                _fmap.clear()
 
     def inventory_sweep(task: dict) -> None:
         """After a full scan, remove in the background the rows of its disks it did not see (files gone since). A scan
@@ -630,8 +647,10 @@ def create_app(
                 db.log(clock(), node_id, "inventory_sweep", {"rows": gone, "s": round(time.monotonic() - t0, 1)})
             except Exception as e:
                 db.log(clock(), node_id, "inventory_sweep_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+                return
             finally:
                 sweeping.discard(node_id)
+            build_map(node_id)                 # the inventory is settled: the map is worked out once, here (0.52.0)
 
         sweeping.add(node_id)
         if inventory_in_background:
@@ -756,8 +775,9 @@ def create_app(
 
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
                    "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem",
-                   "inventory_reset", "inventory_sweep", "inventory_sweep_failed", "encargo_failed", "lote_failed"}
-    CONN_EVENTS = {"offline", "restart_requeued", "inventory_reset", "inventory_sweep"}   # not failures: comings, goings, upkeep
+                   "inventory_reset", "inventory_sweep", "inventory_sweep_failed", "encargo_failed", "lote_failed",
+                   "file_map_built", "file_map_failed"}
+    CONN_EVENTS = {"offline", "restart_requeued", "inventory_reset", "inventory_sweep", "file_map_built"}   # not failures: comings, goings, upkeep
 
     # --- full self-test: runs the checks and a real question to every local model, returns one plain-text report ---
     selftest = {"running": False, "report": None, "started": 0.0, "checks": []}
@@ -1335,8 +1355,7 @@ def create_app(
                  "start": e["start_ts"], "end": e["end_ts"],
                  "minutes": None if e["end_ts"] is None else round((e["end_ts"] - e["start_ts"]) / 60, 2)} for e in rows]
 
-    # the file map: one folder level per request, cached a few minutes (a rescan rewrites the rows)
-    _fmap: dict = {}
+    # the file map: read from the totals built after each scan (0.52.0); levels cached until the next build
 
     @app.get("/api/map", dependencies=[Depends(require_admin)])
     def file_map(node: str = "", path: str = Query(default="", max_length=1024)):
@@ -1345,14 +1364,22 @@ def create_app(
             return {"counting": rows is None,
                     "nodes": [{"node_id": r["node_id"], "bytes": r["bytes"], "entries": r["entries"]}
                               for r in rows or []]}
-        key, now = (node, path), clock()
+        if not db.file_map_meta(node):          # never built: build it now, but never make the page wait for it
+            if inventory_in_background:
+                if _map_building["node"] is None:
+                    _map_building["node"] = node
+                    threading.Thread(target=build_map, args=(node,), daemon=True, name=f"file-map-{node}").start()
+                return {"node_id": node, "path": path, "parent": "", "building": True, "total_bytes": 0, "files_here": 0,
+                        "bytes_here": 0, "folders_total": 0, "children": [], "more": 0, "protected": 0, "built": None}
+            build_map(node)
+        key = (node, path)
         hit = _fmap.get(key)
-        if hit and now - hit[0] < 300:
-            return hit[1]
+        if hit:
+            return hit
         out = db.file_map_readonly(node, path)
         if len(_fmap) > 200:
             _fmap.clear()
-        _fmap[key] = (now, out)
+        _fmap[key] = out
         return out
 
     class ChatIn(BaseModel):

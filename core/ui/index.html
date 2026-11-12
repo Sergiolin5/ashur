@@ -2435,7 +2435,14 @@
       const r = await mapGet("api/map?node=" + encodeURIComponent(node) + "&path=" + encodeURIComponent(path || ""));
       if (!r.ok) throw new Error("HTTP " + r.status);
       const d = await r.json();
-      $("map-path").textContent = nm(node) + "  " + (d.path || "") + " · " + bytes(d.total_bytes) +
+      if (d.building) {                    // the core is working out this device's folder totals, once
+        $("map-path").textContent = nm(node) + " · preparando el mapa (solo la primera vez)…";
+        fill("map-list", [], "Un momento.");
+        setTimeout(() => { if (mapState.node === node) mapLoad(node, path); }, 5000);
+        return;
+      }
+      const when = d.built ? " · inventario del " + new Date(d.built * 1000).toLocaleString("es-CO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+      $("map-path").textContent = nm(node) + "  " + (d.path || "") + " · " + bytes(d.total_bytes) + when +
         (d.protected ? " · " + d.protected + (d.protected === 1 ? " elemento protegido" : " elementos protegidos") + " (no se miden)" : "");
       const rows = [];
       if (d.path) {

@@ -1282,3 +1282,94 @@ def test_file_map_first_screen_never_waits_for_a_slow_count(tmp_path):
         if d["nodes"]:
             break
     assert [n["node_id"] for n in d["nodes"]] == ["zima"] and d["counting"] is False
+
+
+MAP_ROWS = {
+    "zima": [{"path": "/host/DATA/Fotos/2024/a.jpg", "kind": "file", "size": 300},
+             {"path": "/host/DATA/Fotos/2024/b.heic", "kind": "file", "size": 200},
+             {"path": "/host/DATA/Fotos/notas.txt", "kind": "file", "size": 10},
+             {"path": "/host/DATA/Fotos/Vacia/cero.txt", "kind": "file", "size": 0},
+             {"path": "/host/DATA/Video/peli.mkv", "kind": "file", "size": 5000},
+             {"path": "/host/DATA/Bancos", "kind": "sensitive"},
+             {"path": "/host/DATA/Fotos/2024/claves.kdbx", "kind": "sensitive"},
+             {"path": "/host/DATA/Cache", "kind": "folder_summary", "size": 700},
+             {"path": "/host/DATA/Fotos/node_modules", "kind": "folder_summary", "size": 90},
+             {"path": "/host/suelto.iso", "kind": "file", "size": 1}],
+    "pc": [{"path": "C:\\Users\\s\\a.pdf", "kind": "file", "size": 40},
+           {"path": "C:\\Users\\s\\Juegos\\g.exe", "kind": "file", "size": 70},
+           {"path": "D:\\Juegos\\g.exe", "kind": "file", "size": 900},
+           {"path": "D:\\raiz.txt", "kind": "file", "size": 3}],
+}
+
+
+def _walk_map(get, node, path="", seen=None):
+    """Every level reachable from the first screen, as the panel would open them."""
+    seen = {} if seen is None else seen
+    d = get(node, path)
+    if d["path"] in seen:
+        return seen
+    seen[d["path"]] = d
+    for k in d["children"]:
+        if not k["summary"]:
+            _walk_map(get, node, k["path"], seen)
+    return seen
+
+
+def test_precomputed_file_map_matches_the_live_one(tmp_path):
+    """0.52.0: the map is built once per scan and read from folder_map; every level must say what the live walk said."""
+    from core.db import DB
+    db = DB(str(tmp_path / "m.db"))
+    for node, rows in MAP_ROWS.items():
+        db.inventory_add(node, rows)
+    live = {n: _walk_map(lambda nd, p: db.file_map_live(nd, p), n) for n in MAP_ROWS}
+    for n in MAP_ROWS:
+        assert db.file_map_build(n) > 0
+    pre = {n: _walk_map(lambda nd, p: db.file_map_readonly(nd, p), n) for n in MAP_ROWS}
+    assert pre == {n: {p: {**d, "built": pre[n][p]["built"]} for p, d in live[n].items()} for n in MAP_ROWS}
+    assert pre["zima"]["/host/"]["protected"] == 2 and pre["zima"]["/host/"]["files_here"] == 1
+    assert set(pre["pc"]) >= {"", "C:\\Users\\s\\", "D:\\"}
+
+
+def test_file_map_stays_visible_without_the_rows_and_rebuilds_after_a_scan(env):
+    c, _ = env
+    db = c.app.state.db
+    h = register(c, device_id="ryzen9", simulated=False)
+    beat(c, h, device_id="ryzen9")
+    first = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+    assert first["module"] == "inventory"
+    c.post("/nodes/ryzen9/inventory", headers=h, json={"reset": True, "rows": [{"path": "S:\\a\\uno.txt", "size": 5}]})
+    c.post(f"/tasks/{first['id']}/result", headers=h, json={"ok": True, "result": {"entries": 1}})
+    top = c.get("/api/map?node=ryzen9", headers=A).json()       # built when the scan finished
+    assert top["path"] == "S:\\a\\" and top["bytes_here"] == 5 and top["built"]
+    db.conn.execute("DELETE FROM inventory WHERE node_id = 'ryzen9'"); db.conn.commit()
+    assert c.get("/api/map?node=ryzen9", headers=A).json()["bytes_here"] == 5   # the device can be off: the map stays
+    c.post("/api/inventory/refresh", headers=A)
+    task = c.get("/nodes/ryzen9/tasks/next", headers=h).json()
+    c.post("/nodes/ryzen9/inventory", headers=h, json={"reset": True, "rows": [{"path": "S:\\a\\dos.txt", "size": 7}]})
+    c.post(f"/tasks/{task['id']}/result", headers=h, json={"ok": True, "result": {"entries": 1}})
+    assert c.get("/api/map?node=ryzen9", headers=A).json()["bytes_here"] == 7   # the finished scan rebuilt it
+    assert any(e["event"] == "file_map_built" for e in db.log_rows(50))
+    assert db.conn.execute("SELECT COUNT(DISTINCT gen) FROM folder_map WHERE node_id = 'ryzen9'").fetchone()[0] == 1
+
+
+def test_file_map_says_it_is_being_prepared_instead_of_waiting(tmp_path):
+    import time as _t
+    from fastapi.testclient import TestClient as TC
+    app = create_app(str(tmp_path / "b.db"), ENROLL, ADMIN, sweep_every_s=None, inventory_in_background=True)
+    app.state.db.inventory_add("zima", MAP_ROWS["zima"])
+    real = app.state.db.file_map_build
+
+    def slow(n):
+        _t.sleep(2)
+        return real(n)
+    app.state.db.file_map_build = slow
+    c = TC(app)
+    t0 = _t.monotonic()
+    d = c.get("/api/map?node=zima", headers=A).json()
+    assert _t.monotonic() - t0 < 1 and d["building"] is True and d["children"] == []
+    for _ in range(30):
+        _t.sleep(0.2)
+        d = c.get("/api/map?node=zima", headers=A).json()
+        if not d.get("building"):
+            break
+    assert d["path"] == "/host/" and not d.get("building")

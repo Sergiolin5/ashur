@@ -556,6 +556,13 @@
     <div class="page" data-page="space" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Archivos y espacio</div></div>
     <section>
+      <h2>¿Está respaldado?</h2>
+      <div class="group" id="backup"></div>
+      <div class="group" style="margin-top:12px"><button class="link" id="backup-refresh" type="button">Recalcular</button></div>
+      <div class="note">Por disco: cuánto de lo que tiene existe también en otro disco, de este u otro equipo. Archivos de 1 MB o más, por huella. Los más pequeños solo por nombre y tamaño: es una copia probable, nunca suficiente para borrar. Ashur no mueve ni borra nada aquí.</div>
+    </section>
+
+    <section>
       <h2>Archivos duplicados</h2>
       <div class="group" id="dups"></div>
       <div class="group" style="margin-top:12px"><button class="link" id="inv-refresh" type="button">Repasar inventario ahora</button></div>
@@ -2321,7 +2328,36 @@
   });
   $("docs-go").addEventListener("click", () => loadDocs($("docs-q").value.trim()));
   $("docs-q").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); loadDocs($("docs-q").value.trim()); } });
+  async function loadBackup() {
+    try {
+      const d = await (await api("api/backup")).json();
+      if (d.pending) {
+        fill("backup", [], "Calculando…");
+        setTimeout(() => { if (tab === "settings") loadBackup(); }, 15000);
+        return;
+      }
+      const pct = (a, b) => b ? Math.round(100 * a / b) + " %" : "—";
+      const rows = d.disks.filter((x) => x.files_fp || x.small_files || x.unknown_files)
+        .sort((a, b) => (b.node_id === "zima-server") - (a.node_id === "zima-server") || (b.bytes_fp + b.small_bytes) - (a.bytes_fp + a.small_bytes))
+        .map((x) => {
+          const where = x.where.map((w) => nm(w.node_id) + " " + diskName(w.node_id, d.disks.find((y) => y.node_id === w.node_id && y.key === w.key) || w)).join(", ");
+          const lines = [bytes(x.copied_bytes) + " de " + bytes(x.bytes_fp) + " con copia en otro disco" + (where ? " · sobre todo en " + where : "")];
+          if (x.small_files) lines.push("Pequeños: " + nf.format(x.probable_files) + " de " + nf.format(x.small_files) + " con copia probable");
+          if (x.unknown_files) lines.push(nf.format(x.unknown_files) + " sin huella (" + bytes(x.unknown_bytes) + ")");
+          const r = row({ title: nm(x.node_id) + " · " + diskName(x.node_id, x), detail: lines.join("\n"), value: pct(x.copied_bytes, x.bytes_fp) });
+          const det = r.querySelector(".detail"); if (det) det.style.whiteSpace = "pre-line";
+          return r;
+        });
+      fill("backup", rows, "Aún no hay inventarios con discos.");
+    } catch (e) { fill("backup", [], "No pude leer el informe."); }
+  }
+  $("backup-refresh").addEventListener("click", async () => {
+    try { await api("api/backup/refresh", { method: "POST" }); } catch (e) {}
+    fill("backup", [], "Calculando…");
+    setTimeout(loadBackup, 3000);
+  });
   async function loadSpace() {
+    loadBackup();
     try {
       const r = await api("api/inventory/report");
       const d = await r.json();

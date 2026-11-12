@@ -246,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.52.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.53.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -776,7 +776,7 @@ def create_app(
     DIAG_EVENTS = {"task_failed", "chat_error", "chat_unanswered", "public_locked", "revoked", "offline", "summary_failed",
                    "push_failed", "audio_failed", "inventory_summary_failed", "restart_requeued", "chat_blocked_budget", "node_problem",
                    "inventory_reset", "inventory_sweep", "inventory_sweep_failed", "encargo_failed", "lote_failed",
-                   "file_map_built", "file_map_failed"}
+                   "file_map_built", "file_map_failed", "backup_report_failed"}
     CONN_EVENTS = {"offline", "restart_requeued", "inventory_reset", "inventory_sweep", "file_map_built"}   # not failures: comings, goings, upkeep
 
     # --- full self-test: runs the checks and a real question to every local model, returns one plain-text report ---
@@ -1291,6 +1291,41 @@ def create_app(
     @app.get("/api/inventory/report", dependencies=[Depends(require_admin)])
     def inventory_report():
         return space_report() or {"pending": True}
+
+    # the backup report: how much of each disk lives on another disk too (0.53.0), at most every 6 h or when asked
+    _backup = {"at": -1e18, "data": None, "busy": False}
+
+    def backup_report():
+        if not _backup["busy"] and clock() - _backup["at"] > 6 * 3600:
+            _backup["busy"] = True
+
+            def run():
+                try:
+                    disks = {n["id"]: [{"key": d["key"], "mount": d["mount"]} for d in n["disks"]]
+                             for n in db.nodes() if not n["simulated"] and n.get("disks")}
+                    db.ensure_report_indexes()
+                    _backup["data"] = {**db.backup_report_readonly(disks), "computed_at": clock()}
+                except Exception as e:
+                    db.log(clock(), None, "backup_report_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
+                finally:
+                    _backup["at"], _backup["busy"] = clock(), False
+            if inventory_in_background:
+                threading.Thread(target=run, daemon=True, name="ashur-backup").start()
+            else:
+                run()
+        return _backup["data"]
+
+    @app.get("/api/backup", dependencies=[Depends(require_admin)])
+    def backup_view():
+        d = backup_report()
+        return d if d else {"pending": True}
+
+    @app.post("/api/backup/refresh", dependencies=[Depends(require_admin)])
+    def backup_refresh():
+        if not _backup["busy"]:
+            _backup["at"] = -1e18
+        backup_report()
+        return {"ok": True}
 
     # --- my time: start/stop what Sergio is doing, then see where the week went -------------
     DEFAULT_TIME_CATEGORIES = ["Trabajo", "Ashur", "Casa", "Estudio", "Ocio", "Otro"]

@@ -1373,3 +1373,52 @@ def test_file_map_says_it_is_being_prepared_instead_of_waiting(tmp_path):
         if not d.get("building"):
             break
     assert d["path"] == "/host/" and not d.get("building")
+
+
+def test_backup_report_by_disk(tmp_path):
+    """0.53.0: how much of each disk also lives on another disk. Fingerprints for 1 MB or more; under that, the
+    same name and size elsewhere is only a «probable» copy (Sergio's choice, 2026-11-12): never enough to delete."""
+    from core.db import DB
+    db = DB(str(tmp_path / "r.db"))
+    MB = 1 << 20
+    db.inventory_add("zima", [
+        {"path": "/host/DATA/fotos/a.jpg", "kind": "file", "size": 3 * MB, "hash": "fp:a"},
+        {"path": "/host/DATA/.media/Seagate/fotos/a.jpg", "kind": "file", "size": 3 * MB, "hash": "fp:a"},   # other disk
+        {"path": "/host/DATA/v/b.mkv", "kind": "file", "size": 5 * MB, "hash": "fp:b"},
+        {"path": "/host/DATA/v/b-copia.mkv", "kind": "file", "size": 5 * MB, "hash": "fp:b"},             # same disk only
+        {"path": "/host/DATA/docs/c.pdf", "kind": "file", "size": 2 * MB, "hash": "fp:c"},
+        {"path": "/host/DATA/docs/Notas.txt", "kind": "file", "size": 10},
+        {"path": "/host/DATA/docs/x.txt", "kind": "file", "size": 20},
+        {"path": "/host/DATA/docs/vacio.txt", "kind": "file", "size": 0},
+        {"path": "/host/DATA/raro.bin", "kind": "file", "size": 4 * MB},                                  # no fingerprint
+        {"path": "/host/DATA/.media/Seagate/y.txt", "kind": "file", "size": 20},
+        {"path": "/host/DATA/.media/Seagate/vacio.txt", "kind": "file", "size": 0},
+        {"path": "/host/DATA/Bancos", "kind": "sensitive"},
+        {"path": "/host/DATA/cache", "kind": "folder_summary", "size": 999}])
+    db.inventory_add("pc", [{"path": "C:\\Users\\s\\c.pdf", "kind": "file", "size": 2 * MB, "hash": "fp:c"},   # other device
+                            {"path": "C:\\Users\\s\\notas.txt", "kind": "file", "size": 10}])
+    disks = {"zima": [{"key": "data", "mount": "/host/DATA"}, {"key": "sea", "mount": "/host/DATA/.media/Seagate"}],
+             "pc": [{"key": "c", "mount": "C:\\"}]}
+    r = {(d["node_id"], d["key"]): d for d in db.backup_report_readonly(disks)["disks"]}
+    data = r[("zima", "data")]
+    assert (data["files_fp"], data["bytes_fp"]) == (4, 15 * MB)
+    assert (data["copied_files"], data["copied_bytes"]) == (2, 5 * MB)                 # a.jpg (Seagate) and c.pdf (pc)
+    assert {(w["node_id"], w["key"]): w["bytes"] for w in data["where"]} == {("zima", "sea"): 3 * MB, ("pc", "c"): 2 * MB}
+    assert (data["small_files"], data["probable_files"], data["probable_bytes"]) == (3, 1, 10)   # notas.txt; x/y differ by name
+    assert (data["unknown_files"], data["unknown_bytes"]) == (1, 4 * MB)
+    sea = r[("zima", "sea")]
+    assert (sea["copied_files"], sea["copied_bytes"], sea["probable_files"]) == (1, 3 * MB, 0)
+    assert r[("pc", "c")]["copied_bytes"] == 2 * MB and r[("pc", "c")]["probable_files"] == 1
+
+
+def test_backup_report_endpoint_computes_in_the_background(env):
+    c, _ = env
+    db = c.app.state.db
+    h = register(c, device_id="zima", simulated=False)
+    c.post("/nodes/zima/heartbeat", headers=h, json={"mode": "full", "disks": [
+        {"device": "d", "mount": "/host/DATA", "fstype": "ext4", "total": 9, "used": 1, "scanned": True}]})
+    db.inventory_add("zima", [{"path": "/host/DATA/a.jpg", "kind": "file", "size": 2 << 20, "hash": "fp:a"}])
+    d = c.get("/api/backup", headers=A).json()
+    assert d["disks"][0]["mount"] == "/host/DATA" and d["disks"][0]["copied_bytes"] == 0 and d["computed_at"]
+    assert c.post("/api/backup/refresh", headers=A).json()["ok"] is True
+    assert c.get("/api/backup").status_code == 401

@@ -752,6 +752,102 @@ class DB:
         finally:
             c.close()
 
+    def backup_report_readonly(self, disks: dict, small: int = 1 << 20) -> dict:
+        """How much of each disk also lives on another disk (of the same device or another one): the first question
+        before anything is deleted (Sergio, 2026-11-12). Files of 1 MB or more are matched by fingerprint; under that
+        a file with the same name and size on another disk is only a «probable» copy, never enough to delete.
+        `disks` is {node_id: [{"key", "mount"}]}; a file belongs to the longest mount its path starts with.
+        Own connection and a temporary table on disk: no shared lock, and memory stays small on a 4 GB server."""
+        mounts: dict[str, list] = {}
+        ids: dict[tuple, int] = {}
+        out: list[dict] = []
+        for node, lst in disks.items():
+            for d in lst:
+                m = d["mount"].replace("\\", "/").lower().rstrip("/") + "/"
+                ids[(node, d["key"])] = len(out)
+                mounts.setdefault(node, []).append((m, len(out)))
+                out.append({"node_id": node, "key": d["key"], "mount": d["mount"], "files_fp": 0, "bytes_fp": 0,
+                            "copied_files": 0, "copied_bytes": 0, "where": {}, "small_files": 0, "small_bytes": 0,
+                            "probable_files": 0, "probable_bytes": 0, "unknown_files": 0, "unknown_bytes": 0})
+        for lst in mounts.values():
+            lst.sort(key=lambda t: -len(t[0]))
+
+        def disk_of(node: str, path: str) -> Optional[int]:
+            np = path.replace("\\", "/").lower()
+            for m, i in mounts.get(node, ()):
+                if np.startswith(m) or np + "/" == m:
+                    return i
+            return None
+
+        c = sqlite3.connect(self.path, timeout=30)
+        try:
+            group: list = []
+            key = None
+
+            def close_group() -> None:
+                where = {i for i, _ in group}
+                for i, size in group:
+                    e = out[i]
+                    e["files_fp"] += 1
+                    e["bytes_fp"] += size
+                    others = sorted(where - {i})
+                    if others:
+                        e["copied_files"] += 1
+                        e["copied_bytes"] += size
+                        e["where"][others[0]] = e["where"].get(others[0], 0) + size
+            seen = 0
+            for node, path, size, h in c.execute("SELECT node_id, path, COALESCE(size, 0), hash FROM inventory "
+                                                 "WHERE hash IS NOT NULL AND hash != '' AND kind = 'file' ORDER BY hash, size"):
+                seen += 1
+                if seen % 20000 == 0:
+                    time.sleep(0.02)
+                i = disk_of(node, path)
+                if i is None:
+                    continue
+                if (h, size) != key:
+                    close_group()
+                    group, key = [], (h, size)
+                group.append((i, size))
+            close_group()
+
+            c.execute("PRAGMA temp_store = FILE")
+            c.execute("CREATE TEMP TABLE small_files (k INTEGER NOT NULL, d INTEGER NOT NULL, size INTEGER NOT NULL)")
+            buf: list = []
+            for node, path, size in c.cursor().execute("SELECT node_id, path, COALESCE(size, 0) FROM inventory "
+                                                       "WHERE kind = 'file' AND (hash IS NULL OR hash = '')"):
+                seen += 1
+                if seen % 20000 == 0:
+                    time.sleep(0.02)
+                i = disk_of(node, path)
+                if i is None:
+                    continue
+                e = out[i]
+                if size >= small:
+                    e["unknown_files"] += 1
+                    e["unknown_bytes"] += size
+                    continue
+                e["small_files"] += 1
+                e["small_bytes"] += size
+                if size:                                                   # empty files say nothing about a copy
+                    name = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+                    buf.append((hash((name, size)), i, size))
+                    if len(buf) >= 5000:
+                        c.executemany("INSERT INTO small_files VALUES (?, ?, ?)", buf)
+                        buf.clear()
+            if buf:
+                c.executemany("INSERT INTO small_files VALUES (?, ?, ?)", buf)
+            for d, n, b in c.execute(
+                    """SELECT s.d, COUNT(*), SUM(s.size) FROM small_files s
+                       JOIN (SELECT k FROM small_files GROUP BY k HAVING COUNT(DISTINCT d) > 1) g ON g.k = s.k
+                       GROUP BY s.d"""):
+                out[d]["probable_files"], out[d]["probable_bytes"] = n, b
+        finally:
+            c.close()
+        for e in out:
+            e["where"] = [{"node_id": out[i]["node_id"], "key": out[i]["key"], "bytes": b}
+                          for i, b in sorted(e["where"].items(), key=lambda kv: -kv[1])[:3]]
+        return {"disks": out}
+
     def inventory_find(self, words: list[str], exts: Optional[tuple] = None, limit: int = 8) -> list[dict]:
         """Files whose path contains every word (any word if none contains all), by name only.
         Sensitive entries have no size and are left out; folders summarised whole are skipped."""

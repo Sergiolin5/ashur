@@ -28,6 +28,11 @@ struct PanelView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Pedido", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.notice ?? "")
+        }
         .task(id: model.tab) { await model.load(model.tab) }
     }
 
@@ -71,13 +76,18 @@ struct PanelView: View {
             ContentUnavailableView("Sin pedidos", systemImage: "checkmark.seal")
         }
         ForEach(model.pedidos) { p in
-            PedidoRow(pedido: p)
+            PedidoRow(pedido: p, busy: model.deciding == p.id,
+                      approve: { Task { await model.approve(p) } },
+                      reject: { Task { await model.reject(p) } })
         }
     }
 }
 
 struct PedidoRow: View {
     let pedido: Pedido
+    var busy = false
+    var approve: (() -> Void)?
+    var reject: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -92,6 +102,19 @@ struct PedidoRow: View {
             }
             if let result = pedido.result, !result.isEmpty {
                 Text(verbatim: result).font(.caption).foregroundStyle(.secondary)
+            }
+            if pedido.isPending, let approve, let reject {
+                HStack {
+                    Button(action: approve) {
+                        Label("Aprobar", systemImage: "touchid")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Rechazar", role: .destructive, action: reject)
+                        .buttonStyle(.bordered)
+                    if busy { ProgressView() }
+                }
+                .disabled(busy)
+                .padding(.top, 4)
             }
         }
     }

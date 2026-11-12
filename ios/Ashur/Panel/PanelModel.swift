@@ -19,6 +19,43 @@ final class PanelModel {
     init(api: APIClient) { self.api = api }
 
     var pendingCount: Int { pedidos.filter(\.isPending).count }
+    private(set) var deciding: Int?          // id del pedido que se está decidiendo
+    var notice: String?
+
+    /// Funcionalidad (c). Aprobar = leer la clave con biometría (Touch ID en el Duo, Face ID en el 15 Pro)
+    /// + POST /api/claude-requests/{id}/approve con esa clave. Sin biometría no sale la petición.
+    func approve(_ p: Pedido) async {
+        guard deciding == nil else { return }
+        deciding = p.id
+        defer { deciding = nil }
+        do {
+            guard let key = try await KeyStore.read(reason: "Aprobar: \(p.label ?? p.action)") else {
+                error = "La clave guardada ya no es válida. Ciérrala con «Olvidar la clave» y escríbela otra vez."
+                return
+            }
+            let r: ApproveResult = try await APIClient(key: key).post("/api/claude-requests/\(p.id)/approve")
+            notice = r.status == "approved" ? (r.result?.isEmpty == false ? r.result : "Aprobado.")
+                                            : "No se hizo: \(r.result ?? "sin detalle")"
+        } catch KeyStore.Failure.cancelled {
+            return                                   // Sergio canceló Touch ID: nada sale al servidor
+        } catch {
+            self.error = error.localizedDescription  // 404: ya se decidió o no existe
+        }
+        await load(.pedidos)
+    }
+
+    /// Rechazar no ejecuta nada en el servidor, así que no pide biometría (la clave ya está desbloqueada).
+    func reject(_ p: Pedido) async {
+        guard deciding == nil else { return }
+        deciding = p.id
+        defer { deciding = nil }
+        do {
+            let _: OK = try await api.post("/api/claude-requests/\(p.id)/reject")
+        } catch {
+            self.error = error.localizedDescription
+        }
+        await load(.pedidos)
+    }
 
     func load(_ tab: Tab) async {
         loading = true

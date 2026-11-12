@@ -54,9 +54,11 @@ struct Pedido: Decodable, Identifiable {
 }
 
 struct ApproveResult: Decodable {
-    let status: String
+    let status: String            // "approved" o "not_done"
     let result: String?
 }
+
+struct OK: Decodable { let ok: Bool }
 
 struct ChatHistory: Decodable {
     struct Message: Decodable {

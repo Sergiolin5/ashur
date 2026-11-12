@@ -1,0 +1,5 @@
+name: mudanza
+version: 0.1.0
+os: [windows, macos, linux]
+tier: read          # stage 2 only copies: reads the originals and uploads them; never changes a file here
+needs: {}

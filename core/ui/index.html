@@ -620,7 +620,7 @@
     <section>
       <h2>Mudanzas al servidor</h2>
       <div class="group" id="map-moves"></div>
-      <div class="note">Cada carpeta «Mía» que mandes al servidor queda aquí como propuesta hasta que la apruebes. «Copiar» deja el original donde está; «Mover» lo manda a _cuarentena_ashur en su mismo disco cuando la copia esté verificada. Por ahora solo se proponen y aprueban: la copia llega en la siguiente etapa.</div>
+      <div class="note">Cada carpeta «Mía» que mandes al servidor queda aquí como propuesta hasta que la apruebes. «Copiar» deja el original donde está; «Mover» lo manda a _cuarentena_ashur en su mismo disco cuando la copia esté verificada. Al aprobarla, el equipo copia cuando esté libre y el servidor verifica cada archivo con SHA-256. «Mover» se puede proponer pero todavía no aprobar: mandar el original a cuarentena llega en la siguiente etapa.</div>
     </section>
     </div>
 
@@ -2561,17 +2561,23 @@
       $("map-path").textContent = "No pude leer el mapa (" + (e && e.name === "AbortError" ? "el núcleo tardó demasiado" : (e && e.message) || "error") + "). Toca otra vez en un momento.";
     }
   }
-  const MOVE_STATE = { propuesta: "propuesta", aprobada: "aprobada · espera la etapa de copia", en_curso: "en curso",
+  const MOVE_STATE = { propuesta: "propuesta", aprobada: "aprobada · en cola, empieza cuando el equipo esté libre", en_curso: "copiando",
                       hecha: "hecha", fallida: "falló", cancelada: "cancelada" };
   async function loadMoves() {
     try {
       const r = await api("api/mudanzas");
       if (!r.ok) throw new Error("HTTP " + r.status);
       const list = await r.json();
-      fill("map-moves", list.map((m) => {
+      clearTimeout(loadMoves._t);           // while something copies, the list follows it every 10 s
+      if (list.some((m) => m.estado === "en_curso" || m.estado === "aprobada")) loadMoves._t = setTimeout(loadMoves, 10000);
+      const warn = list.length && list[0].volumen === false
+        ? [row({ title: "Falta el volumen /consolidado en ashur-core", detail: "Sin él no se copia nada: agrega /DATA/Consolidado → /consolidado en los ajustes de la app en ZimaOS." })] : [];
+      fill("map-moves", warn.concat(list.map((m) => {
+        const prog = (m.estado === "en_curso" || m.estado === "hecha" || m.estado === "fallida") && m.files
+          ? " · " + nf.format(m.done_files) + " de " + nf.format(m.files) + " archivos (" + bytes(m.done_bytes) + ")" : "";
         const r2 = row({ title: nm(m.node_id) + "  " + m.path, value: bytes(m.bytes),
                          detail: (m.modo === "mover" ? "mover" : "copiar") + " · " + nf.format(m.files) + (m.files === 1 ? " archivo" : " archivos") +
-                                 " · → " + m.dest + " · " + (MOVE_STATE[m.estado] || m.estado) + (m.error ? " · " + m.error : "") });
+                                 " · → " + m.dest + " · " + (MOVE_STATE[m.estado] || m.estado) + prog + (m.error ? " · " + m.error : "") });
         const bs = el("div", "qbtns");
         const act = async (what) => {
           const res = await api("api/mudanzas/" + m.id + "/" + what, { method: "POST" });
@@ -2582,7 +2588,7 @@
         if (m.estado === "propuesta" || m.estado === "aprobada") { const b = el("button", "tog", "Cancelar"); b.type = "button"; twice(b, "¿Seguro?", () => act("cancelar")); bs.append(b); }
         if (bs.children.length) r2.insertBefore(bs, r2.querySelector(".value"));
         return r2;
-      }), "Ninguna todavía.", 6);
+      })), "Ninguna todavía.", 6);
     } catch (e) { fill("map-moves", [], "No pude leer las mudanzas."); }
   }
   document.querySelector('.menu-item[data-page="map"]').addEventListener("click", () => { mapLoad(mapState.node, ""); loadMoves(); });

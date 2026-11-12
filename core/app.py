@@ -160,6 +160,7 @@ def create_app(
     updater_url: Optional[str] = None,
     latest_fn: Optional[Callable[[], Optional[str]]] = None,
     push_fn: Optional[Callable[[dict, dict], str]] = None,
+    consolidado_root: Optional[str] = None,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -246,7 +247,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.55.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.56.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -601,6 +602,17 @@ def create_app(
             db.finish_task(task_id, res.ok, res.model_dump(), now)
         db.log(now, t["node_id"], "task_done" if res.ok else "task_failed",
                {"task_id": task_id, "module": t["module"], "error": res.error})
+        if t["module"] == "mudanza":
+            mid = (json.loads(t["payload"]) if isinstance(t["payload"], str) else (t["payload"] or {})).get("mudanza_id")
+            r = res.result or {}
+            if mid is not None:
+                if res.ok and not r.get("fallidos"):
+                    db.mudanza_finish(mid, "hecha", None, now)
+                else:
+                    why = res.error or f"{r.get('fallidos')} archivos no se pudieron copiar"
+                    db.mudanza_finish(mid, "fallida", why[:300], now)
+                db.log(now, t["node_id"], "mudanza", {"id": mid, "estado": "hecha" if res.ok and not r.get("fallidos") else "fallida",
+                                                      **{k: r[k] for k in ("copiados", "enlazados", "fallidos") if k in r}})
         if t["module"] == "inventory" and res.ok and not (res.result or {}).get("stopped"):
             inventory_sweep(t)
         if t["module"] == "voice":
@@ -1441,6 +1453,12 @@ def create_app(
     # --- the consolidation, stage 1 (0.55.0): Sergio proposes and approves; nothing travels yet --------------------
     CONSOLIDADO = "/DATA/Consolidado/"
 
+    # the server's own node sees /DATA as /host/DATA: the consolidation must never be copied into itself
+    CONSOLIDADO_SEEN = ("/host/DATA/Consolidado/", "/DATA/Consolidado/")
+
+    def consolidado_under(path: str) -> list[str]:
+        return [c for c in CONSOLIDADO_SEEN if c.startswith(path) and c != path]
+
     def mirror_dest(node: str, path: str) -> str:
         """Espejo por equipo (his choice): /DATA/Consolidado/<device>/<disk>/<path>/; «S:\\a\\» → «S/a/»."""
         rel = path.replace("\\", "/").replace(":", "").strip("/")
@@ -1458,12 +1476,14 @@ def create_app(
         marks = db.folder_marks(m.node)
         if db.mark_under(marks, path)[0] != "mia":
             raise HTTPException(422, "solo se mudan carpetas marcadas «Mía»")
+        if any(c in path for c in CONSOLIDADO_SEEN):
+            raise HTTPException(422, "eso ya es el consolidado")
         for a in db.mudanzas_active(m.node):
             if a["path"].startswith(path) or path.startswith(a["path"]):
                 raise HTTPException(409, f"ya hay una mudanza para {a['path']} ({a['estado']})")
         noise, last = [], None                                  # the topmost «Ruido» folders inside it stay behind
-        for p, mk in sorted(marks.items()):
-            if mk == "ruido" and p.startswith(path) and p != path and not (last and p.startswith(last)):
+        for p in sorted([p for p, mk in marks.items() if mk == "ruido"] + consolidado_under(path)):
+            if p.startswith(path) and p != path and not (last and p.startswith(last)):
                 noise.append(p)
                 last = p
         tot = db.map_totals(m.node, [path] + noise)
@@ -1475,16 +1495,129 @@ def create_app(
         db.log(clock(), m.node, "mudanza", {"id": out["id"], "estado": "propuesta", "modo": m.modo, "bytes": size})
         return out
 
+    def queue_move(m: dict) -> int:
+        marks = db.folder_marks(m["node_id"])                   # its «Ruido» subfolders stay home
+        skip = sorted({p for p, mk in marks.items() if mk == "ruido" and p.startswith(m["path"]) and p != m["path"]}
+                      | set(consolidado_under(m["path"])))
+        return db.add_task("mudanza", {"mudanza_id": m["id"], "root": m["path"], "skip": skip, "modo": m["modo"]},
+                           Weight.HEAVY.value, clock(), target=m["node_id"])
+
+    for _m in db.mudanzas():                                    # approved under 0.55.0, when approving queued nothing
+        if _m["estado"] in ("aprobada", "en_curso") and not db.has_open_task("mudanza", "mudanza_id", _m["id"]):
+            queue_move(_m)
+
     @app.get("/api/mudanzas", dependencies=[Depends(require_admin)])
     def mudanzas_list():
-        return db.mudanzas()
+        vol = os.path.isdir(CON_ROOT)
+        return [{**m, "volumen": vol} for m in db.mudanzas()]
+
+    # --- stage 2 (0.56.0): the node asks, uploads; the core verifies SHA-256 before a file takes its place -----------
+    CON_ROOT = consolidado_root or os.environ.get("ASHUR_CONSOLIDADO", "/consolidado")
+    CON_FREE_MARGIN = 5 << 30                                   # never fill the NVMe: 5 GB stay free
+
+    class FileAsk(BaseModel):
+        src: str = Field(min_length=1, max_length=4096)
+        size: int = Field(ge=0)
+        sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    def move_of(node_id: str, mid: int) -> dict:
+        m = db.mudanza(mid)
+        if not m or m["node_id"] != node_id or m["estado"] not in ("aprobada", "en_curso"):
+            raise HTTPException(409, "esa mudanza no está aprobada para este equipo")
+        if not os.path.isdir(CON_ROOT):
+            raise HTTPException(503, f"falta el volumen {CON_ROOT} en ashur-core: no hay dónde copiar")
+        if m["estado"] == "aprobada":
+            db.mudanza_state(mid, ("aprobada",), "en_curso", clock())
+        return m
+
+    def dest_of(m: dict, src: str) -> tuple[str, str]:
+        """(mirror path as stored, real path inside the container) for one file of the move; never outside it."""
+        if not src.startswith(m["path"]):
+            raise HTTPException(422, "ese archivo no está dentro de la carpeta de la mudanza")
+        parts = src[len(m["path"]):].replace("\\", "/").split("/")
+        if not parts or any(p in ("", ".", "..") for p in parts):
+            raise HTTPException(422, "ruta no válida")
+        mirror = m["dest"] + "/".join(parts)
+        return mirror, os.path.join(CON_ROOT, mirror[len(CONSOLIDADO):])
+
+    def real_of(mirror: str) -> str:
+        return os.path.join(CON_ROOT, mirror[len(CONSOLIDADO):])
+
+    @app.post("/nodes/{node_id}/mudanza/{mid}/check")
+    def mudanza_check(mid: int, f: FileAsk, node: dict = Depends(require_node)):
+        """«listo» (already here from an earlier pass), «hash» (send its SHA-256 first), «enlazado» (the server had the
+        same content: linked, nothing to send) or «subir»."""
+        m = move_of(node["id"], mid)
+        mirror, real = dest_of(m, f.src)
+        row = db.mudanza_file(mid, f.src)
+        if row and row["estado"] in ("copiado", "enlazado") and row["size"] == f.size and os.path.exists(real):
+            return {"estado": "listo"}
+        if not f.sha256:
+            return {"estado": "hash"}
+        have = db.sha_where(f.sha256)
+        if have:
+            src_real = real_of(have)
+            if os.path.isfile(src_real) and os.path.getsize(src_real) == f.size:
+                os.makedirs(os.path.dirname(real), exist_ok=True)
+                if not (os.path.exists(real) and os.path.samefile(real, src_real)):
+                    tmp = real + ".ashur-enlace"
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                    os.link(src_real, tmp)
+                    os.replace(tmp, real)
+                db.mudanza_file_done(mid, f.src, f.size, f.sha256, mirror, "enlazado", clock())
+                return {"estado": "enlazado"}
+            db.sha_forget(f.sha256)                             # the copy it pointed at is gone
+        return {"estado": "subir"}
+
+    @app.put("/nodes/{node_id}/mudanza/{mid}/file")
+    async def mudanza_file(mid: int, request: Request, src: str = Query(max_length=4096), size: int = Query(ge=0),
+                           sha256: str = Query(pattern=r"^[0-9a-f]{64}$"), node: dict = Depends(require_node)):
+        """Streams to a temporary file, hashing as it arrives; only a file whose size and SHA-256 match takes its place."""
+        import hashlib, shutil, uuid
+        # disk writes and the base go to worker threads: a file written in the web loop froze everyone (lesson of 0.40.2)
+        m = await asyncio.to_thread(move_of, node["id"], mid)
+        mirror, real = dest_of(m, src)
+        if (await asyncio.to_thread(shutil.disk_usage, CON_ROOT)).free < size + CON_FREE_MARGIN:
+            raise HTTPException(507, "el disco del consolidado se queda sin espacio (se guardan 5 GB libres)")
+        tmpdir = os.path.join(CON_ROOT, ".ashur-tmp")
+        os.makedirs(tmpdir, exist_ok=True)
+        tmp = os.path.join(tmpdir, uuid.uuid4().hex)
+        h, got = hashlib.sha256(), 0
+        try:
+            out = await asyncio.to_thread(open, tmp, "wb")
+            try:
+                async for chunk in request.stream():
+                    await asyncio.to_thread(out.write, chunk)
+                    h.update(chunk)
+                    got += len(chunk)
+                    if got > size:
+                        break
+            finally:
+                await asyncio.to_thread(out.close)
+            if got != size or h.hexdigest() != sha256:
+                raise HTTPException(422, f"la copia no coincide (llegaron {got} de {size} bytes o el SHA-256 difiere): no se guardó")
+
+            def place() -> None:
+                os.makedirs(os.path.dirname(real), exist_ok=True)
+                os.replace(tmp, real)
+            await asyncio.to_thread(place)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        await asyncio.to_thread(db.mudanza_file_done, mid, src, size, sha256, mirror, "copiado", clock())
+        return {"estado": "copiado"}
 
     @app.post("/api/mudanzas/{mid}/aprobar", dependencies=[Depends(require_admin)])
     def mudanza_approve(mid: int):
+        cur = db.mudanza(mid)
+        if cur and cur["modo"] == "mover":            # stage 3 is not built: a «hecha» move would still have its original
+            raise HTTPException(409, "«Mover» llega en la etapa 3; por ahora solo se aprueba «Copiar»")
         out = db.mudanza_state(mid, ("propuesta",), "aprobada", clock())
         if not out:
             raise HTTPException(409, "solo se aprueba una propuesta")
-        db.log(clock(), out["node_id"], "mudanza", {"id": mid, "estado": "aprobada"})
+        tid = queue_move(out)
+        db.log(clock(), out["node_id"], "mudanza", {"id": mid, "estado": "aprobada", "task_id": tid})
         return out
 
     @app.post("/api/mudanzas/{mid}/cancelar", dependencies=[Depends(require_admin)])

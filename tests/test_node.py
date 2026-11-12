@@ -441,3 +441,44 @@ def test_windows_lock_readers_run_without_errors():
     assert policy._windows_locked() in (True, False)
     front = policy._windows_front_app()
     assert front is None or front.lower().endswith(".exe")
+
+
+def test_agent_copies_a_folder_to_the_server_without_its_noise_or_secrets(tmp_path):
+    """0.56.0: the «mudanza» module end to end, with real files: «Ruido» subfolders and sensitive files stay home."""
+    from tests.test_core import register as _reg
+    clock = VirtualClock()
+    root = tmp_path / "consolidado"
+    root.mkdir()
+    c = TestClient(create_app(str(tmp_path / "core.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None,
+                              consolidado_root=str(root)))
+    src = tmp_path / "disco" / "casa"
+    (src / "fotos").mkdir(parents=True)
+    (src / "cache").mkdir()
+    (src / "plano.pdf").write_bytes(b"P" * 3000)
+    (src / "fotos" / "a.jpg").write_bytes(b"J" * 5000)
+    (src / "fotos" / "b.jpg").write_bytes(b"J" * 5000)        # same content: linked on the server, not sent twice
+    (src / "cache" / "x.tmp").write_bytes(b"T" * 100)
+    (src / ".env").write_text("TOKEN=no-sale-de-aqui")
+    cfg = {"device_id": "ryzen9", "persona": "test", "core_url": "http://x", "modules": ["mudanza"], "yield_policy": "always_full"}
+    agent = Agent(cfg, client=c, policy=Policy("always_full"), state=tmp_path / "state")
+    agent.load_modules()
+    assert "mudanza" in agent.modules
+    agent.register(ENROLL)
+    db = c.app.state.db
+    folder = src.as_posix() + "/"
+    db.inventory_add("ryzen9", [{"path": src.as_posix() + "/plano.pdf", "kind": "file", "size": 3000}])
+    db.file_map_build("ryzen9")
+    c.put("/api/map/mark", headers=A, json={"node": "ryzen9", "path": folder, "mark": "mia"})
+    c.put("/api/map/mark", headers=A, json={"node": "ryzen9", "path": folder + "cache/", "mark": "ruido"})
+    m = c.post("/api/mudanzas", headers=A, json={"node": "ryzen9", "path": folder, "modo": "copiar"}).json()
+    c.post(f"/api/mudanzas/{m['id']}/aprobar", headers=A)
+    db.conn.execute("UPDATE tasks SET status = 'done' WHERE module != 'mudanza'"); db.conn.commit()   # no real scan here
+    agent.tick()
+    agent.worker.join(timeout=20)
+    dest = root / "ryzen9" / src.as_posix().strip("/").replace(":", "")
+    assert (dest / "plano.pdf").read_bytes() == b"P" * 3000
+    assert (dest / "fotos" / "a.jpg").stat().st_ino == (dest / "fotos" / "b.jpg").stat().st_ino
+    assert not (dest / "cache").exists() and not (dest / ".env").exists()
+    done = c.get("/api/mudanzas", headers=A).json()[0]
+    assert done["estado"] == "hecha" and done["done_files"] == 3, done
+    assert (src / "plano.pdf").exists()                         # «copiar»: the original stays where it is

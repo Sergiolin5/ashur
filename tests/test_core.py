@@ -1518,6 +1518,7 @@ def test_a_move_is_only_proposed_for_his_own_folders_and_waits_for_his_approval(
     assert c.post(f"/api/mudanzas/{m['id']}/cancelar", headers=A).json()["estado"] == "cancelada"
     ok = c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\Proyectos\\", "modo": "mover"})
     assert ok.status_code == 200 and ok.json()["bytes"] == 700           # a cancelled one no longer blocks
+    assert c.post(f"/api/mudanzas/{ok.json()['id']}/aprobar", headers=A).status_code == 409   # «mover» waits for stage 3
     assert c.get("/api/mudanzas").status_code == 401
     assert any(e["event"] == "mudanza" for e in c.app.state.db.log_rows(50))
 
@@ -1526,3 +1527,94 @@ def test_new_consolidation_tables_exist(env):
     c, _ = env
     names = {r[0] for r in c.app.state.db.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"mudanzas", "mudanza_archivos", "sha_servidor"} <= names
+
+
+def _approved_move(c, tmp_path, modo="copiar"):
+    """A «Mía» folder on node «pc», proposed and approved; the core writes under tmp_path/consolidado."""
+    db = c.app.state.db
+    h = register(c, device_id="pc", modules=("mudanza",))
+    db.inventory_add("pc", [{"path": "S:\\casa\\plano.pdf", "kind": "file", "size": 5}])
+    db.file_map_build("pc")
+    c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "S:\\casa\\", "mark": "mia"})
+    m = c.post("/api/mudanzas", headers=A, json={"node": "pc", "path": "S:\\casa\\", "modo": modo}).json()
+    assert c.post(f"/api/mudanzas/{m['id']}/aprobar", headers=A).status_code == 200
+    return h, m
+
+
+@pytest.fixture
+def env_con(tmp_path):
+    clock = VirtualClock()
+    root = tmp_path / "consolidado"
+    root.mkdir()
+    app = create_app(str(tmp_path / "t.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None, consolidado_root=str(root))
+    return TestClient(app), root
+
+
+def test_copy_checks_sha256_links_what_the_server_has_and_resumes(env_con, tmp_path):
+    """0.56.0, stage 2: the node asks, uploads, the core verifies SHA-256 before the file takes its place."""
+    import hashlib, os
+    c, root = env_con
+    h, m = _approved_move(c, tmp_path)
+    task = c.get("/nodes/pc/tasks/next", headers=h).json()
+    assert task["module"] == "mudanza" and task["payload"]["mudanza_id"] == m["id"] and task["payload"]["root"] == "S:\\casa\\"
+    base = f"/nodes/pc/mudanza/{m['id']}"
+    data = b"plano de la casa"
+    sha = hashlib.sha256(data).hexdigest()
+    assert c.post(base + "/check", headers=h, json={"src": "S:\\casa\\plano.pdf", "size": len(data)}).json()["estado"] == "hash"
+    assert c.post(base + "/check", headers=h, json={"src": "S:\\casa\\plano.pdf", "size": len(data), "sha256": sha}).json()["estado"] == "subir"
+    bad = c.put(base + "/file", headers=h, params={"src": "S:\\casa\\plano.pdf", "size": len(data), "sha256": "0" * 64}, content=data)
+    assert bad.status_code == 422 and not (root / "pc/S/casa/plano.pdf").exists()        # a wrong copy never lands
+    ok = c.put(base + "/file", headers=h, params={"src": "S:\\casa\\plano.pdf", "size": len(data), "sha256": sha}, content=data)
+    assert ok.status_code == 200 and ok.json()["estado"] == "copiado"
+    dest = root / "pc/S/casa/plano.pdf"
+    assert dest.read_bytes() == data
+    assert c.post(base + "/check", headers=h, json={"src": "S:\\casa\\plano.pdf", "size": len(data)}).json()["estado"] == "listo"
+    same = c.post(base + "/check", headers=h, json={"src": "S:\\casa\\viejo\\copia.pdf", "size": len(data), "sha256": sha}).json()
+    assert same["estado"] == "enlazado"
+    assert os.stat(root / "pc/S/casa/viejo/copia.pdf").st_ino == os.stat(dest).st_ino   # same content, no second copy
+    assert c.post(base + "/check", headers=h, json={"src": "S:\\otra\\x.pdf", "size": 1}).status_code == 422
+    assert c.post(base + "/check", headers=h, json={"src": "S:\\casa\\..\\..\\x", "size": 1}).status_code == 422
+    assert c.post(base + "/check", headers=A, json={"src": "S:\\casa\\a", "size": 1}).status_code == 401
+    mid = c.get("/api/mudanzas", headers=A).json()[0]
+    assert mid["estado"] == "en_curso" and mid["done_files"] == 2 and mid["done_bytes"] == 2 * len(data)
+    c.post(f"/tasks/{task['id']}/result", headers=h, json={"ok": True, "result": {"copiados": 1, "enlazados": 1, "fallidos": 0}})
+    assert c.get("/api/mudanzas", headers=A).json()[0]["estado"] == "hecha"
+
+
+def test_copy_without_the_volume_fails_with_a_clear_reason(env, tmp_path):
+    c, _ = env
+    h, m = _approved_move(c, tmp_path)
+    c.get("/nodes/pc/tasks/next", headers=h)
+    r = c.post(f"/nodes/pc/mudanza/{m['id']}/check", headers=h, json={"src": "S:\\casa\\a.pdf", "size": 1})
+    assert r.status_code == 503 and "/consolidado" in r.json()["detail"]
+    assert c.get("/api/mudanzas", headers=A).json()[0]["volumen"] is False
+
+
+def test_a_move_never_copies_the_consolidation_into_itself(env_con, tmp_path):
+    c, _ = env_con
+    db = c.app.state.db
+    h = register(c, device_id="zima-server", modules=("mudanza",))
+    db.inventory_add("zima-server", [{"path": "/host/DATA/fotos/a.jpg", "kind": "file", "size": 5},
+                                     {"path": "/host/DATA/Consolidado/pc/S/x.pdf", "kind": "file", "size": 9}])
+    db.file_map_build("zima-server")
+    c.put("/api/map/mark", headers=A, json={"node": "zima-server", "path": "/host/DATA/", "mark": "mia"})
+    inside = c.post("/api/mudanzas", headers=A, json={"node": "zima-server", "path": "/host/DATA/Consolidado/pc/", "modo": "copiar"})
+    assert inside.status_code == 422
+    m = c.post("/api/mudanzas", headers=A, json={"node": "zima-server", "path": "/host/DATA/", "modo": "copiar"}).json()
+    assert m["bytes"] == 5                                         # the consolidation itself is not counted
+    c.post(f"/api/mudanzas/{m['id']}/aprobar", headers=A)
+    task = c.get("/nodes/zima-server/tasks/next", headers=h).json()
+    assert "/host/DATA/Consolidado/" in task["payload"]["skip"]
+
+
+def test_a_move_approved_before_0_56_gets_its_task_at_start(tmp_path):
+    from core.db import DB
+    db = DB(str(tmp_path / "o.db"))
+    m = db.mudanza_add("pc", "S:\\casa\\", "/DATA/Consolidado/pc/S/casa/", "copiar", 1, 5, 1.0)
+    db.mudanza_state(m["id"], ("propuesta",), "aprobada", 2.0)
+    db.close()
+    app = create_app(str(tmp_path / "o.db"), ENROLL, ADMIN, sweep_every_s=None)
+    rows = app.state.db.conn.execute("SELECT payload, target FROM tasks WHERE module = 'mudanza'").fetchall()
+    assert len(rows) == 1 and rows[0][1] == "pc"
+    create_app(str(tmp_path / "o.db"), ENROLL, ADMIN, sweep_every_s=None)      # a second start adds nothing
+    assert app.state.db.conn.execute("SELECT COUNT(*) FROM tasks WHERE module = 'mudanza'").fetchone()[0] == 1

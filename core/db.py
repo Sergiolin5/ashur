@@ -1091,6 +1091,52 @@ class DB:
             self.conn.commit()
             return dict(self.conn.execute("SELECT * FROM mudanzas WHERE id = ?", (mid,)).fetchone())
 
+    def mudanza_file(self, mid: int, src: str) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM mudanza_archivos WHERE mudanza_id = ? AND src = ?", (mid, src)).fetchone()
+        return dict(r) if r else None
+
+    def mudanza_file_done(self, mid: int, src: str, size: int, sha: str, dest: str, estado: str, ts: float) -> None:
+        """One file of a move landed (copied or linked): its row, the server's content index and the move's counters."""
+        with self.lock:
+            prev = self.conn.execute("SELECT estado FROM mudanza_archivos WHERE mudanza_id = ? AND src = ?", (mid, src)).fetchone()
+            self.conn.execute("INSERT INTO mudanza_archivos (mudanza_id, src, size, sha256, dest, estado, ts) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                              "ON CONFLICT(mudanza_id, src) DO UPDATE SET size = excluded.size, sha256 = excluded.sha256, "
+                              "dest = excluded.dest, estado = excluded.estado, ts = excluded.ts", (mid, src, size, sha, dest, estado, ts))
+            self.conn.execute("INSERT OR IGNORE INTO sha_servidor (sha256, path, size, ts) VALUES (?, ?, ?, ?)", (sha, dest, size, ts))
+            if not prev or prev[0] not in ("copiado", "enlazado"):
+                self.conn.execute("UPDATE mudanzas SET done_files = done_files + 1, done_bytes = done_bytes + ? WHERE id = ?", (size, mid))
+            self.conn.commit()
+
+    def sha_where(self, sha: str) -> Optional[str]:
+        with self.lock:
+            r = self.conn.execute("SELECT path FROM sha_servidor WHERE sha256 = ?", (sha,)).fetchone()
+        return r[0] if r else None
+
+    def sha_forget(self, sha: str) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM sha_servidor WHERE sha256 = ?", (sha,))
+            self.conn.commit()
+
+    def has_open_task(self, module: str, key: str, value: int) -> bool:
+        """A queued or running task of `module` whose payload has key == value."""
+        with self.lock:
+            rows = self.conn.execute("SELECT payload FROM tasks WHERE module = ? AND status IN ('queued', 'running')",
+                                     (module,)).fetchall()
+        for (p,) in rows:
+            try:
+                if json.loads(p or "{}").get(key) == value:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def mudanza_finish(self, mid: int, estado: str, error: Optional[str], ts: float) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE mudanzas SET estado = ?, error = ?, finished = ? WHERE id = ? AND estado IN ('aprobada', 'en_curso')",
+                              (estado, error, ts, mid))
+            self.conn.commit()
+
     MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
 
     def file_map_build(self, node_id: str) -> int:

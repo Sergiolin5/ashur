@@ -246,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.53.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.54.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1408,14 +1408,45 @@ def create_app(
                         "bytes_here": 0, "folders_total": 0, "children": [], "more": 0, "protected": 0, "built": None}
             build_map(node)
         key = (node, path)
-        hit = _fmap.get(key)
-        if hit:
-            return hit
-        out = db.file_map_readonly(node, path)
-        if len(_fmap) > 200:
-            _fmap.clear()
-        _fmap[key] = out
-        return out
+        out = _fmap.get(key)
+        if not out:
+            out = db.file_map_readonly(node, path)
+            if len(_fmap) > 200:
+                _fmap.clear()
+            _fmap[key] = out
+        return with_marks(node, out)
+
+    NOISE_FRAGMENTS = tuple(f for tipo, frags in lotes.RULES if tipo in ("juego", "software") for f in frags)
+
+    def noise_rule(path: str, summary: bool) -> Optional[str]:
+        """Only a suggestion: «ruido» for folders the scan summarised whole (caches, node_modules, .git) and for the
+        lotes' game and software paths. The photo library is his, never noise by rule. Sergio decides with the button."""
+        low = "/" + path.replace("\\", "/").lower().strip("/") + "/"
+        return "ruido" if summary or any(f in low for f in NOISE_FRAGMENTS) else None
+
+    def with_marks(node: str, out: dict) -> dict:
+        marks = db.folder_marks(node)
+        here, _ = db.mark_under(marks, out.get("path") or "")
+        kids = []
+        for k in out.get("children") or []:
+            m, own = db.mark_under(marks, k["path"])
+            kids.append({**k, "mark": m, "own": own, "suggest": None if m else noise_rule(k["path"], k.get("summary"))})
+        return {**out, "mark_here": here, "children": kids}
+
+    class FolderMark(BaseModel):
+        node: str = Field(min_length=1, max_length=64)
+        path: str = Field(min_length=1, max_length=1024)
+        mark: Optional[str] = Field(default=None, pattern=r"^(mia|ruido)$")
+
+    @app.put("/api/map/mark", dependencies=[Depends(require_admin)])
+    def folder_mark(m: FolderMark):
+        """Sergio's «mía» / «ruido» for a folder in the map (None clears it). Nothing moves: it only says what the
+        consolidation may take; a folder nobody marked stays where it is (his choice, 2026-11-12)."""
+        sep = "\\" if ("\\" in m.path or (len(m.path) >= 2 and m.path[1] == ":")) else "/"
+        path = m.path if m.path.endswith(sep) else m.path + sep
+        db.folder_mark_set(m.node, path, m.mark, clock())
+        db.log(clock(), m.node, "folder_mark", {"path": path[-120:], "mark": m.mark})
+        return {"ok": True, "path": path, "mark": m.mark}
 
     class ChatIn(BaseModel):
         message: str = Field(min_length=1, max_length=8000)

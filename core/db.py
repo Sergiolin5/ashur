@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS folder_map (    -- the file map, built once per finis
     PRIMARY KEY (node_id, gen, path)
 );
 CREATE INDEX IF NOT EXISTS folder_map_parent ON folder_map (node_id, gen, parent, bytes);
+CREATE TABLE IF NOT EXISTS folder_marks (  -- Sergio's own review in the map (0.54.0): survives every scan
+    node_id     TEXT NOT NULL,
+    path        TEXT NOT NULL,              -- the folder, ending in its separator; covers everything below it
+    mark        TEXT NOT NULL CHECK (mark IN ('mia', 'ruido')),
+    ts          REAL NOT NULL,
+    PRIMARY KEY (node_id, path)
+);
 CREATE TABLE IF NOT EXISTS memory (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created     REAL NOT NULL,
@@ -951,6 +958,35 @@ class DB:
         return {"node_id": node_id, "path": prefix, "parent": parent, "total_bytes": total + here_b,
                 "files_here": here_n, "bytes_here": here_b, "folders_total": n,
                 "children": children, "more": max(0, n - limit), "protected": protected}
+
+    # --- Sergio's marks in the map: «mía» or «ruido»; a mark covers everything below it, the deepest one wins --------
+    def folder_mark_set(self, node_id: str, path: str, mark: Optional[str], ts: float) -> None:
+        with self.lock:
+            if mark:
+                self.conn.execute("INSERT INTO folder_marks (node_id, path, mark, ts) VALUES (?, ?, ?, ?) "
+                                  "ON CONFLICT(node_id, path) DO UPDATE SET mark = excluded.mark, ts = excluded.ts",
+                                  (node_id, path, mark, ts))
+            else:
+                self.conn.execute("DELETE FROM folder_marks WHERE node_id = ? AND path = ?", (node_id, path))
+            self.conn.commit()
+
+    def folder_marks(self, node_id: str) -> dict[str, str]:
+        with self.lock:
+            return {r[0]: r[1] for r in self.conn.execute(
+                "SELECT path, mark FROM folder_marks WHERE node_id = ?", (node_id,)).fetchall()}
+
+    @staticmethod
+    def mark_under(marks: dict[str, str], path: str) -> tuple[Optional[str], bool]:
+        """The mark that covers `path` (its own or the deepest folder above it), and whether it is its own."""
+        best = None
+        for m in marks:
+            if path.startswith(m) and (best is None or len(m) > len(best)):
+                best = m
+        return (marks[best], best == path) if best is not None else (None, False)
+
+    def folder_mark_of(self, node_id: str, path: str) -> Optional[str]:
+        """What the consolidation asks of one file or folder: «mia», «ruido», or None (not reviewed: it stays put)."""
+        return self.mark_under(self.folder_marks(node_id), path)[0]
 
     MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
 

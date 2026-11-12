@@ -615,7 +615,7 @@
       <div id="map-nodes" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
       <div id="map-path" class="note" style="margin:0 0 8px;word-break:break-all"></div>
       <div class="group" id="map-list"></div>
-      <div class="note" id="map-note">Tamaño por carpeta, según el último inventario. Toca una carpeta para entrar. Ashur no mueve ni borra nada desde aquí.</div>
+      <div class="note" id="map-note">Tamaño por carpeta, según el último inventario. Toca una carpeta para entrar. «Mía» o «Ruido» vale para todo lo que tiene adentro; lo que no marques no entra al consolidado. Ashur no mueve ni borra nada desde aquí.</div>
     </section>
     </div>
 
@@ -2489,10 +2489,27 @@
       const max = d.children.length ? d.children[0].bytes || 1 : 1;
       for (const k of d.children) {
         const kinds = Object.entries(k.kinds).map(([c, v]) => c + " " + bytes(v)).join(" · ");
+        const state = k.mark ? (k.mark === "mia" ? "mía" : "ruido") + (k.own ? "" : " (por la carpeta de arriba)")
+                             : k.suggest ? "sin revisar · sugerido: ruido" : "sin revisar";
         const r = row({ title: k.name, value: bytes(k.bytes),
-                        detail: (k.summary ? "resumida · " : nf.format(k.files) + (k.files === 1 ? " archivo · " : " archivos · ")) + kinds });
+                        detail: state + " · " + (k.summary ? "resumida · " : nf.format(k.files) + (k.files === 1 ? " archivo · " : " archivos · ")) + kinds });
         const bar = el("div", "mapbar"); const i = el("i"); i.style.width = Math.max(2, Math.round(100 * k.bytes / max)) + "%";
         bar.append(i); r.querySelector(".main").append(bar);
+        const bs = el("div", "qbtns");     // Sergio's review: a mark covers everything inside; tap it again to clear it
+        for (const [mk, label] of [["mia", "Mía"], ["ruido", "Ruido"]]) {
+          const b = el("button", "tog" + (k.mark === mk && k.own ? " on" : ""), label); b.type = "button";
+          b.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+            b.disabled = true;
+            try {
+              const res = await api("api/map/mark", { method: "PUT", body: JSON.stringify({ node, path: k.path, mark: k.mark === mk && k.own ? null : mk }) });
+              if (!res.ok) throw new Error("HTTP " + res.status);
+              await mapLoad(node, d.path);
+            } catch (e) { b.disabled = false; $("map-path").textContent = "No pude guardar la marca (" + ((e && e.message) || "error") + ")."; }
+          });
+          bs.append(b);
+        }
+        r.insertBefore(bs, r.querySelector(".value"));
         if (!k.summary) { r.style.cursor = "pointer"; r.addEventListener("click", () => mapLoad(node, k.path)); }
         rows.push(r);
       }

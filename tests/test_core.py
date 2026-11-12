@@ -1422,3 +1422,39 @@ def test_backup_report_endpoint_computes_in_the_background(env):
     assert d["disks"][0]["mount"] == "/host/DATA" and d["disks"][0]["copied_bytes"] == 0 and d["computed_at"]
     assert c.post("/api/backup/refresh", headers=A).json()["ok"] is True
     assert c.get("/api/backup").status_code == 401
+
+
+def test_folder_marks_mine_or_noise_cover_everything_below_and_rules_only_suggest(env):
+    """0.54.0, Sergio's design: path rules suggest «ruido», he marks a folder «mía» or «ruido» in the map, the mark
+    covers everything inside it (a deeper mark wins), and a folder nobody marked stays «sin revisar»."""
+    c, _ = env
+    db = c.app.state.db
+    db.inventory_add("pc", [{"path": "C:\\Users\\s\\Docs\\a.pdf", "kind": "file", "size": 40},
+                            {"path": "C:\\Users\\s\\Docs\\Viejo\\b.pdf", "kind": "file", "size": 30},
+                            {"path": "C:\\Users\\s\\AppData\\x.dat", "kind": "file", "size": 900},
+                            {"path": "C:\\Users\\s\\proyecto\\node_modules", "kind": "folder_summary", "size": 70},
+                            {"path": "C:\\Users\\s\\proyecto\\main.py", "kind": "file", "size": 5},
+                            {"path": "C:\\Users\\s\\Pictures\\Fotos.photoslibrary\\i.jpg", "kind": "file", "size": 8}])
+    get = lambda p: c.get("/api/map", params={"node": "pc", "path": p}, headers=A).json()
+    kids = lambda d: {k["name"]: k for k in d["children"]}
+    top = kids(get("C:\\Users\\s\\"))
+    assert top["AppData"]["mark"] is None and top["AppData"]["suggest"] == "ruido"      # a rule only suggests
+    assert top["Docs"]["mark"] is None and top["Docs"]["suggest"] is None             # «sin revisar»
+    assert top["Pictures"]["suggest"] is None                                          # his photos are never «ruido» by rule
+    assert kids(get("C:\\Users\\s\\proyecto\\"))["node_modules"]["suggest"] == "ruido"  # summarised whole by the scan
+    r = c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "C:\\Users\\s\\Docs\\", "mark": "mia"})
+    assert r.status_code == 200
+    assert kids(get("C:\\Users\\s\\"))["Docs"]["mark"] == "mia" and kids(get("C:\\Users\\s\\"))["Docs"]["own"] is True
+    inner = kids(get("C:\\Users\\s\\Docs\\"))
+    assert inner["Viejo"]["mark"] == "mia" and inner["Viejo"]["own"] is False          # covers what is inside
+    c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "C:\\Users\\s\\Docs\\Viejo\\", "mark": "ruido"})
+    assert kids(get("C:\\Users\\s\\Docs\\"))["Viejo"]["mark"] == "ruido"               # the deeper mark wins
+    c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "C:\\Users\\s\\Docs\\Viejo\\", "mark": None})
+    assert kids(get("C:\\Users\\s\\Docs\\"))["Viejo"]["mark"] == "mia"                 # cleared: back to the folder above
+    assert db.folder_mark_of("pc", "C:\\Users\\s\\Docs\\Viejo\\b.pdf") == "mia"
+    assert db.folder_mark_of("pc", "C:\\Users\\s\\AppData\\x.dat") is None             # unreviewed stays out
+    assert c.put("/api/map/mark", headers=A, json={"node": "pc", "path": "C:\\", "mark": "talvez"}).status_code == 422
+    assert c.put("/api/map/mark", json={"node": "pc", "path": "C:\\", "mark": "mia"}).status_code == 401
+    db.inventory_add("pc", [{"path": "C:\\Users\\s\\Docs\\c.pdf", "kind": "file", "size": 1}])
+    db.file_map_build("pc")                                                            # a rescan keeps the marks
+    assert kids(get("C:\\Users\\s\\"))["Docs"]["mark"] == "mia"

@@ -5,6 +5,7 @@ import SwiftUI
 struct UnlockView: View {
     @Environment(Session.self) private var session
     @Environment(\.scenePhase) private var phase
+    @State private var prompted = false     // ya se pidió la biometría en esta vuelta a primer plano
 
     var body: some View {
         VStack(spacing: 24) {
@@ -29,8 +30,20 @@ struct UnlockView: View {
                 .font(.footnote)
         }
         .padding(32)
-        // Pide la biometría solo con la app en primer plano (al volver de segundo plano, no antes).
-        .task(id: phase) { if phase == .active { await session.unlock() } }
+        // Pide la biometría sola una vez por cada vuelta a primer plano. El propio aviso de Touch ID pasa la app
+        // a .inactive y de vuelta a .active: sin esta marca, cancelarlo lo volvía a abrir en bucle.
+        // Si Sergio cancela, se queda aquí con el botón «Abrir con…».
+        .task(id: phase) {
+            switch phase {
+            case .background:
+                prompted = false
+            case .active where !prompted:
+                prompted = true
+                await session.unlock()
+            default:
+                break
+            }
+        }
     }
 
     private var biometryType: LABiometryType {

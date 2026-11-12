@@ -465,12 +465,14 @@ def test_agent_copies_a_folder_to_the_server_without_its_noise_or_secrets(tmp_pa
     assert "mudanza" in agent.modules
     agent.register(ENROLL)
     db = c.app.state.db
-    folder = src.as_posix() + "/"
-    db.inventory_add("ryzen9", [{"path": src.as_posix() + "/plano.pdf", "kind": "file", "size": 3000}])
+    folder = str(src) + os.sep                                  # native paths, as the inventory stores them (C:\ on Windows)
+    db.inventory_add("ryzen9", [{"path": str(src / "plano.pdf"), "kind": "file", "size": 3000}])
     db.file_map_build("ryzen9")
     c.put("/api/map/mark", headers=A, json={"node": "ryzen9", "path": folder, "mark": "mia"})
-    c.put("/api/map/mark", headers=A, json={"node": "ryzen9", "path": folder + "cache/", "mark": "ruido"})
-    m = c.post("/api/mudanzas", headers=A, json={"node": "ryzen9", "path": folder, "modo": "copiar"}).json()
+    c.put("/api/map/mark", headers=A, json={"node": "ryzen9", "path": folder + "cache" + os.sep, "mark": "ruido"})
+    r = c.post("/api/mudanzas", headers=A, json={"node": "ryzen9", "path": folder, "modo": "copiar"})
+    assert r.status_code == 200, r.text
+    m = r.json()
     c.post(f"/api/mudanzas/{m['id']}/aprobar", headers=A)
     db.conn.execute("UPDATE tasks SET status = 'done' WHERE module != 'mudanza'"); db.conn.commit()   # no real scan here
     agent.tick()

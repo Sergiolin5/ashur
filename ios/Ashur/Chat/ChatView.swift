@@ -33,6 +33,9 @@ struct ChatView: View {
                 }
                 .padding()
             }
+            // Al reconstruirse la vista (desbloquear, abrir o cerrar el teléfono) los mensajes no cambian y
+            // onChange no salta: sin esto el chat aparecía arriba del todo en vez de en el último mensaje.
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: model.lines.count) {
                 withAnimation { proxy.scrollTo(model.lines.last?.id, anchor: .bottom) }

@@ -40,9 +40,9 @@ final class Dictation {
         request.shouldReportPartialResults = true
         request.addsPunctuation = true
 
-        Self.installTap(on: engine.inputNode, feeding: request)
-        engine.prepare()
         do {
+            try Self.installTap(on: engine.inputNode, feeding: request)
+            engine.prepare()
             try engine.start()
         } catch {
             finish()
@@ -72,9 +72,13 @@ final class Dictation {
 
     // Los bloques de audio y del reconocedor no corren en el hilo principal: se crean fuera del MainActor.
 
-    nonisolated private static func installTap(on node: AVAudioInputNode, feeding request: SFSpeechAudioBufferRecognitionRequest) {
-        node.installTap(onBus: 0, bufferSize: 1024, format: node.outputFormat(forBus: 0)) { buffer, _ in
-            request.append(buffer)
+    /// `installAudioTap` (iOS 27) entrega búferes de solo lectura; el reconocedor pide un `AVAudioPCMBuffer`, así que se copian.
+    /// El tamaño admitido va de 100 a 400 ms: se piden 100 ms al ritmo del micrófono.
+    nonisolated private static func installTap(on node: AVAudioInputNode, feeding request: SFSpeechAudioBufferRecognitionRequest) throws {
+        let format = node.outputFormat(forBus: 0)
+        nonisolated(unsafe) let request = request     // el tap solo llama a append(_:), igual que con la API anterior
+        try node.installAudioTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 10), format: format) { buffer, _ in
+            request.append(AVAudioPCMBuffer(copying: buffer))
         }
     }
 

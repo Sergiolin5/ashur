@@ -1473,6 +1473,12 @@ class DB:
             rows = self.conn.execute("SELECT id, ts, day, text FROM diary WHERE id > ? ORDER BY id LIMIT ?", (after_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
+    def conversation_days(self, user: str = "sergio") -> int:
+        """Distinct days (Bogotá, UTC-5 all year) on which he wrote to Ashur at least once."""
+        with self.lock:
+            return int(self.conn.execute("SELECT COUNT(DISTINCT date(ts - 18000, 'unixepoch')) FROM messages "
+                                         "WHERE user = ? AND role = 'user'", (user,)).fetchone()[0])
+
     def count_messages_since(self, user: str, ts: float) -> int:
         with self.lock:
             return int(self.conn.execute("SELECT COUNT(*) FROM messages WHERE user = ? AND role = 'user' AND ts >= ?",

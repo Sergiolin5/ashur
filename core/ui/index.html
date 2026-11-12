@@ -703,6 +703,7 @@
         <button type="button" id="base-save">Guardar</button>
         <select id="base-versions" aria-label="Versiones anteriores" class="field" hidden></select>
         <select id="base-level" aria-label="Nivel de madurez" class="field" hidden></select>
+        <div id="base-maturity" class="note" style="margin:10px 0 0" hidden></div>
         <div id="base-result" class="note" style="margin:10px 0 0" hidden></div>
       </div>
     </section>
@@ -1538,7 +1539,8 @@
   // a notification (or a link) says where it should land: a tab, or a page inside Ajustes
   const WHERE = { "#diario": ["diary"], "#estado": ["status"], "#memoria": ["settings", "memory"], "#diagnostico": ["settings", "diag"],
                   "#actualizacion": ["settings", "update"], "#pendientes": ["settings", "notes"],
-                  "#pedidos": ["settings", "claude-requests"], "#encargos": ["settings", "encargos"] };
+                  "#pedidos": ["settings", "claude-requests"], "#encargos": ["settings", "encargos"],
+                  "#personas": ["settings", "voices"] };
   function openWhere(h) { const w = WHERE[h]; if (!w) return; showTab(w[0]); if (w[1]) showPage(w[1]); }
   let startHash = location.hash;
   // --- tabs ---------------------------------------------------------------
@@ -2529,6 +2531,23 @@
       p.levels.forEach((l, i) => { lv.options[i + 1].value = l; });
       lv.value = p.levels.includes(p.level) ? p.level : "";
       lv.hidden = !p.levels.length;
+      loadMaturity(p.levels.length > 0);
+    } catch (e) {}
+  }
+  async function loadMaturity(show) {             // the hours suggest, the days hold back, he picks the level above
+    const out = $("base-maturity");
+    out.hidden = true;
+    if (!show) return;
+    try {
+      const r = await api("api/madurez");
+      if (!r.ok) return;
+      const m = await r.json(), h = Math.floor(m.horas_pleno), d = m.dias_conversacion;
+      out.textContent = m.sugerido
+        ? "Llevas " + h + " h en crecimiento pleno y " + d + " días de conversación: puedes pasar a " + m.sugerido + "."
+        : m.siguiente
+          ? "Llevas " + h + " de " + m.siguiente.horas + " h y " + d + " de " + m.siguiente.dias + " días para sugerir " + m.siguiente.nivel + "."
+          : "Llevas " + h + " h en crecimiento pleno y " + d + " días de conversación.";
+      out.hidden = false;
     } catch (e) {}
   }
   $("base-versions").addEventListener("change", async () => {
@@ -2552,6 +2571,7 @@
     const r = await api("api/persona/level", { method: "PUT", body: JSON.stringify({ level: $("base-level").value }) });
     out.textContent = r.ok ? "Nivel de madurez guardado." : await detailOf(r, "No pude guardar el nivel.");
     out.hidden = false;
+    if (r.ok) loadMaturity(true);
   });
   let signalsText = "";
   $("signals-run").addEventListener("click", async () => {

@@ -246,7 +246,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.50.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.51.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1420,7 +1420,7 @@ def create_app(
 
     @app.put("/api/persona/level", dependencies=[Depends(require_admin)])
     def persona_level(body: PersonaLevel):
-        """Which «## Madurez: …» section of the file Ashur speaks from. Sergio picks it by hand: nothing measures it yet."""
+        """Which «## Madurez: …» section of the file Ashur speaks from. Sergio picks it by hand; /api/madurez only suggests (0.51.0)."""
         if body.level and body.level not in brain.persona_levels():
             raise HTTPException(422, "Ese nivel no está en el archivo de persona.")
         db.set_setting("persona_maturity", body.level)
@@ -1798,13 +1798,32 @@ def create_app(
 
     app.state.maturity_tick = maturity_tick
 
+    # Sergio's choice (2026-11-12): hours in «crecimiento pleno» suggest the next level, but only together with
+    # enough distinct days of talking with him; the panel and one notice say so, and he changes the level himself.
+    MATURITY_STEPS = (("intermedio", 50, 5), ("pleno", 250, 15))
+    MATURITY_ORDER = ("inicial",) + tuple(s[0] for s in MATURITY_STEPS)
+
+    def maturity_suggestion() -> dict:
+        h = (float(db.setting("madurez_pleno_s") or 0) + maturity["pending"]) / 3600
+        days = db.conversation_days()
+        current, levels = db.setting("persona_maturity", ""), brain.persona_levels()
+        rank = MATURITY_ORDER.index(current) if current in MATURITY_ORDER else 0
+        reached = [s for s in MATURITY_STEPS if h >= s[1] and days >= s[2]]
+        top = reached[-1][0] if reached else None
+        suggested = top if top in levels and MATURITY_ORDER.index(top) > rank else None
+        nxt = next((s for s in MATURITY_STEPS if MATURITY_ORDER.index(s[0]) > max(rank, MATURITY_ORDER.index(top) if top else 0)), None)
+        return {"hours": h, "days": days, "suggested": suggested,
+                "next": {"nivel": nxt[0], "horas": nxt[1], "dias": nxt[2]} if nxt else None}
+
     @app.get("/api/madurez", dependencies=[Depends(require_self)])
     def maturity_get():
         """For the app's presence (stage 3, i) and the panel: is Ashur whole right now, how long it has been whole, and
         what it has learned. Counts only."""
         full, online = maturity_now()
         seconds = float(db.setting("madurez_pleno_s") or 0) + maturity["pending"]
-        return {"pleno_ahora": full, "nodos_requeridos": maturity_nodes(), "en_linea": online,
+        sug = maturity_suggestion()
+        return {"dias_conversacion": sug["days"], "sugerido": sug["suggested"], "siguiente": sug["next"],
+                "pleno_ahora": full, "nodos_requeridos": maturity_nodes(), "en_linea": online,
                 "horas_pleno": round(seconds / 3600, 1),
                 "crecimiento": {"recuerdos": len(db.memories()), "habitos": len(db.habits()),
                                 "documentos_clasificados": db.count_signals("tipo"),
@@ -2242,7 +2261,8 @@ def create_app(
                    "daily": "Revisión del día: cómo está todo, una vez al día",
                    "hour": "Una tarea lleva una hora con su equipo a tope",
                    "claude": "Claude te pide algo (llega aunque sea de noche)",
-                   "encargos": "Un encargo de Claude terminó (o falló)"}
+                   "encargos": "Un encargo de Claude terminó (o falló)",
+                   "madurez": "Ashur ya puede subir de nivel de madurez (tú decides)"}
     NOTIFY_WATCHED = ("inventory", "docs")                       # background jobs worth a tap on the shoulder
 
     def notify_settings() -> dict:
@@ -2353,6 +2373,12 @@ def create_app(
             db.set_setting("notify_cursor", str(events[-1]["rid"]))
         if cfg["cats"]["hour"]:
             items += hour_at_full(now)
+        if cfg["cats"]["madurez"]:
+            sug = maturity_suggestion()                           # told once per level, even if he never changes it
+            if sug["suggested"] and db.setting("notify_madurez_told", "") != sug["suggested"]:
+                db.set_setting("notify_madurez_told", sug["suggested"])
+                items.append(("Madurez de Ashur", f"Llevas {sug['hours']:.0f} h en crecimiento pleno y {sug['days']} días de "
+                              f"conversación: puedes pasar a {sug['suggested']} en Ajustes → Personas.", "/#personas"))
         if cfg["cats"]["devices"]:
             told = set(filter(None, db.setting("notify_offline", "").split(",")))
             for n in db.nodes():

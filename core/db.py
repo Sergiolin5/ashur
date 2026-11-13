@@ -159,6 +159,16 @@ CREATE TABLE IF NOT EXISTS casa_dispositivos ( -- only what Ashur adds on top of
     nivel_energia INTEGER CHECK (nivel_energia IN (1, 2, 3)),   -- null: the house's level (stage 2)
     PRIMARY KEY (casa_id, entity_id)
 );
+CREATE TABLE IF NOT EXISTS casa_energia (     -- casa (0.58.0): Home Assistant's own statistics, copied at the level Sergio chose
+    casa_id    INTEGER NOT NULL REFERENCES casas(id),
+    entity_id  TEXT NOT NULL,                 -- the energy or power sensor
+    inicio     REAL NOT NULL,                 -- start of the period, UTC seconds
+    resolucion INTEGER NOT NULL CHECK (resolucion IN (1, 2, 3)),   -- 1 day, 2 hour, 3 five minutes
+    kwh        REAL,
+    w_max      REAL,
+    fuente     TEXT NOT NULL CHECK (fuente IN ('medido', 'calculado')),
+    PRIMARY KEY (casa_id, entity_id, inicio, resolucion)
+);
 CREATE TABLE IF NOT EXISTS memory (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created     REAL NOT NULL,
@@ -1155,7 +1165,11 @@ class DB:
             self.conn.commit()
 
     # --- casa (0.57.0): the houses (one per Home Assistant) and what Ashur adds to their devices ------------------------
-    CASA_DISP_FIELDS = ("orden", "favorito", "oculto")
+    CASA_DISP_FIELDS = ("orden", "favorito", "oculto", "nivel_energia")
+
+    @staticmethod
+    def _nivel_ok(n) -> bool:
+        return isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= 3
 
     def casa_ensure(self, nombre: str, ha_url: str, ha_token_env: str) -> int:
         """The env-managed house: found by URL, else by its token variable (a changed ASHUR_HA_URL moves the house, it does not add one)."""
@@ -1190,6 +1204,8 @@ class DB:
         bad = [k for k in cambios if k not in self.CASA_DISP_FIELDS]
         if bad:
             raise ValueError(f"unknown field(s): {', '.join(bad)}")
+        if "nivel_energia" in cambios and cambios["nivel_energia"] is not None and not self._nivel_ok(cambios["nivel_energia"]):
+            raise ValueError("nivel_energia must be 1, 2, 3 or None")
         with self.lock:
             self.conn.execute("INSERT OR IGNORE INTO casa_dispositivos (casa_id, entity_id) VALUES (?, ?)", (casa_id, entity_id))
             if cambios:
@@ -1203,6 +1219,48 @@ class DB:
             return {r["entity_id"]: {"orden": r["orden"], "favorito": r["favorito"], "oculto": r["oculto"],
                                      "nivel_energia": r["nivel_energia"]}
                     for r in self.conn.execute("SELECT * FROM casa_dispositivos WHERE casa_id = ?", (casa_id,)).fetchall()}
+
+    def casa_nivel_set(self, casa_id: int, nivel: int) -> None:
+        if not self._nivel_ok(nivel):
+            raise ValueError("nivel must be 1, 2 or 3")
+        with self.lock:
+            self.conn.execute("UPDATE casas SET nivel_energia_def = ? WHERE id = ?", (nivel, casa_id))
+            self.conn.commit()
+
+    def energia_upsert(self, casa_id: int, filas: list[dict]) -> int:
+        datos = [(casa_id, f["entity_id"], float(f["inicio"]), f["resolucion"], f.get("kwh"), f.get("w_max"), f["fuente"])
+                 for f in filas]
+        if not datos:
+            return 0
+        with self.lock:
+            self.conn.executemany(
+                "INSERT INTO casa_energia (casa_id, entity_id, inicio, resolucion, kwh, w_max, fuente) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (casa_id, entity_id, inicio, resolucion) DO UPDATE SET "
+                "kwh = excluded.kwh, w_max = excluded.w_max, fuente = excluded.fuente", datos)
+            self.conn.commit()
+        return len(datos)
+
+    def energia_serie(self, casa_id: int, entity_ids: list[str], resolucion: int, desde: float, hasta: float) -> dict[str, list[dict]]:
+        out: dict[str, list[dict]] = {}
+        if not entity_ids:
+            return out
+        with self.lock:
+            for i in range(0, len(entity_ids), 500):
+                ids = entity_ids[i:i + 500]
+                q = ",".join("?" * len(ids))
+                for r in self.conn.execute(
+                        f"SELECT entity_id, inicio, kwh, w_max, fuente FROM casa_energia WHERE casa_id = ? AND resolucion = ? "
+                        f"AND inicio >= ? AND inicio <= ? AND entity_id IN ({q}) ORDER BY entity_id, inicio",
+                        (casa_id, resolucion, desde, hasta, *ids)).fetchall():
+                    out.setdefault(r["entity_id"], []).append(
+                        {"inicio": r["inicio"], "kwh": r["kwh"], "w_max": r["w_max"], "fuente": r["fuente"]})
+        return out
+
+    def energia_dia(self, casa_id: int, inicio_dia: float) -> dict[str, float]:
+        with self.lock:
+            return {r["entity_id"]: r["kwh"] for r in self.conn.execute(
+                "SELECT entity_id, kwh FROM casa_energia WHERE casa_id = ? AND resolucion = 1 AND inicio = ? AND kwh IS NOT NULL",
+                (casa_id, float(inicio_dia))).fetchall()}
 
     MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
 

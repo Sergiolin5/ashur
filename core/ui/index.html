@@ -354,11 +354,11 @@
   .notefab svg { width: 20px; height: 20px; }
   .notefab .badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--red); color: #fff;
                     font: 700 11px/18px var(--mono); text-align: center; padding: 0 5px; }
-  #note-sheet { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .5); }
-  #note-sheet[hidden] { display: none; }
-  #note-sheet .sheet { width: min(560px, 100%); background: var(--row); border-radius: var(--r-card) var(--r-card) 0 0; border: 1px solid var(--border);
+  #note-sheet, #casa-sheet { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .5); }
+  #note-sheet[hidden], #casa-sheet[hidden] { display: none; }
+  #note-sheet .sheet, #casa-sheet .sheet { width: min(560px, 100%); background: var(--row); border-radius: var(--r-card) var(--r-card) 0 0; border: 1px solid var(--border);
                        padding: var(--s4) var(--s4) max(var(--s4), env(safe-area-inset-bottom)); box-shadow: var(--shadow-float); }
-  #note-sheet h3 { margin: 0 0 var(--s1); font: 600 var(--fs-lead) var(--mono); }
+  #note-sheet h3, #casa-sheet h3 { margin: 0 0 var(--s1); font: 600 var(--fs-lead) var(--mono); }
   #note-sheet textarea { width: 100%; min-height: 110px; margin: var(--s2) 0; border-radius: var(--r-control); border: 1px solid transparent; padding: var(--s3);
                          background: var(--field); color: var(--label); resize: vertical; }
   .thumbs { display: flex; gap: var(--s2); flex-wrap: wrap; margin: 6px 0; }
@@ -366,6 +366,28 @@
   .thumbs .rm { position: relative; }
   .thumbs .rm button { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; margin: 0; border-radius: 50%; font-size: 13px;
                        line-height: 22px; background: var(--red); color: #fff; }
+  /* ---- casa ---- */
+  .casa-head { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+  .casa-head h2 { margin: 0; font: 600 var(--fs-lead) var(--font); }
+  .casa-pill { margin: 0; width: auto; min-height: 32px; padding: 6px 14px; border-radius: var(--r-pill); background: var(--field); color: var(--label);
+               font-size: var(--fs-small); font-weight: 500; }
+  .casa-pill[aria-pressed="true"] { background: var(--tint-soft); color: var(--tint); }
+  .casa-ha { color: var(--amber); font-size: var(--fs-meta); margin: 0 2px var(--s3); }     /* a lost connection is not an emergency */
+  .casa-area { margin: var(--s5) 2px var(--s2); color: var(--secondary); font-size: var(--fs-meta); font-weight: 600; letter-spacing: .03em; }
+  .casa-area:first-child { margin-top: 0; }
+  .casa-row .cv { font: var(--fs-meta) var(--mono); color: var(--tint); white-space: nowrap; }
+  .casa-row .cerr { color: var(--amber); font-size: var(--fs-meta); margin-top: 2px; }
+  .casa-btn { margin: 0; width: auto; min-height: 36px; padding: 6px 12px; font-size: var(--fs-small); background: var(--field); color: var(--label); border-radius: var(--r-control); }
+  .casa-tools { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+  .casa-foot { margin-top: var(--s5); }
+  .casa-sw { position: relative; width: 51px; height: 31px; flex: none; }
+  .casa-sw input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+  .casa-sw .trk { position: absolute; inset: 0; border-radius: 16px; background: var(--control); transition: background var(--dur); }
+  .casa-sw .trk::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; transition: transform var(--dur) var(--ease); }
+  .casa-sw input:checked + .trk { background: var(--tint); }
+  .casa-sw input:checked + .trk::after { transform: translateX(20px); }
+  .casa-sw input:focus-visible + .trk { outline: 2px solid var(--tint); outline-offset: 2px; }
+  .casa-sw input:disabled { cursor: default; }
   .sheet .actions { display: flex; gap: var(--s2); margin-top: var(--s2); }
   .sheet .actions button { margin: 0; flex: 1; padding: var(--s3); }
   .sheet .actions .ghost { background: var(--field); color: var(--label); }
@@ -451,6 +473,7 @@
   <div class="seg" role="tablist" id="tabs" hidden>
     <button type="button" role="tab" id="tab-chat" aria-selected="true"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span>Ashur</span></button>
     <button type="button" role="tab" id="tab-diary" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/></svg><span>Diario</span></button>
+    <button type="button" role="tab" id="tab-casa" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></svg><span>Casa</span></button>
     <button type="button" role="tab" id="tab-status" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg><span>Estado</span></button>
     <button type="button" role="tab" id="tab-settings" aria-selected="false"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>Ajustes</span></button>
   </div>
@@ -491,6 +514,14 @@
       <h2>Entradas</h2>
       <div id="d-entries"></div>
     </section>
+  </div>
+
+  <div id="casa" hidden>
+    <!-- casa -->
+    <div class="casa-head"><h2>Casa</h2><div id="casa-pills" style="display:contents"></div></div>
+    <div class="casa-ha" id="casa-ha" role="status" hidden></div>
+    <div id="casa-list"></div>
+    <div class="casa-foot"><button type="button" class="casa-btn" id="casa-org">Organizar</button></div>
   </div>
 
   <div id="dashboard" hidden>
@@ -853,6 +884,13 @@
     <div class="actions"><button type="button" class="ghost" id="note-add-img">Añadir imagen</button><button type="button" id="note-save">Guardar</button></div>
     <div class="actions"><button type="button" class="ghost" id="note-cancel">Cancelar</button></div>
     <div class="error" id="note-err" style="margin-top:6px"></div>
+  </div>
+</div>
+
+<div id="casa-sheet" hidden>
+  <div class="sheet">
+    <h3 id="casa-sheet-text">¿Seguro?</h3>
+    <div class="actions"><button type="button" class="ghost" id="casa-sheet-no">Cancelar</button><button type="button" id="casa-sheet-ok">Confirmar</button></div>
   </div>
 </div>
 
@@ -1538,7 +1576,7 @@
   function showSignin(error) {
     key = null; role = null;
     try { localStorage.removeItem(KEY); } catch (e) {}
-    for (const id of ["dashboard", "settings", "chat", "diary", "tabs", "composer", "guest-signout", "greet"]) $(id).hidden = true;
+    for (const id of ["dashboard", "settings", "chat", "diary", "casa", "tabs", "composer", "guest-signout", "greet"]) $(id).hidden = true;
     $("thread").replaceChildren(); lastDay = null;
     $("signin").hidden = false;
     historyLoaded = false;
@@ -1573,19 +1611,21 @@
     if (changed) window.scrollTo({ top: 0 });          // each tab opens at its top, not where the last one was left
     document.body.dataset.tab = t;
     try { localStorage.setItem("ashur.tab", t); } catch (e) {}
-    const order = role === "self" ? ["chat", "diary"] : ["chat", "diary", "status", "settings"];
+    const order = role === "self" ? ["chat", "diary"] : ["chat", "diary", "casa", "status", "settings"];
     if (!order.includes(t)) t = tab = "chat";
-    $("tab-status").hidden = $("tab-settings").hidden = role === "self";
+    $("tab-casa").hidden = $("tab-status").hidden = $("tab-settings").hidden = role === "self";
     $("tabs").style.setProperty("--n", order.length);
     $("tabs").style.setProperty("--i", order.indexOf(t));
     $("tabs").classList.remove("moving"); void $("tabs").offsetWidth; $("tabs").classList.add("moving");
     clearTimeout(showTab.mv); showTab.mv = setTimeout(() => $("tabs").classList.remove("moving"), 800);
-    for (const n of ["chat", "diary", "status", "settings"]) $("tab-" + n).setAttribute("aria-selected", t === n);
+    for (const n of ["chat", "diary", "casa", "status", "settings"]) $("tab-" + n).setAttribute("aria-selected", t === n);
     $("chat").hidden = $("composer").hidden = t !== "chat";
     $("diary").hidden = t !== "diary";
+    $("casa").hidden = t !== "casa";
     $("dashboard").hidden = t !== "status";
     $("settings").hidden = t !== "settings";
     if (t === "diary") loadDiary();
+    casaLoop();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
     if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadLotes(); loadLoteConfig(); loadUpdate(); loadTotp(); loadPersonas(); loadBase(); loadSpace(); loadDiag(); }
@@ -1604,6 +1644,7 @@
   }
   $("tab-chat").addEventListener("click", () => showTab("chat"));
   $("tab-diary").addEventListener("click", () => showTab("diary"));
+  $("tab-casa").addEventListener("click", () => showTab("casa"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
   $("tab-settings").addEventListener("click", () => { showTab("settings"); refresh(); });
 
@@ -1638,6 +1679,181 @@
     if (r.status === 401 && !opts.keepSession) { showSignin("La clave no es correcta."); throw new Error("401"); }
     return r;
   }
+  // --- casa ---------------------------------------------------------------
+  // Home Assistant devices. Rows are keyed by data-entity; every 5 s only the state/power text moves, and the list is rebuilt
+  // only when the set (or order, favorites, hidden, organise mode) changes.
+  let casaData = null, casaId = null, casaOrg = false, casaSigLast = null, casaTimer = null, casaBusy = false, casaReq = 0;
+  const casaDev = {};
+  const CASA_ES = { on: "encendida", off: "apagada", locked: "bloqueada", unlocked: "desbloqueada", open: "abierta", closed: "cerrada",
+                    opening: "abriendo", closing: "cerrando", unavailable: "no disponible", unknown: "sin dato" };
+  const CASA_HA = { sin_respuesta: "Home Assistant no responde", token_invalido: "El token de Home Assistant no es válido",
+                    sin_configurar: "Home Assistant no está configurado", error: "Home Assistant devolvió un error" };
+  function casaW(w) { return w >= 1000 ? (w / 1000).toLocaleString("es-CO", { maximumFractionDigits: 2 }) + " kW" : w.toLocaleString("es-CO", { maximumFractionDigits: 1 }) + " W"; }
+  function casaEstado(d) {
+    if (typeof d.potencia_w === "number") return casaW(d.potencia_w);
+    if (d.dominio === "scene") return "";
+    if (d.dominio === "switch" && d.estado === "on") return "encendido";
+    if (d.dominio === "switch" && d.estado === "off") return "apagado";
+    return CASA_ES[d.estado] || String(d.estado || "");
+  }
+  function casaAccion(d) {           // the one action a lock/cover button offers, from its current state
+    if (d.dominio === "lock") return d.estado === "locked" ? ["desbloquear", "Desbloquear"] : ["bloquear", "Bloquear"];
+    if (d.dominio === "cover") return d.estado === "closed" ? ["abrir", "Abrir"] : ["cerrar", "Cerrar"];
+    return d.dominio === "scene" ? ["activar", "Activar"] : null;
+  }
+  function casaConfirm(texto) {      // the panel's own confirmation (window.confirm would block)
+    return new Promise((res) => {
+      const s = $("casa-sheet");
+      $("casa-sheet-text").textContent = texto; s.hidden = false;
+      const done = (v) => { s.hidden = true; $("casa-sheet-ok").onclick = $("casa-sheet-no").onclick = s.onclick = null; res(v); };
+      $("casa-sheet-ok").onclick = () => done(true); $("casa-sheet-no").onclick = () => done(false);
+      s.onclick = (e) => { if (e.target === s) done(false); };
+    });
+  }
+  // sends the request; a 409 «confirmar» asks on screen and resends with confirm:true. → null when fine, otherwise the text to show
+  async function casaSend(method, path, body) {
+    try {
+      let r = await api(path, { method, body: JSON.stringify(body) });
+      let j = await r.json().catch(() => ({}));
+      if (r.status === 409 && j.detail === "confirmar") {
+        if (!(await casaConfirm(j.texto || "¿Seguro?"))) return "";
+        r = await api(path, { method, body: JSON.stringify({ ...body, confirm: true }) });
+        j = await r.json().catch(() => ({}));
+      }
+      if (r.ok) return null;
+      return typeof j.detail === "string" ? j.detail : "No se pudo (HTTP " + r.status + ")";
+    } catch (e) { return "Sin conexión con el núcleo"; }
+  }
+  function casaErr(eid, text) {
+    for (const r of document.querySelectorAll('#casa-list [data-entity="' + CSS.escape(eid) + '"] .cerr')) {
+      r.textContent = text || ""; r.hidden = !text;
+      clearTimeout(r._t); if (text) r._t = setTimeout(() => { r.textContent = ""; r.hidden = true; }, 8000);
+    }
+  }
+  const casaBtn = (t, fn) => { const b = el("button", "casa-btn", t); b.type = "button"; b.addEventListener("click", fn); return b; };
+  async function casaPut(eid, body) {
+    const e = await casaSend("PUT", "api/casa/" + casaData.casa + "/dispositivo", { entity_id: eid, ...body });
+    if (e) casaErr(eid, e);
+    loadCasa(true);
+  }
+  async function casaMove(list, i, delta) {      // renumbers the list by tens, so ties in `orden` never make a move ambiguous
+    const arr = list.slice(), j = i + delta;
+    if (j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    for (let k = 0; k < arr.length; k++) if (arr[k].orden !== k * 10) {
+      const e = await casaSend("PUT", "api/casa/" + casaData.casa + "/dispositivo", { entity_id: arr[k].entity_id, orden: k * 10 });
+      if (e) { casaErr(arr[k].entity_id, e); break; }
+    }
+    loadCasa(true);
+  }
+  function casaRow(d, list, i, oculto) {
+    const r = el("div", "row casa-row"); r.dataset.entity = d.entity_id;
+    const m = el("div", "main"); m.append(el("div", "title", d.nombre));
+    const er = el("div", "cerr"); er.hidden = true; er.setAttribute("role", "alert"); m.append(er);
+    r.append(m);
+    const cv = el("span", "cv", casaEstado(d)); r.append(cv);
+    if (casaOrg) {
+      const t = el("div", "casa-tools");
+      if (oculto) t.append(casaBtn("Volver a mostrar", () => casaPut(d.entity_id, { oculto: false })));
+      else {
+        t.append(casaBtn(d.favorito ? "★ Favorito" : "☆ Favorito", () => casaPut(d.entity_id, { favorito: !d.favorito })),
+                 casaBtn("▲", () => casaMove(list, i, -1)), casaBtn("▼", () => casaMove(list, i, 1)),
+                 casaBtn("Quitar", () => casaPut(d.entity_id, { oculto: true })));
+        t.children[1].setAttribute("aria-label", "Subir"); t.children[2].setAttribute("aria-label", "Bajar");
+      }
+      m.append(t);
+      return r;
+    }
+    if (!d.controlable) return r;
+    const post = async (accion) => {
+      casaErr(d.entity_id, "");
+      return casaSend("POST", "api/casa/" + casaData.casa + "/control", { entity_id: d.entity_id, accion });
+    };
+    if (d.dominio === "light" || d.dominio === "switch") {
+      const lab = el("label", "casa-sw"), inp = el("input"), trk = el("span", "trk");
+      inp.type = "checkbox"; inp.setAttribute("role", "switch"); inp.setAttribute("aria-label", d.nombre); inp.checked = d.estado === "on";
+      lab.append(inp, trk); r.append(lab);
+      inp.addEventListener("change", async () => {
+        const want = inp.checked;
+        r.dataset.busy = "1"; cv.textContent = casaEstado({ ...casaDev[d.entity_id], estado: want ? "on" : "off" });
+        const e = await post(want ? "on" : "off");
+        delete r.dataset.busy;
+        if (e === null) { casaDev[d.entity_id].estado = want ? "on" : "off"; loadCasa(true); }
+        else { inp.checked = !want; cv.textContent = casaEstado(casaDev[d.entity_id]); if (e) casaErr(d.entity_id, e); }   // back where it was
+      });
+    } else if (casaAccion(d)) {
+      const b = el("button", "casa-btn", casaAccion(d)[1]); b.type = "button"; r.append(b);
+      b.addEventListener("click", async () => {
+        const a = casaAccion(casaDev[d.entity_id]);
+        b.disabled = true;
+        const e = await post(a[0]);
+        b.disabled = false;
+        if (e) casaErr(d.entity_id, e); else if (e === null) loadCasa(true);
+      });
+    }
+    return r;
+  }
+  function casaBuild(d) {
+    const nodes = [], group = (list, oculto) => { const g = el("div", "group"); list.forEach((x, i) => g.append(casaRow(x, list, i, oculto))); return g; };
+    if (d.favoritos.length) { nodes.push(el("div", "casa-area", "Favoritos"), group(d.favoritos)); }
+    for (const a of d.areas) nodes.push(el("div", "casa-area", a.nombre), group(a.dispositivos));
+    if (casaOrg && d.ocultos.length) nodes.push(el("div", "casa-area", "Ocultos (" + d.ocultos.length + ")"), group(d.ocultos, true));
+    if (!nodes.length && d.ha === "ok") nodes.push(el("div", "note", "Home Assistant no tiene dispositivos que mostrar."));
+    $("casa-list").replaceChildren(...nodes);
+  }
+  function casaRender(d) {
+    casaData = d; casaId = d.casa;
+    const all = [...d.favoritos, ...d.ocultos, ...d.areas.flatMap((a) => a.dispositivos)];
+    for (const x of all) casaDev[x.entity_id] = x;
+    const ha = $("casa-ha");
+    if (d.ha === "ok") ha.hidden = true;
+    else {
+      let t = CASA_HA[d.ha] || CASA_HA.error;
+      if (d.visto) { const min = Math.max(0, Math.floor((Date.now() / 1000 - d.visto) / 60)); t += " · visto " + (min < 1 ? "hace menos de 1 min" : "hace " + min + " min"); }
+      ha.textContent = t; ha.hidden = false;
+    }
+    const ids = (l) => l.map((x) => x.entity_id).join(",");
+    const sig = [casaOrg, d.casa, d.casas.map((c) => c.id + ":" + c.nombre).join("|"), ids(d.favoritos),
+                 d.areas.map((a) => a.nombre + "=" + ids(a.dispositivos)).join(";"), ids(d.ocultos)].join("#");
+    if (sig !== casaSigLast) {
+      casaSigLast = sig;
+      $("casa-pills").replaceChildren(...d.casas.map((c) => {
+        const b = el("button", "casa-pill", c.nombre); b.type = "button"; b.setAttribute("aria-pressed", String(c.id === d.casa));
+        b.addEventListener("click", () => { casaId = c.id; casaSigLast = null; loadCasa(true); });
+        return b;
+      }));
+      casaBuild(d);
+      return;
+    }
+    for (const r of document.querySelectorAll("#casa-list .casa-row")) {      // same set: only the texts move
+      const x = casaDev[r.dataset.entity]; if (!x) continue;
+      const cv = r.querySelector(".cv"), s = r.dataset.busy ? null : casaEstado(x);
+      if (s !== null && cv.textContent !== s) cv.textContent = s;
+      const inp = r.querySelector(".casa-sw input"); if (inp && !r.dataset.busy) inp.checked = x.estado === "on";
+      const b = r.querySelector("button.casa-btn:not(:disabled)"), a = b && !casaOrg ? casaAccion(x) : null;
+      if (a && b.textContent !== a[1]) b.textContent = a[1];
+    }
+  }
+  async function loadCasa(force) {
+    if (casaBusy && !force) return;
+    const my = ++casaReq; casaBusy = true;
+    try {
+      const r = await api("api/casa" + (casaId ? "?casa=" + encodeURIComponent(casaId) : ""));
+      if (r.ok && my === casaReq && tab === "casa") casaRender(await r.json());
+    } catch (e) {} finally { if (my === casaReq) casaBusy = false; }
+  }
+  function casaLoop() {              // polls only while the tab is shown and the page is visible
+    clearTimeout(casaTimer);
+    if (tab !== "casa" || document.hidden) return;
+    loadCasa();
+    casaTimer = setTimeout(casaLoop, 5000);
+  }
+  $("casa-org").addEventListener("click", () => {
+    casaOrg = !casaOrg; $("casa-org").textContent = casaOrg ? "Listo" : "Organizar";
+    casaSigLast = null; if (casaData) casaRender(casaData);
+  });
+  document.addEventListener("visibilitychange", casaLoop);
+
   async function loadHistory() {
     historyLoaded = true;
     try {

@@ -1814,6 +1814,7 @@
     if (d.ha === "ok") ha.hidden = true;
     else {
       let t = CASA_HA[d.ha] || CASA_HA.error;
+      if (d.ha_causa) t += " · " + d.ha_causa;
       if (d.visto) { const min = Math.max(0, Math.floor((Date.now() / 1000 - d.visto) / 60)); t += " · visto " + (min < 1 ? "hace menos de 1 min" : "hace " + min + " min"); }
       ha.textContent = t; ha.hidden = false;
     }

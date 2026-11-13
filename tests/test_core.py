@@ -1618,3 +1618,9 @@ def test_a_move_approved_before_0_56_gets_its_task_at_start(tmp_path):
     assert len(rows) == 1 and rows[0][1] == "pc"
     create_app(str(tmp_path / "o.db"), ENROLL, ADMIN, sweep_every_s=None)      # a second start adds nothing
     assert app.state.db.conn.execute("SELECT COUNT(*) FROM tasks WHERE module = 'mudanza'").fetchone()[0] == 1
+
+
+def test_panel_has_casa_tab(env):
+    c, _ = env
+    html = c.get("/").text
+    assert 'id="tab-casa"' in html and 'id="casa"' in html

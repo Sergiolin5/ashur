@@ -22,6 +22,8 @@ services:
       ASHUR_MODEL: claude-sonnet-5-5
       ASHUR_MONTHLY_BUDGET_USD: "10"
       # ANTHROPIC_API_KEY: add it in ZimaOS (app settings > environment), never in this file
+      # ASHUR_HA_URL: "http://127.0.0.1:8123"
+      # ASHUR_HA_TOKEN: en ZimaOS (app settings > environment), never in this file
     deploy:
       resources:
         limits:

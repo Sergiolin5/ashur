@@ -7,3 +7,4 @@ pytest>=8.0
 psutil>=5.9
 anthropic>=0.40
 pywebpush>=2.0
+tzdata; sys_platform == "win32"   # Windows has no system zone database; zoneinfo needs it for America/Bogota

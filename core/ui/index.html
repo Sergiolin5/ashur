@@ -354,11 +354,11 @@
   .notefab svg { width: 20px; height: 20px; }
   .notefab .badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--red); color: #fff;
                     font: 700 11px/18px var(--mono); text-align: center; padding: 0 5px; }
-  #note-sheet, #casa-sheet { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .5); }
-  #note-sheet[hidden], #casa-sheet[hidden] { display: none; }
-  #note-sheet .sheet, #casa-sheet .sheet { width: min(560px, 100%); background: var(--row); border-radius: var(--r-card) var(--r-card) 0 0; border: 1px solid var(--border);
+  #note-sheet, #casa-sheet, #cam-sheet { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .5); }
+  #note-sheet[hidden], #casa-sheet[hidden], #cam-sheet[hidden] { display: none; }
+  #note-sheet .sheet, #casa-sheet .sheet, #cam-sheet .sheet { width: min(560px, 100%); background: var(--row); border-radius: var(--r-card) var(--r-card) 0 0; border: 1px solid var(--border);
                        padding: var(--s4) var(--s4) max(var(--s4), env(safe-area-inset-bottom)); box-shadow: var(--shadow-float); }
-  #note-sheet h3, #casa-sheet h3 { margin: 0 0 var(--s1); font: 600 var(--fs-lead) var(--mono); }
+  #note-sheet h3, #casa-sheet h3, #cam-sheet h3 { margin: 0 0 var(--s1); font: 600 var(--fs-lead) var(--mono); }
   #note-sheet textarea { width: 100%; min-height: 110px; margin: var(--s2) 0; border-radius: var(--r-control); border: 1px solid transparent; padding: var(--s3);
                          background: var(--field); color: var(--label); resize: vertical; }
   .thumbs { display: flex; gap: var(--s2); flex-wrap: wrap; margin: 6px 0; }
@@ -380,6 +380,25 @@
   .casa-btn { margin: 0; width: auto; min-height: 36px; padding: 6px 12px; font-size: var(--fs-small); background: var(--field); color: var(--label); border-radius: var(--r-control); }
   .casa-tools { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
   .casa-foot { margin-top: var(--s5); }
+  /* ---- casa: cámaras ---- */
+  #casa-camaras { margin-bottom: var(--s4); }
+  .cam-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+  .cam-tile { position: relative; margin: 0; width: auto; padding: 0; aspect-ratio: 16 / 9; overflow: hidden; background: var(--field); color: var(--label);
+              border: 1px solid var(--border); border-radius: var(--r-card); min-width: 0; }
+  .cam-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .cam-tile .nm { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 8px 5px 8px; font-size: var(--fs-meta); text-align: left; color: #fff;
+                  background: linear-gradient(transparent, rgba(0, 0, 0, .6)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cam-tile .dot { position: absolute; top: 8px; right: 8px; width: 9px; height: 9px; border-radius: 50%; background: var(--control); box-shadow: 0 0 0 2px rgba(0, 0, 0, .35); }
+  .cam-tile .dot.on { background: var(--green); }
+  .cam-tile .nm.solo { background: none; color: var(--secondary); top: 0; display: flex; align-items: center; justify-content: center; padding: 0 8px; }
+  #cam-live { margin-bottom: var(--s3); }
+  #cam-live video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--r-card); }
+  #cam-live .cam-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s2); }
+  #cam-live .cam-note { color: var(--secondary); font-size: var(--fs-meta); margin-top: var(--s2); }
+  #cam-live .cam-note.warn { color: var(--amber); }
+  #cam-ver { display: block; width: 100%; margin: 0 0 var(--s3); }
+  #cam-sheet input { width: 100%; margin: var(--s2) 0; border-radius: var(--r-control); border: 1px solid transparent; padding: var(--s3); background: var(--field); color: var(--label);
+                     font: 600 22px var(--mono); letter-spacing: .3em; text-align: center; }
   /* ---- casa: energía ---- */
   .ep-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin-bottom: var(--s4); }
   .ep-card { margin: 0; width: auto; display: block; text-align: left; padding: var(--s3) var(--pad); background: var(--row); color: var(--label);
@@ -557,6 +576,13 @@
     <div class="ep-cards" id="casa-ahora" hidden>
       <button type="button" class="ep-card" id="casa-card-ahora"><span class="k">Ahora</span><span class="v">–</span></button>
       <button type="button" class="ep-card" id="casa-card-hoy"><span class="k">Hoy</span><span class="v">–</span></button>
+    </div>
+    <div id="casa-camaras" hidden>
+      <div class="casa-area">Cámaras</div>
+      <div class="casa-ha" id="cam-msg" role="status" hidden></div>
+      <div id="cam-live" hidden></div>
+      <button type="button" class="casa-btn" id="cam-ver" hidden>Ver cámaras</button>
+      <div class="cam-grid" id="cam-grid"></div>
     </div>
     <div id="casa-list"></div>
     <div class="casa-foot"><button type="button" class="casa-btn" id="casa-org">Organizar</button></div>
@@ -952,6 +978,16 @@
   <div class="sheet">
     <h3 id="casa-sheet-text">¿Seguro?</h3>
     <div class="actions"><button type="button" class="ghost" id="casa-sheet-no">Cancelar</button><button type="button" id="casa-sheet-ok">Confirmar</button></div>
+  </div>
+</div>
+
+<div id="cam-sheet" hidden>
+  <div class="sheet">
+    <h3>Código del autenticador</h3>
+    <div class="detail" style="color:var(--secondary);font-size:13px">Por fuera de la tailnet, ver las cámaras pide el código de 6 dígitos. La sesión dura 15 minutos.</div>
+    <input id="cam-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="000000" aria-label="Código de 6 dígitos">
+    <div class="error" id="cam-code-err" role="alert"></div>
+    <div class="actions"><button type="button" class="ghost" id="cam-code-no">Cancelar</button><button type="button" id="cam-code-ok">Ver cámaras</button></div>
   </div>
 </div>
 
@@ -1636,6 +1672,7 @@
   }
   function showSignin(error) {
     key = null; role = null; clearTimeout(casaTimer);        // casa: the poll ends with the session
+    camReset();                                               // cameras: player, peer, timers and the video session end with it
     clearTimeout(epTimer); epOpen = false; epReq++; $("casa-energia").hidden = true; $("casa-main").hidden = false;   // energía too
     try { localStorage.removeItem(KEY); } catch (e) {}
     for (const id of ["dashboard", "settings", "chat", "diary", "casa", "tabs", "composer", "guest-signout", "greet"]) $(id).hidden = true;
@@ -1912,8 +1949,8 @@
   }
   function casaLoop() {              // polls only while the tab is shown and the page is visible
     clearTimeout(casaTimer);
-    if (tab !== "casa" || document.hidden || !key || !unlocked) return;
-    loadCasa();
+    if (tab !== "casa" || document.hidden || !key || !unlocked) { camClose(); return; }
+    loadCasa(); camTick();
     casaTimer = setTimeout(casaLoop, 5000);
   }
   $("casa-org").addEventListener("click", () => {
@@ -1921,6 +1958,199 @@
     casaSigLast = null; if (casaData) casaRender(casaData);
   });
   document.addEventListener("visibilitychange", casaLoop);
+
+  // --- casa: cámaras -------------------------------------------------------
+  // Thumbnails (<img>, only the src changes every 5 s) and the large live view. Media requests carry the video session `v` in the URL
+  // and NEVER X-Admin-Key (plain fetch/img/video; a wrong key next to a valid v counts as an attack on the server).
+  // Tailnet: the session is requested silently and renewed on its own; Funnel: it needs the authenticator code (sheet).
+  const CAM_VIDA = 14 * 60 * 1000;               // sessions last 15 min on the server; renew a minute early
+  let camDoor = null, camSes = null, camList = [], camSig = null, camBusy = false, camAsking = false, camProbing = false;
+  let camView = null, camFb = null, camIce = null, camPc = null, camPending = null, camGen = 0;
+  const camUrl = (n, ruta) => "api/casa/camaras/" + encodeURIComponent(n) + "/" + ruta + (ruta.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(camSes ? camSes.v : "");
+  const camMsg = (t) => { const m = $("cam-msg"); if (m.textContent !== (t || "")) m.textContent = t || ""; m.hidden = !t; };
+  function camStopPlayer() {                     // peer, tracks, <video> source and every timer of the live view
+    clearTimeout(camFb); clearTimeout(camIce); camFb = camIce = null;
+    if (camPc) { try { camPc.ontrack = camPc.onconnectionstatechange = null; camPc.close(); } catch (e) {} camPc = null; }
+    const v = document.querySelector("#cam-live video");
+    if (v) {
+      if (v.srcObject) { for (const t of v.srcObject.getTracks()) t.stop(); v.srcObject = null; }
+      v.onerror = v.onplaying = null; v.removeAttribute("src"); try { v.load(); } catch (e) {}
+    }
+  }
+  function camClose() {
+    camGen++; camStopPlayer(); camView = null; camPending = null;
+    const live = $("cam-live"); if (!live.hidden || live.firstChild) { live.replaceChildren(); live.hidden = true; }
+    if (!$("cam-sheet").hidden) camSheetClose();
+  }
+  function camReset() { camClose(); camSes = null; camList = []; camSig = null; camAsking = false; $("casa-camaras").hidden = true; $("cam-grid").replaceChildren(); }
+  async function camNewSession(code) {          // → "" when the session exists, otherwise the text to show
+    try {
+      const r = await api("api/casa/camaras/sesion", { method: "POST", keepSession: true, headers: code ? { "X-TOTP": code } : {} });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return typeof j.detail === "string" ? j.detail : "No se pudo abrir la sesión de video (HTTP " + r.status + ")";
+      camSes = { v: j.v, until: Date.now() + CAM_VIDA };
+      return "";
+    } catch (e) { return "Sin conexión con el núcleo"; }
+  }
+  function camSheetClose() { const s = $("cam-sheet"); s.hidden = true; $("cam-code").value = ""; camAsking = false; }
+  function camAsk(then) {                        // Funnel: the authenticator code sheet
+    camPending = then || null; camAsking = true;
+    const s = $("cam-sheet"), inp = $("cam-code"), err = $("cam-code-err");
+    inp.value = ""; err.textContent = ""; s.hidden = false; setTimeout(() => inp.focus(), 50);
+    const go = async () => {
+      const c = inp.value.trim();
+      if (!/^\d{6}$/.test(c)) { err.textContent = "Escribe el código de 6 dígitos"; return; }
+      $("cam-code-ok").disabled = true;
+      const e = await camNewSession(c);
+      $("cam-code-ok").disabled = false;
+      if (e) { err.textContent = e; inp.select(); return; }
+      const next = camPending; camPending = null; camSheetClose(); camMsg("");
+      if (next) next(); else camThumbs();
+      camRender();
+    };
+    $("cam-code-ok").onclick = go;
+    inp.onkeydown = (ev) => { if (ev.key === "Enter") go(); };
+    $("cam-code-no").onclick = () => { camPending = null; camSheetClose(); };
+    s.onclick = (ev) => { if (ev.target === s) { camPending = null; camSheetClose(); } };
+  }
+  async function camEnsure() {                   // true when a session is usable now (tailnet: silently renewed)
+    if (camSes && camSes.until - Date.now() > 60000) return true;
+    if (camDoor !== "tailnet") { if (camSes && camSes.until <= Date.now()) camSes = null; return !!camSes; }
+    const old = !!camSes, e = await camNewSession("");
+    if (e) { camMsg(e); return false; }
+    camMsg("");
+    if (old && camView && camView.mode === "hls") camPlay();         // HLS segments carry the old v: restart on the new one
+    return true;
+  }
+  async function camProbe(url) {                 // an <img>/<video> error doesn't say why: ask the same URL, without credentials
+    if (camProbing) return; camProbing = true;
+    try {
+      const r = await fetch(url, { cache: "no-store", headers: {} });
+      if (r.status === 401) { camSes = null; if (camDoor === "tailnet") { await camEnsure(); if (camView) camPlay(); } else { camRender(); if (camView) camAsk(() => camPlay()); } }
+    } catch (e) {} finally { camProbing = false; }
+  }
+  function camThumbs() {
+    if (!camSes) return;
+    for (const im of document.querySelectorAll("#cam-grid img")) {
+      if (im.dataset.on !== "1" || (!im.complete && Date.now() - (im._t || 0) < 10000)) continue;
+      im._t = Date.now(); im.src = camUrl(im.dataset.cam, "foto.jpg") + "&t=" + Date.now();
+    }
+  }
+  function camRender() {
+    const sec = $("casa-camaras");
+    $("cam-ver").hidden = !(camDoor === "public" && !camSes && camList.length);
+    const sig = camList.map((c) => c.nombre).join("|");
+    if (sig !== camSig) {
+      camSig = sig;
+      $("cam-grid").replaceChildren(...camList.map((c) => {
+        const b = el("button", "cam-tile"); b.type = "button"; b.dataset.cam = c.nombre;
+        const im = el("img"); im.alt = ""; im.dataset.cam = c.nombre; im.decoding = "async";
+        im.addEventListener("error", () => { if (camSes) camProbe(camUrl(c.nombre, "foto.jpg") + "&t=" + Date.now()); });
+        b.append(im, el("span", "dot"), el("span", "nm", c.nombre));
+        b.addEventListener("click", () => camTap(c.nombre));
+        return b;
+      }));
+    }
+    for (const b of document.querySelectorAll("#cam-grid .cam-tile")) {      // same set: only the dot and the photo gate move
+      const c = camList.find((x) => x.nombre === b.dataset.cam); if (!c) continue;
+      const on = !!c.en_linea, d = b.querySelector(".dot"), im = b.querySelector("img");
+      if (d.classList.contains("on") !== on) { d.classList.toggle("on", on); b.setAttribute("aria-label", c.nombre + (on ? "" : " (sin conexión)")); }
+      im.dataset.on = on && camSes ? "1" : "0"; im.hidden = !(on && camSes);
+    }
+    sec.hidden = false;
+  }
+  function camTap(n) {
+    if (camSes || camDoor === "tailnet") { camOpen(n); return; }
+    camAsk(() => camOpen(n));
+  }
+  function camOpen(n) {
+    camGen++; camStopPlayer();
+    const live = $("cam-live"); live.hidden = false;
+    camView = { nombre: n, mode: null };
+    const v = el("video"); v.setAttribute("playsinline", ""); v.setAttribute("autoplay", ""); v.muted = true; v.playsInline = true; v.autoplay = true; v.controls = false;
+    const note = el("div", "cam-note"); note.id = "cam-note";
+    const bar = el("div", "cam-bar");
+    for (const c of camList) {
+      const p = el("button", "casa-pill", c.nombre); p.type = "button"; p.setAttribute("aria-pressed", String(c.nombre === n));
+      p.addEventListener("click", () => { if (c.nombre !== camView.nombre) camOpen(c.nombre); });
+      bar.append(p);
+    }
+    const snd = casaBtn("Sonido", () => { v.muted = !v.muted; snd.textContent = v.muted ? "Sonido" : "Silenciar"; });
+    const cl = casaBtn("Cerrar", () => camClose()); cl.setAttribute("aria-label", "Cerrar la vista en vivo");
+    bar.append(snd, cl);
+    live.replaceChildren(v, bar, note);
+    camPlay();
+  }
+  function camNote(t, warn) { const m = $("cam-note"); if (m) { m.textContent = t; m.classList.toggle("warn", !!warn); } }
+  async function camPlay() {
+    if (!camView) return;
+    const my = ++camGen, n = camView.nombre; camStopPlayer();
+    if (!(await camEnsure()) && !camSes) { if (my === camGen) camNote("Sin sesión de video.", true); return; }
+    if (my !== camGen || !camView) return;
+    const v = document.querySelector("#cam-live video");
+    if (camDoor === "tailnet" && window.RTCPeerConnection) { camView.mode = "webrtc"; camWebrtc(n, v, my); }
+    else camHls(n, v, my);
+  }
+  function camHls(n, v, my) {
+    camView.mode = "hls";
+    if (!v.canPlayType("application/vnd.apple.mpegurl")) {
+      camNote("Este navegador no reproduce HLS; desde la tailnet usa el video en vivo directo", true); return;
+    }
+    camNote("en vivo · HLS ~5 s");
+    v.onerror = () => { if (my === camGen && camSes) { camNote("El video se interrumpió; reviso la sesión…", true); camProbe(camUrl(n, "hls/stream.m3u8")); } };
+    v.onplaying = () => { if (my === camGen) camNote("en vivo · HLS ~5 s"); };
+    v.src = camUrl(n, "hls/stream.m3u8");
+    const p = v.play(); if (p && p.catch) p.catch(() => {});
+  }
+  async function camWebrtc(n, v, my) {
+    camNote("conectando…");
+    const fallback = () => { if (my !== camGen) return; camStopPlayer(); camGen++; camHls(n, document.querySelector("#cam-live video"), camGen); };
+    camFb = setTimeout(fallback, 8000);          // no track in 8 s: HLS
+    try {
+      const pc = new RTCPeerConnection(); camPc = pc;
+      pc.addTransceiver("video", { direction: "recvonly" }); pc.addTransceiver("audio", { direction: "recvonly" });
+      pc.ontrack = (ev) => {
+        if (my !== camGen) return;
+        clearTimeout(camFb); camFb = null;
+        if (!v.srcObject) v.srcObject = new MediaStream();
+        v.srcObject.addTrack(ev.track);
+        camNote("en vivo · directo");
+        const p = v.play(); if (p && p.catch) p.catch(() => {});
+      };
+      pc.onconnectionstatechange = () => { if (my === camGen && (pc.connectionState === "failed") && camFb === null) { camNote("Se cortó la conexión directa", true); } };
+      await pc.setLocalDescription(await pc.createOffer());
+      await new Promise((res) => {               // wait for the candidates (bounded), so the offer carries them
+        if (pc.iceGatheringState === "complete") return res();
+        camIce = setTimeout(res, 2000);
+        pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === "complete") { clearTimeout(camIce); camIce = null; res(); } };
+      });
+      if (my !== camGen) return;
+      const r = await fetch(camUrl(n, "webrtc"), { method: "POST", cache: "no-store", headers: { "Content-Type": "application/sdp" }, body: pc.localDescription.sdp });
+      if (my !== camGen) return;
+      if (r.status === 401) { camSes = null; clearTimeout(camFb); camFb = null; if (await camEnsure()) { if (my === camGen) camPlay(); } return; }
+      if (!r.ok) { fallback(); return; }
+      await pc.setRemoteDescription({ type: "answer", sdp: await r.text() });
+    } catch (e) { if (my === camGen) fallback(); }
+  }
+  async function camTick() {
+    if (camBusy || epOpen) { if (epOpen) camClose(); return; }
+    camBusy = true;
+    try {
+      if (!camDoor) {
+        try { camDoor = (await (await fetch("health", { cache: "no-store" })).json()).door === "public" ? "public" : "tailnet"; } catch (e) { return; }
+      }
+      const r = await api("api/casa/camaras", { signal: AbortSignal.timeout(8000) });
+      if (!r.ok || tab !== "casa") return;
+      const d = await r.json();
+      if (d.estado === "desactivado") { camClose(); $("casa-camaras").hidden = true; return; }
+      camList = d.camaras || [];
+      if (d.estado !== "ok") { camMsg("El servicio de cámaras no responde" + (d.causa ? " · " + d.causa : "")); camClose(); }
+      else if ($("cam-msg").textContent.startsWith("El servicio")) camMsg("");
+      await camEnsure();
+      camRender(); camThumbs();
+    } catch (e) {} finally { camBusy = false; }
+  }
+  $("cam-ver").addEventListener("click", () => camAsk(null));
 
   // --- casa: energía -------------------------------------------------------
   // The «Ahora / Hoy» cards ride the 5 s casa poll (text only). The energy view polls every 60 s while open and visible;

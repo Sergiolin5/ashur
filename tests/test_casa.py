@@ -158,3 +158,220 @@ def test_states_non_list_body_is_error():
 def test_kw_rounding():
     v = C.vista([_st("sensor.c", "1.001", unit_of_measurement="kW")], {}, {})
     assert v["areas"][0]["dispositivos"][0]["potencia_w"] == 1001.0
+
+
+# ---- /api/casa: endpoints (0.57.0) ----
+from fastapi.testclient import TestClient
+
+from core.app import create_app
+from sim.scenario import VirtualClock
+
+ENROLL, ADMIN = "test-enroll", "test-admin"
+A = {"X-Admin-Key": ADMIN}
+
+
+class FakeHA:
+    def __init__(self):
+        self.calls = []
+        self.fail = None          # HAError to raise from states/areas
+        self.call_fail = None
+        self.n_states = 0
+        self.estados = [
+            _st("light.sala", friendly_name="Luz sala"),
+            _st("lock.puerta", "locked", friendly_name="Puerta entrada"),
+            _st("sensor.nevera_w", "120", unit_of_measurement="W", friendly_name="Nevera"),
+            _st("alarm_control_panel.casa", "armed_away", friendly_name="Alarma"),
+        ]
+
+    def states(self):
+        self.n_states += 1
+        if self.fail:
+            raise self.fail
+        return self.estados
+
+    def areas(self):
+        if self.fail:
+            raise self.fail
+        return {"light.sala": "Sala", "lock.puerta": "Entrada", "light.fantasma": "Sala"}
+
+    def call(self, domain, service, entity_id):
+        if self.call_fail:
+            raise self.call_fail
+        self.calls.append((domain, service, entity_id))
+
+
+@pytest.fixture
+def casa_env(tmp_path):
+    clock, fake = VirtualClock(), FakeHA()
+    app = create_app(str(tmp_path / "t.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None,
+                     ha_url="http://ha", ha_client_fn=lambda url, tok: fake, env={"ASHUR_HA_TOKEN": "t"})
+    return TestClient(app), clock, fake, app
+
+
+def _events(app, kind):
+    return [r for r in app.state.db.conn.execute("SELECT event, detail FROM session_log").fetchall() if r[0] == kind]
+
+
+def test_casa_lists_devices_by_area(casa_env):
+    c, _, _, _ = casa_env
+    r = c.get("/api/casa", headers=A)
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ha"] == "ok" and j["casas"][0]["nombre"] == "Bogotá" and j["casa"] == j["casas"][0]["id"]
+    sala = next(a for a in j["areas"] if a["nombre"] == "Sala")
+    assert [d["entity_id"] for d in sala["dispositivos"]] == ["light.sala"]
+    assert all(d["entity_id"] != "light.fantasma" for a in j["areas"] for d in a["dispositivos"])   # saved/area-only ghosts never show
+    assert "alarm_control_panel.casa" not in str(j)
+
+
+def test_casa_needs_admin(casa_env):
+    c, _, _, _ = casa_env
+    assert c.get("/api/casa").status_code == 401
+    g = c.post("/api/guests", headers=A, json={"name": "Camila"}).json()
+    gk = g.get("key") or g.get("chat_key")
+    assert c.get("/api/casa", headers={"X-Admin-Key": gk}).status_code == 401
+    assert c.post("/api/casa/1/control", headers={"X-Admin-Key": gk}, json={"entity_id": "light.sala", "accion": "on"}).status_code == 401
+    assert c.put("/api/casa/1/dispositivo", json={"entity_id": "light.sala"}).status_code == 401
+
+
+def test_casa_unconfigured(tmp_path):
+    app = create_app(str(tmp_path / "t.db"), ENROLL, ADMIN, clock=VirtualClock(), sweep_every_s=None, ha_url=None)
+    j = TestClient(app).get("/api/casa", headers=A).json()
+    assert j["ha"] == "sin_configurar" and j["casa"] is None and j["casas"] == [] and j["areas"] == [] and j["favoritos"] == []
+
+
+def test_casa_ha_down_returns_cache(casa_env):
+    c, clock, fake, app = casa_env
+    first = c.get("/api/casa", headers=A).json()
+    clock.now += 10
+    fake.fail = C.HAError("sin_respuesta")
+    r = c.get("/api/casa", headers=A)
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ha"] == "sin_respuesta" and j["areas"] == first["areas"] and j["visto"] == first["visto"] is not None
+    assert c.get("/api/casa", headers=A).json()["ha"] == "sin_respuesta"
+    assert len(_events(app, "casa_ha_falla")) == 1
+    clock.now += 601
+    c.get("/api/casa", headers=A)
+    assert len(_events(app, "casa_ha_falla")) == 2
+
+
+def test_casa_down_without_cache_is_200_empty(casa_env):
+    c, _, fake, _ = casa_env
+    fake.fail = C.HAError("sin_respuesta")
+    r = c.get("/api/casa", headers=A)
+    assert r.status_code == 200 and r.json()["ha"] == "sin_respuesta" and r.json()["visto"] is None and r.json()["areas"] == []
+
+
+def test_casa_bad_token(casa_env):
+    c, _, fake, app = casa_env
+    fake.fail = C.HAError("token_invalido")
+    assert c.get("/api/casa", headers=A).json()["ha"] == "token_invalido"
+    c.get("/api/casa", headers=A)
+    assert len(_events(app, "casa_ha_falla")) == 1
+
+
+def test_casa_states_cache_is_3s(casa_env):
+    c, clock, fake, _ = casa_env
+    c.get("/api/casa", headers=A)
+    c.get("/api/casa", headers=A)
+    assert fake.n_states == 1
+    clock.now += 4
+    c.get("/api/casa", headers=A)
+    assert fake.n_states == 2
+
+
+def test_control_light_direct(casa_env):
+    c, _, fake, app = casa_env
+    r = c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "off"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert fake.calls == [("light", "turn_off", "light.sala")]
+    assert len(_events(app, "casa_control")) == 1
+
+
+def test_control_invalidates_state_cache(casa_env):
+    c, _, fake, _ = casa_env
+    c.get("/api/casa", headers=A)
+    c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "off"})
+    n = fake.n_states
+    c.get("/api/casa", headers=A)
+    assert fake.n_states == n + 1
+
+
+def test_control_lock_needs_confirm(casa_env):
+    c, _, fake, _ = casa_env
+    body = {"entity_id": "lock.puerta", "accion": "desbloquear"}
+    r = c.post("/api/casa/1/control", headers=A, json=body)
+    assert r.status_code == 409 and r.json() == {"detail": "confirmar", "texto": "¿Desbloquear Puerta entrada?"}
+    assert fake.calls == []
+    assert c.post("/api/casa/1/control", headers=A, json={**body, "confirm": True}).status_code == 200
+    assert fake.calls == [("lock", "unlock", "lock.puerta")]
+
+
+def test_control_garage_needs_confirm(casa_env):
+    c, _, fake, _ = casa_env
+    fake.estados.append(_st("cover.garaje", "closed", device_class="garage", friendly_name="Garaje"))
+    r = c.post("/api/casa/1/control", headers=A, json={"entity_id": "cover.garaje", "accion": "abrir"})
+    assert r.status_code == 409 and fake.calls == []
+
+
+def test_control_rejects_readonly_and_unknown(casa_env):
+    c, _, fake, _ = casa_env
+    fake.estados.append(_st("climate.sala", "heat"))
+    fake.estados.append(_st("cover.cortina", "open", device_class="curtain"))
+    for eid, accion in [("sensor.nevera_w", "on"), ("alarm_control_panel.casa", "desarmar"), ("climate.sala", "on"),
+                        ("cover.cortina", "abrir"), ("light.sala", "explotar")]:
+        assert c.post("/api/casa/1/control", headers=A, json={"entity_id": eid, "accion": accion}).status_code == 400, eid
+    assert c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.nope", "accion": "on"}).status_code == 404
+    assert c.post("/api/casa/99/control", headers=A, json={"entity_id": "light.sala", "accion": "on"}).status_code == 404
+    assert fake.calls == []
+
+
+def test_control_entity_gone_with_saved_prefs_is_404(casa_env):
+    c, _, fake, _ = casa_env
+    c.put("/api/casa/1/dispositivo", headers=A, json={"entity_id": "light.fantasma", "favorito": True})
+    assert c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.fantasma", "accion": "on"}).status_code == 404
+    j = c.get("/api/casa", headers=A).json()
+    assert "light.fantasma" not in str(j) and fake.calls == []
+
+
+def test_control_ha_down(casa_env):
+    c, clock, fake, _ = casa_env
+    fake.call_fail = C.HAError("sin_respuesta")
+    r = c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "on"})
+    assert r.status_code == 502 and r.json()["detail"] == "Home Assistant no responde"
+    fake.call_fail = C.HAError("token_invalido")
+    r = c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "on"})
+    assert r.status_code == 502 and r.json()["detail"] == "El token de Home Assistant no es válido"
+    fake.call_fail = None
+    fake.fail = C.HAError("sin_respuesta")                    # even the state lookup fails
+    clock.now += 4                                           # past the 3 s cache
+    assert c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "on"}).status_code == 502
+
+
+def test_hide_needs_confirm(casa_env):
+    c, _, _, _ = casa_env
+    c.get("/api/casa", headers=A)
+    r = c.put("/api/casa/1/dispositivo", headers=A, json={"entity_id": "light.sala", "oculto": True})
+    assert r.status_code == 409 and r.json() == {"detail": "confirmar", "texto": "¿Quitar Luz sala de la casa?"}
+    assert c.put("/api/casa/1/dispositivo", headers=A, json={"entity_id": "light.sala", "oculto": True, "confirm": True}).status_code == 200
+    j = c.get("/api/casa", headers=A).json()
+    assert [d["entity_id"] for d in j["ocultos"]] == ["light.sala"]
+    r = c.put("/api/casa/1/dispositivo", headers=A, json={"entity_id": "light.sala", "oculto": False})
+    assert r.status_code == 409 and r.json()["texto"] == "¿Volver a mostrar Luz sala?"
+    assert c.put("/api/casa/1/dispositivo", headers=A, json={"entity_id": "lock.puerta", "favorito": True, "orden": 2}).status_code == 200
+    assert [d["entity_id"] for d in c.get("/api/casa", headers=A).json()["favoritos"]] == ["lock.puerta"]
+
+
+def test_token_never_leaks(tmp_path):
+    clock, fake = VirtualClock(), FakeHA()
+    app = create_app(str(tmp_path / "t.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None, ha_url="http://ha",
+                     ha_client_fn=lambda url, tok: fake, env={"ASHUR_HA_TOKEN": "SECRETO123"})
+    c = TestClient(app)
+    seen = [c.get("/api/casa", headers=A).text]
+    fake.fail = C.HAError("token_invalido")
+    clock.now += 10
+    seen.append(c.get("/api/casa", headers=A).text)
+    seen.append(c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "on"}).text)
+    rows = app.state.db.conn.execute("SELECT * FROM session_log").fetchall()
+    assert "SECRETO123" not in "".join(seen) + str(rows) + str(app.state.db.casas())

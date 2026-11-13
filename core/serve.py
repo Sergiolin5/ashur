@@ -76,7 +76,9 @@ def main() -> None:
     preflight()
     from core.app import from_env
     try:
-        app = from_env()
+        ha_url = os.environ.get("ASHUR_HA_URL", "").strip() or None
+        casa_nombre = os.environ.get("ASHUR_CASA_NOMBRE", "").strip() or "Bogotá"
+        app = from_env(ha_url=ha_url, casa_nombre=casa_nombre)
     except Exception as e:
         sys.exit(f"[ashur] NO ARRANCA: {type(e).__name__}: {e}")
     port = int(os.environ.get("ASHUR_PORT", "8000"))
@@ -90,6 +92,7 @@ def main() -> None:
         servers.append(uvicorn.Server(uvicorn.Config(app, host=public_bind, port=int(public),
                                                      lifespan="off", proxy_headers=False, **quiet)))
     ports_free([("0.0.0.0", port)] + ([(public_bind, int(public))] if public else []))
+    say(f"casa: {casa_nombre} → {ha_url}" if ha_url else "casa: sin Home Assistant")     # never the token
     n = len(app.state.db.nodes())
     brain = os.environ.get("ASHUR_BRAIN", "auto")
     ready = (f"núcleo {app.version} listo · puerta tailnet :{port} · "

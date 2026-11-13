@@ -16,7 +16,7 @@ import re
 import sqlite3
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 from pathlib import Path
 
@@ -32,7 +32,8 @@ from pydantic import BaseModel, Field
 
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
-from core import habits, lotes, signals
+from core import casa as casa_mod, habits, lotes, signals
+from core.casa import HAClient, HAError
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, OWN_TOOL, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
@@ -161,11 +162,18 @@ def create_app(
     latest_fn: Optional[Callable[[], Optional[str]]] = None,
     push_fn: Optional[Callable[[dict, dict], str]] = None,
     consolidado_root: Optional[str] = None,
+    ha_url: Optional[str] = None,
+    casa_nombre: str = "Bogotá",
+    ha_token_env: str = "ASHUR_HA_TOKEN",
+    ha_client_fn: Optional[Callable[[str, str], HAClient]] = None,
+    env: Mapping[str, str] = os.environ,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
 
     db = DB(db_path, echo=echo_events)
+    if ha_url:
+        db.casa_ensure(casa_nombre, ha_url, ha_token_env)
     db.cancel_orphan_llm_tasks(clock())         # their askers died with the previous process
 
     sweep_lock = threading.Lock()
@@ -247,7 +255,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.56.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.57.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1627,6 +1635,131 @@ def create_app(
             raise HTTPException(409, "solo se cancela lo que todavía no empezó")
         db.log(clock(), out["node_id"], "mudanza", {"id": mid, "estado": "cancelada"})
         return out
+
+    # --- casa (0.57.0): Home Assistant over REST; the token is read from the environment at each use and never stored ---
+    CASA_TXT = {"sin_respuesta": "Home Assistant no responde", "token_invalido": "El token de Home Assistant no es válido",
+                "error": "Home Assistant devolvió un error"}
+    casa_mem: dict[int, dict] = {}              # per house: lock, states/areas with their times, last good time, last failure logged
+    casa_mem_lock = threading.Lock()
+
+    def casa_entry(cid: int) -> dict:
+        with casa_mem_lock:
+            return casa_mem.setdefault(cid, {"lock": threading.Lock(), "states": None, "states_t": 0.0, "areas": {}, "areas_t": None,
+                                             "visto": None, "fail_t": None, "client": None})
+
+    def casa_client(row: dict, e: dict) -> HAClient:
+        token = env.get(row["ha_token_env"], "")
+        if not token:
+            raise HAError("token_invalido")
+        if ha_client_fn:
+            return ha_client_fn(row["ha_url"], token)
+        if not e["client"] or e["client"][0] != (row["ha_url"], token):
+            e["client"] = ((row["ha_url"], token), HAClient(row["ha_url"], token))
+        return e["client"][1]
+
+    def casa_refresh(row: dict, with_areas: bool) -> dict:
+        """Fresh enough states (3 s) and areas (300 s) from Home Assistant; raises HAError. Call with the entry's lock held."""
+        e, now = casa_entry(row["id"]), clock()
+        try:
+            cli = casa_client(row, e)
+            if e["states"] is None or now - e["states_t"] >= 3:
+                e["states"], e["states_t"], e["visto"] = cli.states(), now, now
+            if with_areas and (e["areas_t"] is None or now - e["areas_t"] >= 300):
+                e["areas"], e["areas_t"] = cli.areas(), now
+        except HAError:
+            raise
+        except Exception:
+            raise HAError("error") from None
+        return e
+
+    @app.get("/api/casa", dependencies=[Depends(require_admin)])
+    def casa_view(casa: Optional[int] = Query(default=None)):
+        rows = db.casas()
+        row = next((r for r in rows if r["id"] == casa), None) if casa is not None else (rows[0] if rows else None)
+        if casa is not None and not row:
+            raise HTTPException(404, "esa casa no existe")
+        out = {"casas": [{"id": r["id"], "nombre": r["nombre"]} for r in rows], "casa": row["id"] if row else None,
+               "ha": "sin_configurar", "visto": None}
+        if not row:
+            return {**out, **casa_mod.vista([], {}, {})}
+        e, ha = casa_entry(row["id"]), "ok"
+        with e["lock"]:
+            try:
+                casa_refresh(row, True)
+            except HAError as x:
+                ha = x.motivo
+                if e["fail_t"] is None or clock() - e["fail_t"] >= 600:
+                    e["fail_t"] = clock()
+                    db.log(clock(), None, "casa_ha_falla", {"casa": row["id"], "motivo": ha})
+            states, areas, visto = e["states"] or [], e["areas"], e["visto"]
+        return {**out, "ha": ha, "visto": visto, **casa_mod.vista(states, areas, db.casa_disps(row["id"]))}
+
+    class CasaControl(BaseModel):
+        entity_id: str = Field(min_length=1, max_length=255)
+        accion: str = Field(min_length=1, max_length=24)
+        confirm: bool = False
+
+    def confirmar(texto: str) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": "confirmar", "texto": texto})
+
+    def casa_nombre_de(states: Optional[list], entity_id: str) -> str:
+        st = next((s for s in states or [] if s.get("entity_id") == entity_id), None)
+        return ((st or {}).get("attributes") or {}).get("friendly_name") or entity_id
+
+    @app.post("/api/casa/{cid}/control", dependencies=[Depends(require_admin)])
+    def casa_control(cid: int, b: CasaControl):
+        row = db.casa_get(cid)
+        if not row:
+            raise HTTPException(404, "esa casa no existe")
+        e = casa_entry(cid)
+        with e["lock"]:
+            try:
+                casa_refresh(row, False)
+            except HAError as x:
+                raise HTTPException(502, CASA_TXT.get(x.motivo, CASA_TXT["error"])) from None
+            st = next((s for s in e["states"] if s.get("entity_id") == b.entity_id), None)
+            if not st:
+                raise HTTPException(404, "ese dispositivo ya no está en Home Assistant")
+            try:
+                dominio, servicio = casa_mod.servicio(st, b.accion)
+            except ValueError:
+                raise HTTPException(400, "Ese dispositivo no se controla desde Ashur") from None
+            if dominio in casa_mod.CONFIRMAR and not b.confirm:
+                return confirmar(f"¿{b.accion.capitalize()} {casa_nombre_de(e['states'], b.entity_id)}?")
+            ok, motivo = True, None
+            try:
+                casa_client(row, e).call(dominio, servicio, b.entity_id)
+            except HAError as x:
+                ok, motivo = False, x.motivo
+            except Exception:
+                ok, motivo = False, "error"
+            if ok:
+                e["states_t"] = -1e18                           # the next read asks Home Assistant again (the old states stay as cache)
+        db.log(clock(), None, "casa_control", {"casa": cid, "entity": b.entity_id, "accion": b.accion, "ok": ok})
+        if not ok:
+            raise HTTPException(502, CASA_TXT.get(motivo, CASA_TXT["error"]))
+        return {"ok": True}
+
+    class CasaDispositivo(BaseModel):
+        entity_id: str = Field(min_length=1, max_length=255)
+        favorito: Optional[bool] = None
+        orden: Optional[int] = Field(default=None, ge=-100000, le=100000)
+        oculto: Optional[bool] = None
+        confirm: bool = False
+
+    @app.put("/api/casa/{cid}/dispositivo", dependencies=[Depends(require_admin)])
+    def casa_dispositivo(cid: int, b: CasaDispositivo):
+        if not db.casa_get(cid):
+            raise HTTPException(404, "esa casa no existe")
+        actual = db.casa_disps(cid).get(b.entity_id) or {}
+        if b.oculto is not None and b.oculto != bool(actual.get("oculto")) and not b.confirm:
+            nombre = casa_nombre_de(casa_entry(cid)["states"], b.entity_id)      # whatever is cached: no call to Home Assistant here
+            return confirmar(f"¿Quitar {nombre} de la casa?" if b.oculto else f"¿Volver a mostrar {nombre}?")
+        cambios = {k: int(v) for k, v in (("favorito", b.favorito), ("orden", b.orden), ("oculto", b.oculto)) if v is not None}
+        if cambios:
+            db.casa_disp_set(cid, b.entity_id, **cambios)
+            db.log(clock(), None, "casa_dispositivo", {"casa": cid, "entity": b.entity_id, "cambio": cambios})
+        return {"ok": True}
 
     class MarkScope(BaseModel):
         node: str = Field(min_length=1, max_length=64)
@@ -3942,7 +4075,7 @@ def newest_published(image: str) -> Optional[str]:
     return max(versions, key=vtuple) if versions else None
 
 
-def from_env() -> FastAPI:
+def from_env(ha_url: Optional[str] = None, casa_nombre: Optional[str] = None) -> FastAPI:
     """Entry point: `uvicorn --factory core.app:from_env`.
 
     Keys come from ASHUR_ENROLL_KEY / ASHUR_ADMIN_KEY when set; otherwise from
@@ -3961,4 +4094,6 @@ def from_env() -> FastAPI:
     public = os.environ.get("ASHUR_PUBLIC_PORT", "8001").strip()
     return create_app(db_path=db_path, enroll_key=enroll, admin_key=admin,
                       public_port=int(public) if public else None, echo_events=True,
-                      inventory_in_background=True)
+                      inventory_in_background=True,
+                      ha_url=(os.environ.get("ASHUR_HA_URL", "").strip() or None) if ha_url is None else (ha_url or None),
+                      casa_nombre=(os.environ.get("ASHUR_CASA_NOMBRE", "").strip() or "Bogotá") if casa_nombre is None else casa_nombre)

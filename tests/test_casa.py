@@ -375,3 +375,34 @@ def test_token_never_leaks(tmp_path):
     seen.append(c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "on"}).text)
     rows = app.state.db.conn.execute("SELECT * FROM session_log").fetchall()
     assert "SECRETO123" not in "".join(seen) + str(rows) + str(app.state.db.casas())
+
+
+def test_casa_backoff_after_failure(casa_env):
+    c, clock, fake, _ = casa_env
+    c.get("/api/casa", headers=A)
+    clock.now += 400                                          # states and areas both expired
+    fake.fail = C.HAError("sin_respuesta")
+    n = fake.n_states
+    assert c.get("/api/casa", headers=A).json()["ha"] == "sin_respuesta"
+    assert fake.n_states == n + 1
+    for _ in range(3):
+        assert c.get("/api/casa", headers=A).json()["ha"] == "sin_respuesta"
+    assert fake.n_states == n + 1                             # no new call to Home Assistant inside the 3 s window
+    clock.now += 4
+    fake.fail = None
+    j = c.get("/api/casa", headers=A).json()
+    assert j["ha"] == "ok" and fake.n_states == n + 2         # retried after the window, recovered
+
+
+def test_casa_areas_failure_is_not_retried_every_get(casa_env):
+    c, clock, fake, _ = casa_env
+    calls = {"n": 0}
+
+    def areas():
+        calls["n"] += 1
+        raise C.HAError("error")
+    fake.areas = areas
+    assert c.get("/api/casa", headers=A).json()["ha"] == "error"
+    c.get("/api/casa", headers=A)
+    c.get("/api/casa", headers=A)
+    assert calls["n"] == 1

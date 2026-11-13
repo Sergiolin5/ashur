@@ -1645,7 +1645,7 @@ def create_app(
     def casa_entry(cid: int) -> dict:
         with casa_mem_lock:
             return casa_mem.setdefault(cid, {"lock": threading.Lock(), "states": None, "states_t": 0.0, "areas": {}, "areas_t": None,
-                                             "visto": None, "fail_t": None, "client": None})
+                                             "visto": None, "fail_t": None, "client": None, "fail": None})
 
     def casa_client(row: dict, e: dict) -> HAClient:
         token = env.get(row["ha_token_env"], "")
@@ -1660,16 +1660,19 @@ def create_app(
     def casa_refresh(row: dict, with_areas: bool) -> dict:
         """Fresh enough states (3 s) and areas (300 s) from Home Assistant; raises HAError. Call with the entry's lock held."""
         e, now = casa_entry(row["id"]), clock()
+        if e["fail"] and now < e["fail"][0]:                    # backoff: within 3 s of a failure, do not ask Home Assistant again
+            raise HAError(e["fail"][1])
         try:
             cli = casa_client(row, e)
             if e["states"] is None or now - e["states_t"] >= 3:
                 e["states"], e["states_t"], e["visto"] = cli.states(), now, now
             if with_areas and (e["areas_t"] is None or now - e["areas_t"] >= 300):
                 e["areas"], e["areas_t"] = cli.areas(), now
-        except HAError:
-            raise
-        except Exception:
-            raise HAError("error") from None
+        except Exception as x:
+            motivo = x.motivo if isinstance(x, HAError) else "error"
+            e["fail"] = (now + 3, motivo)
+            raise HAError(motivo) from None
+        e["fail"] = None
         return e
 
     @app.get("/api/casa", dependencies=[Depends(require_admin)])

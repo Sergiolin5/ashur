@@ -1,6 +1,8 @@
 """Casa (0.57.0): the tables behind the Home Assistant tab."""
+import httpx
 import pytest
 
+from core import casa as C
 from core.db import DB
 
 
@@ -29,11 +31,6 @@ def test_casa_disp_set_upserts(tmp_path):
 
 
 # ---- core/casa.py: cliente HA y vista (sin red) ----
-import httpx
-
-from core import casa as C
-
-
 def _st(eid, state="on", **attrs):
     return {"entity_id": eid, "state": state, "attributes": attrs}
 
@@ -150,3 +147,14 @@ def test_areas_template_parses():
 def test_repr_hides_token():
     c = C.HAClient("http://ha.local:8123", "SECRETO")
     assert "SECRETO" not in repr(c) and "SECRETO" not in str(c)
+
+
+def test_states_non_list_body_is_error():
+    with pytest.raises(C.HAError) as e:
+        _client(lambda r: httpx.Response(200, json={"message": "x"})).states()
+    assert e.value.motivo == "error"
+
+
+def test_kw_rounding():
+    v = C.vista([_st("sensor.c", "1.001", unit_of_measurement="kW")], {}, {})
+    assert v["areas"][0]["dispositivos"][0]["potencia_w"] == 1001.0

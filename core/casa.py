@@ -53,9 +53,12 @@ class HAClient:
 
     def states(self) -> list:
         try:
-            return self._req("GET", "/api/states").json()
+            data = self._req("GET", "/api/states").json()
         except ValueError:
             raise HAError("error") from None
+        if not isinstance(data, list):
+            raise HAError("error")
+        return data
 
     def areas(self) -> dict:
         r = self._req("POST", "/api/template", json={"template": AREAS_TEMPLATE})
@@ -100,7 +103,7 @@ def _potencia(state: dict) -> Optional[float]:
         return None
     if v != v or v in (float("inf"), float("-inf")):
         return None
-    return v * 1000 if unit == "kW" else v
+    return round(v * 1000, 3) if unit == "kW" else v
 
 
 def vista(states: list, areas: dict, prefs: dict) -> dict:

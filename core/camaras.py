@@ -61,6 +61,19 @@ def _reescribir_uri(uri: str, base: str, token: str) -> Optional[str]:
 
 
 _URI_ATTR = re.compile(r'URI="([^"]*)"')
+# the tags go2rtc writes (internal/hls/session.go) plus a few harmless standard ones; any other tag or comment is dropped
+ETIQUETAS = ("#EXTM3U", "#EXT-X-VERSION", "#EXT-X-TARGETDURATION", "#EXT-X-MEDIA-SEQUENCE", "#EXT-X-MAP", "#EXTINF",
+             "#EXT-X-STREAM-INF", "#EXT-X-INDEPENDENT-SEGMENTS", "#EXT-X-DISCONTINUITY", "#EXT-X-PROGRAM-DATE-TIME")
+
+
+def url_valida(url: str) -> bool:
+    """http(s), a host, a valid port and no user or password: go2rtc on localhost needs nothing else."""
+    try:
+        u = urlsplit(url.strip())
+        u.port
+    except (ValueError, AttributeError):
+        return False
+    return u.scheme in ("http", "https") and bool(u.hostname) and u.username is None and u.password is None
 
 
 def reescribir_playlist(texto: str, base: str, token: str) -> str:
@@ -72,6 +85,8 @@ def reescribir_playlist(texto: str, base: str, token: str) -> str:
         if not s:
             continue
         if s.startswith("#"):
+            if s.split(":", 1)[0] not in ETIQUETAS:
+                continue
             malo = False
 
             def cambia(m: re.Match) -> str:
@@ -103,7 +118,7 @@ def hls_ids(texto: str) -> set:
 class Go2rtc:
     def __init__(self, base_url: str, http: Optional[httpx.Client] = None):
         self._base = base_url.rstrip("/")
-        self._http = http or httpx.Client(timeout=TIMEOUT_CORTO)
+        self._http = http or httpx.Client(timeout=TIMEOUT_CORTO, trust_env=False)   # localhost: never through a proxy from the environment
 
     def close(self) -> None:
         self._http.close()
@@ -119,7 +134,7 @@ class Go2rtc:
         except ValueError:
             return ""
 
-    def _causa(self, x: Exception) -> str:
+    def causa(self, x: Exception) -> str:
         """From the exception's class and a few known words of its message (never the message itself), plus host:port."""
         msg = str(x).lower()
         if isinstance(x, httpx.TimeoutException):
@@ -143,7 +158,7 @@ class Go2rtc:
         try:
             r = self._http.request(method, self._base + path, timeout=timeout, **kw)
         except httpx.HTTPError as x:
-            raise CamError(self._causa(x)) from None
+            raise CamError(self.causa(x)) from None
         self._estado(r)
         return r
 
@@ -177,18 +192,25 @@ class Go2rtc:
                     buf += chunk
                     if len(buf) > FOTO_MAX:
                         raise CamError("foto demasiado grande")
-        except httpx.HTTPError as x:
-            raise CamError(self._causa(x)) from None
+        except (httpx.HTTPError, httpx.StreamError) as x:
+            raise CamError(self.causa(x)) from None
         if not buf:
             raise CamError("foto vacía")
         return bytes(buf)
 
     def sdp(self, nombre: str, offer: str) -> str:
-        r = self._req("POST", "/api/webrtc", params={"src": nombre}, content=offer.encode(),
-                      headers={"Content-Type": "application/sdp"})
-        if len(r.content) > SDP_MAX:
-            raise CamError("respuesta SDP demasiado grande")
-        answer = r.text
+        try:
+            with self._http.stream("POST", self._base + "/api/webrtc", params={"src": nombre}, content=offer.encode(),
+                                   headers={"Content-Type": "application/sdp"}, timeout=TIMEOUT_CORTO) as r:
+                self._estado(r)
+                buf = bytearray()
+                for chunk in r.iter_bytes():
+                    buf += chunk
+                    if len(buf) > SDP_MAX:
+                        raise CamError("respuesta SDP demasiado grande")
+        except (httpx.HTTPError, httpx.StreamError) as x:
+            raise CamError(self.causa(x)) from None
+        answer = buf.decode("utf-8", "replace")
         if not answer.startswith("v=0"):
             raise CamError("respuesta SDP no válida")
         return answer
@@ -206,7 +228,7 @@ class Go2rtc:
             r = self._http.send(self._http.build_request("GET", self._base + path, params=params, timeout=timeout),
                                 stream=True)
         except httpx.HTTPError as x:
-            raise CamError(self._causa(x)) from None
+            raise CamError(self.causa(x)) from None
         if r.status_code >= 400:
             r.close()
             self._estado(r)

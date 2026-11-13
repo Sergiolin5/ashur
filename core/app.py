@@ -180,6 +180,9 @@ def create_app(
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
 
     db = DB(db_path, echo=echo_events)
+    if camaras_url and not cam_mod.url_valida(camaras_url):
+        db.log(clock(), None, "casa_camaras_url_invalida", {})       # never the value: it is not ours to echo
+        camaras_url = None
     if ha_url:
         db.casa_ensure(casa_nombre, ha_url, ha_token_env)
     db.cancel_orphan_llm_tasks(clock())         # their askers died with the previous process
@@ -330,17 +333,21 @@ def create_app(
                 # setting up or removing the second key: only from the tailnet
                 return JSONResponse({"detail": "El autenticador solo se configura desde la tailnet."},
                                     status_code=403)
-            # cámaras (0.59.0): <img> and <video> cannot send X-Admin-Key, so a photo or HLS GET carrying a valid,
-            # current video session made over Funnel (admin key + TOTP) passes; anything else keeps the check below
-            camara_ok = (request.method == "GET" and CAMARA_MEDIOS.fullmatch(path) is not None
-                         and video_sesion(request.query_params.get("v", ""), True) is not None)
-            if path.startswith("/api/") and not camara_ok:
+            if path.startswith("/api/"):
                 now = clock()
-                if now < locked_until[0]:
+                if now < locked_until[0]:               # the lock stops everything, camera media included
                     return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta. Se desbloquea en "
                                          "15 minutos; por la tailnet sigue funcionando."}, status_code=429)
+                # cámaras (0.59.0): <img> and <video> cannot send X-Admin-Key, so a photo or HLS GET with a video
+                # session token and no key is judged by the token alone: valid and made over Funnel (admin key +
+                # TOTP) passes; expired or unknown is a 401 that does not count as a wrong key (a player still
+                # polling after its 15 min must not lock the door on its owner; guessing a 32-byte token is hopeless)
+                v = request.query_params.get("v", "")
                 k = request.headers.get("x-admin-key", "")
-                if not _same(k, admin_key) and not db.guest_by_key(k):
+                medio = request.method == "GET" and bool(v) and not k and CAMARA_MEDIOS.fullmatch(path) is not None
+                if medio and video_sesion(v, True) is None:
+                    return JSONResponse({"detail": "La sesión de video venció"}, status_code=401)
+                if not medio and not _same(k, admin_key) and not db.guest_by_key(k):
                     failures[:] = [t for t in failures if now - t < PUBLIC_FAIL_WINDOW_S] + [now]
                     if len(failures) >= PUBLIC_MAX_FAILURES:
                         locked_until[0] = now + PUBLIC_LOCK_S
@@ -2509,10 +2516,9 @@ def create_app(
     CAM_NO_RESPONDE = "El servicio de cámaras no responde"
 
     def camaras_cli() -> Go2rtc:
-        if camaras_client_fn:
-            return camaras_client_fn(camaras_url)
+        """One client for the life of the core (its connection pool is reused)."""
         if cam_mem["cli"] is None:
-            cam_mem["cli"] = Go2rtc(camaras_url)
+            cam_mem["cli"] = camaras_client_fn(camaras_url) if camaras_client_fn else Go2rtc(camaras_url)
         return cam_mem["cli"]
 
     def cam_falla(causa: str) -> None:
@@ -2627,8 +2633,9 @@ def create_app(
                     raise HTTPException(409, "Esta cámara ya no está abierta en la sesión de video")
                 if q.get("id") not in ids:
                     raise HTTPException(404, "Not Found")
+        cli = camaras_cli()
         try:
-            r = camaras_cli().hls(nombre, ruta, q)
+            r = cli.hls(nombre, ruta, q)
         except CamError as x:
             raise cam_http(x) from None
         if ruta.endswith(".m3u8"):
@@ -2638,8 +2645,8 @@ def create_app(
                     buf += chunk
                     if len(buf) > cam_mod.PLAYLIST_MAX:
                         raise cam_http(CamError("playlist demasiado grande"))
-            except httpx.HTTPError as x:
-                raise cam_http(CamError(camaras_cli()._causa(x))) from None
+            except (httpx.HTTPError, httpx.StreamError) as x:
+                raise cam_http(CamError(cli.causa(x))) from None
             finally:
                 r.close()
             out = cam_mod.reescribir_playlist(buf.decode("utf-8", "replace"), f"/api/casa/camaras/{nombre}/hls/", v)
@@ -2658,7 +2665,7 @@ def create_app(
             try:
                 for chunk in r.iter_bytes():
                     yield chunk
-            except httpx.HTTPError:
+            except (httpx.HTTPError, httpx.StreamError):
                 return                                       # go2rtc dropped the segment: the player asks for the next one
             finally:
                 r.close()
@@ -4586,8 +4593,5 @@ def from_env(ha_url: Optional[str] = None, casa_nombre: Optional[str] = None, ca
 
 
 def camaras_url_env() -> Optional[str]:
-    """ASHUR_CAMARAS_URL: unset → go2rtc on 127.0.0.1:1984 (the cameras compose); set empty → cameras off."""
-    v = os.environ.get("ASHUR_CAMARAS_URL")
-    if v is None:
-        return "http://127.0.0.1:1984"
-    return v.strip() or None
+    """ASHUR_CAMARAS_URL (http://127.0.0.1:1984 with the cameras compose); unset or empty → cameras off."""
+    return os.environ.get("ASHUR_CAMARAS_URL", "").strip() or None

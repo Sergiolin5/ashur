@@ -110,9 +110,10 @@ solo en `/DATA/AppData/ashur/camaras/go2rtc.yaml` en el servidor; nada con clave
 
 1. Crear `/DATA/AppData/ashur/camaras/go2rtc.yaml` desde `deploy/camaras/go2rtc.example.yaml`, con el usuario, la clave, la IP y el puerto ONVIF de cada cámara (los mismos de Home Assistant) y la IP de la tailnet del servidor en `webrtc.candidates`.
 2. Importar `deploy/zimaos-camaras-compose.yaml` en ZimaOS como app personalizada.
-3. «Actualizar» Ashur y, desde la tailnet, abrir Casa y ver las miniaturas; tocar una para ver el video en vivo.
-4. Desde fuera de la tailnet, comprobar que pide el código TOTP.
-5. Opcional, para no pasar el límite de conexiones de las cámaras: en Home Assistant, cambiar cada cámara para que lea `rtsp://127.0.0.1:8554/<nombre>` del relay.
+3. Poner `ASHUR_CAMARAS_URL=http://127.0.0.1:1984` en las variables de ashur-core (sin ella, Casa no muestra cámaras).
+4. «Actualizar» Ashur y, desde la tailnet, abrir Casa y ver las miniaturas; tocar una para ver el video en vivo.
+5. Desde fuera de la tailnet, comprobar que pide el código TOTP.
+6. Opcional, para no pasar el límite de conexiones de las cámaras: en Home Assistant, cambiar cada cámara para que lea `rtsp://127.0.0.1:8554/<nombre>` del relay.
 
 Seguridad: la API de go2rtc (sin clave) muestra y edita las claves de las cámaras. Por eso el compose
 fija en su línea de comando, después del archivo, `api` y `rtsp` en `127.0.0.1` (y apaga el puerto SRTP 8443):

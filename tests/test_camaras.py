@@ -331,3 +331,99 @@ def test_go2rtc_caido(tmp_path):
 def test_version(tmp_path):
     app, tail, pub, clock, fake = _app(tmp_path)
     assert app.version == "0.59.0"
+
+
+# ---- fixes after security review ----
+def test_bloqueo_publico_frena_medios(tmp_path):
+    app, tail, pub, clock, fake, code = _con_totp(tmp_path)
+    pv = _sesion(pub, {**A, "X-TOTP": code()})
+    for _ in range(10):
+        assert pub.get("/api/overview", headers={"X-Admin-Key": "mala"}).status_code == 401
+    assert pub.get("/api/casa", headers=A).status_code == 429
+    n = len(fake.calls)
+    assert pub.get(f"/api/casa/camaras/sala/foto.jpg?v={pv}").status_code == 429
+    assert pub.get(f"/api/casa/camaras/sala/hls/stream.m3u8?v={pv}").status_code == 429
+    assert len(fake.calls) == n
+
+
+def test_sesion_vencida_no_bloquea_la_puerta(tmp_path):
+    app, tail, pub, clock, fake, code = _con_totp(tmp_path)
+    pv = _sesion(pub, {**A, "X-TOTP": code()})
+    assert pub.get(f"/api/casa/camaras/sala/hls/stream.m3u8?v={pv}").status_code == 200
+    clock.now += 901
+    n = len(fake.calls)
+    for _ in range(12):
+        r = pub.get(f"/api/casa/camaras/sala/hls/playlist.m3u8?id=s1&v={pv}")
+        assert r.status_code == 401 and r.json()["detail"] == "La sesión de video venció"
+    assert len(fake.calls) == n
+    assert pub.get("/api/casa", headers=A).status_code == 200
+    assert not _events(app, "public_locked")
+
+
+def test_sin_variable_desactivado(tmp_path, monkeypatch):
+    from core.app import camaras_url_env
+    monkeypatch.delenv("ASHUR_CAMARAS_URL", raising=False)
+    assert camaras_url_env() is None
+    monkeypatch.setenv("ASHUR_CAMARAS_URL", "  ")
+    assert camaras_url_env() is None
+    monkeypatch.setenv("ASHUR_CAMARAS_URL", "http://127.0.0.1:1984")
+    assert camaras_url_env() == "http://127.0.0.1:1984"
+    monkeypatch.delenv("ASHUR_CAMARAS_URL")
+    app, tail, pub, clock, fake = _app(tmp_path, url=camaras_url_env())
+    assert tail.get("/api/casa/camaras", headers=A).json()["estado"] == "desactivado"
+
+
+@pytest.mark.parametrize("url", ["ftp://127.0.0.1:1984", "http://:1984", "http://127.0.0.1:99999", "no es url"])
+def test_url_invalida_desactiva(tmp_path, url):
+    app, tail, pub, clock, fake = _app(tmp_path, url=url)
+    assert tail.get("/api/casa/camaras", headers=A).json()["estado"] == "desactivado"
+    assert len(_events(app, "casa_camaras_url_invalida")) == 1
+    assert url not in _log(app)
+    assert fake.calls == []
+
+
+def test_playlist_solo_etiquetas_conocidas():
+    texto = ("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-SESSION-DATA:DATA-ID=\"x\",VALUE=\"admin:SECRETO99\"\n"
+             "#EXT-X-PROGRAM-DATE-TIME:2026-11-13T00:00:00Z\n#EXT-X-DISCONTINUITY\n#EXTINF:0.5,\nsegment.m4s?id=s1&n=1\n"
+             "# un comentario con rtsp://admin:SECRETO99@x\n")
+    out = K.reescribir_playlist(texto, "/b/", "T")
+    assert "SECRETO99" not in out and "SESSION-DATA" not in out and "comentario" not in out
+    assert out.splitlines() == ["#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-INDEPENDENT-SEGMENTS",
+                                "#EXT-X-PROGRAM-DATE-TIME:2026-11-13T00:00:00Z", "#EXT-X-DISCONTINUITY",
+                                "#EXTINF:0.5,", "/b/segment.m4s?id=s1&n=1&v=T"]
+
+
+def test_go2rtc_sin_proxy_del_entorno():
+    g = K.Go2rtc("http://127.0.0.1:1984")
+    assert g._http._trust_env is False
+    g.close()
+
+
+def test_sdp_respuesta_grande_502(tmp_path):
+    app, tail, pub, clock, fake = _app(tmp_path)
+    orig = fake.__call__
+
+    def grande(req):
+        if req.url.path == "/api/webrtc":
+            return httpx.Response(201, text="v=0\r\n" + "a" * (70 * 1024))
+        return orig(req)
+    fake.__class__ = type("F", (FakeGo2rtc,), {"__call__": lambda self, r: grande(r)})
+    v = _sesion(tail)
+    r = tail.post(f"/api/casa/camaras/sala/webrtc?v={v}", content="v=0\r\n")
+    assert r.status_code == 502 and "demasiado grande" in r.json()["detail"]
+
+
+def test_segmento_cortado_no_rompe(tmp_path):
+    app, tail, pub, clock, fake = _app(tmp_path)
+
+    class Roto(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"abc"
+            raise httpx.ReadError("cortado")
+    orig = FakeGo2rtc.__call__
+    fake.__class__ = type("F", (FakeGo2rtc,), {"__call__": lambda self, r: httpx.Response(200, stream=Roto())
+                                                if r.url.path == "/api/hls/segment.m4s" else orig(self, r)})
+    v = _sesion(tail)
+    tail.get(f"/api/casa/camaras/sala/hls/stream.m3u8?v={v}")
+    r = tail.get(f"/api/casa/camaras/sala/hls/segment.m4s?id=s1&n=1&v={v}")
+    assert r.status_code == 200 and r.content == b"abc"

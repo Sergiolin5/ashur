@@ -24,6 +24,7 @@ services:
       # ANTHROPIC_API_KEY: add it in ZimaOS (app settings > environment), never in this file
       # ASHUR_HA_URL: "http://127.0.0.1:8123"
       # ASHUR_HA_TOKEN: en ZimaOS (app settings > environment), never in this file
+      # ASHUR_CAMARAS_URL: "http://127.0.0.1:1984"   # go2rtc (deploy/zimaos-camaras-compose.yaml); unset = no cameras
     deploy:
       resources:
         limits:

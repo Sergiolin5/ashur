@@ -259,7 +259,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.58.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.59.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2184,11 +2184,23 @@ def create_app(
 
     @app.get("/api/whoami")
     def whoami(x_admin_key: str = Header(default=""), guest: Optional[dict] = Depends(require_chat)):
+        owner = db.setting("owner_name") or "Sergio"          # what guests see: "Ashur, el asistente de <owner>"
         if guest:
-            return {"role": "guest", "name": guest["name"]}
+            return {"role": "guest", "name": guest["name"], "owner": owner}
         if _same(x_admin_key, admin_key):
-            return {"role": "admin", "name": "Sergio"}
-        return {"role": "self", "name": "Sergio"}          # his chat-only key: the chat view, as himself
+            return {"role": "admin", "name": owner, "owner": owner}
+        return {"role": "self", "name": owner, "owner": owner}    # his chat-only key: the chat view, as himself
+
+    class OwnerIn(BaseModel):
+        name: str
+
+    @app.put("/api/owner", dependencies=[Depends(require_admin)])
+    def owner_put(body: OwnerIn):
+        name = body.name.strip()[:40]
+        if not name:
+            raise HTTPException(400, "Escribe un nombre.")
+        db.set_setting("owner_name", name)
+        return {"owner": name}
 
     @app.post("/api/chat")
     def chat(body: ChatIn, guest: Optional[dict] = Depends(require_chat)):
@@ -3346,7 +3358,8 @@ def create_app(
     def health(request: Request):
         """Proves the core is up and says which door the request came through."""
         door = "public" if on_public_port(request.scope) else "tailnet"
-        return {"ok": True, "service": "ashur-core", "version": app.version, "door": door}
+        return {"ok": True, "service": "ashur-core", "version": app.version, "door": door,
+                "channel": os.environ.get("ASHUR_CHANNEL", "")}       # "experimental" on branch images
 
     @app.get("/status", dependencies=[Depends(require_admin)])
     def status():

@@ -1955,7 +1955,8 @@ def create_app(
         row = casa_o_404(cid)
         maximo = casa_mod.MAX_DIAS[resolucion] * 86400
         hasta = clock() if hasta is None else hasta
-        desde = hasta - min(30 * 86400, maximo) if desde is None else desde
+        if desde is None:                                       # the last 30 local days (or the most this resolution serves), from midnight
+            desde = casa_mod.inicio_dia(hasta - (min(30 * 86400, maximo) // 86400 - 1) * 86400, casa_tz(row))
         if not desde < hasta or hasta - desde > maximo:
             raise HTTPException(400, f"el rango tiene que ser de hasta {casa_mod.MAX_DIAS[resolucion]} días")
         e, _, _, states, areas, devices, _ = casa_cache(row)

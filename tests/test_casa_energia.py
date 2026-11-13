@@ -484,7 +484,7 @@ def test_energia_endpoint_totals_and_no_medido(en):
                           _fila3("sensor.tv_w", 3.0, HOY - DIA)])
     j = c.get("/api/casa/1/energia", headers=A).json()
     assert j["tablero"] is None and j["no_medido"] is None and j["resolucion"] == 1 and j["nivel_casa"] == 1
-    assert j["hasta"] == T0 and j["desde"] == T0 - 30 * DIA
+    assert j["hasta"] == T0 and j["desde"] == HOY - 29 * DIA                  # 30 local days from midnight, so the first day is whole
     assert {x["inicio"]: x["kwh"] for x in j["total"]} == {HOY - DIA: 12.0, HOY: 17.0}      # no tablero: every source adds up
     assert c.put("/api/casa/1/energia/total", headers=A, json={"entity_id": "light.sala"}).status_code == 400
     assert c.put("/api/casa/1/energia/total", headers=A, json={"entity_id": "sensor.casa_kwh"}).status_code == 200
@@ -537,6 +537,15 @@ def test_hidden_sources_do_not_count(en):
     assert {x["inicio"]: x["kwh"] for x in j["total"]} == {HOY: 4.0}
     assert all(x["entity_id"] != "sensor.tv_w" for a in j["areas"] for x in a["dispositivos"])
     assert c.get("/api/casa", headers=A).json()["energia"]["hoy_kwh"] == 4.0
+
+
+def test_energia_default_desde_is_a_day_start(en):
+    c, clock, _, _ = en
+    for res, dias in ((1, 30), (2, 30), (3, 10)):
+        j = c.get(f"/api/casa/1/energia?resolucion={res}", headers=A).json()
+        assert j["desde"] == HOY - (dias - 1) * DIA and j["hasta"] == T0
+    clock.now = HOY + 20 * 3600 + 1800                                                  # late in the day: same midnight logic
+    assert c.get("/api/casa/1/energia", headers=A).json()["desde"] == HOY - 29 * DIA
 
 
 def test_energia_endpoint_range_limit(en):

@@ -569,6 +569,7 @@
       <svg class="ep-chart" id="ep-chart" viewBox="0 0 340 110" role="img" aria-label="Sin datos"></svg>
       <div class="ep-axis"><span id="ep-a0"></span><span id="ep-a1"></span></div>
       <div class="note" id="ep-leg" hidden></div>
+      <div class="note" id="ep-part" hidden></div>
       <div class="casa-area">Por área</div>
       <div id="ep-areas"></div>
       <div id="ep-sin"></div>
@@ -2020,7 +2021,7 @@
     if (box.dataset.sig !== sig) {
       box.dataset.sig = sig;
       box.replaceChildren(...per.map(([k, t]) => { const b = el("button", "casa-pill", t); b.type = "button"; b.dataset.per = k;
-        b.addEventListener("click", () => { epPer = k; epChartSig = epAreasSig = null; epPaint(); epLoad(); }); return b; }));
+        b.addEventListener("click", () => { epErr(""); epPer = k; epChartSig = epAreasSig = null; epPaint(); epLoad(); }); return b; }));
     }
     for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.per === epPer));
   }
@@ -2062,7 +2063,7 @@
     h.append(l, bar);
     const ds = el("div", "ep-devs"); ds.hidden = true;
     h.addEventListener("click", () => {
-      const open = ds.hidden; ds.hidden = !open; h.setAttribute("aria-expanded", String(open));
+      epErr(""); const open = ds.hidden; ds.hidden = !open; h.setAttribute("aria-expanded", String(open));
       if (open) epOpenAreas.add(a.nombre); else epOpenAreas.delete(a.nombre);
     });
     n.append(h, ds);
@@ -2076,7 +2077,7 @@
     epMaxNivel = Math.max(1, ...d.areas.flatMap((a) => a.dispositivos.map((x) => x.nivel)));
     const kind = epKind(epPer, d.resolucion), slots = epBuckets(epPer, d.resolucion, Date.now());
     if (epPer === "5m" && epMaxNivel < 3) { epPer = "hoy"; epChartSig = epAreasSig = null; epLoad(); return; }     // no sensor at level 3 anymore
-    epPerBtns(); epErrT = ""; epMsg();
+    epPerBtns(); epMsg();
     // total chart
     const tot = epAgg(d.total, kind, slots, (p) => p.kwh), nm = d.no_medido ? epAgg(d.no_medido, kind, slots, (p) => p.kwh) : slots.map(() => null);
     const sum = tot.reduce((a, v) => a + (v || 0), 0), sumNm = nm.reduce((a, v) => a + (v || 0), 0);
@@ -2093,6 +2094,8 @@
     }
     const leg = $("ep-leg"); leg.hidden = !d.no_medido;
     if (d.no_medido) leg.textContent = "En gris: no medido (" + epKwh(sumM) + "), lo que el tablero lee y los sensores no explican.";
+    const part = $("ep-part"), lim = d.resolucion > 1 && d.areas.some((a) => a.dispositivos.some((x) => x.nivel < d.resolucion));
+    part.hidden = !lim; if (lim) epTxt(part, "Las barras solo incluyen sensores con detalle " + (d.resolucion === 2 ? "por horas" : "cada 5 min") + "; el total incluye todos.");
     // areas
     const top = Math.max(0, ...d.areas.map((a) => a.kwh)) || 1, asig = [epPer, d.resolucion, d.areas.map((a) => a.nombre + "=" + a.dispositivos.map((x) => x.entity_id).join(",")).join(";")].join("#");
     if (asig !== epAreasSig) {
@@ -2138,7 +2141,10 @@
     const t = epErrT || (est && est !== "ok" ? EP_STAT_LONG[est] || EP_STAT_LONG.error : "");
     msg.hidden = !t; epTxt(msg, t);
   }
-  function epErr(t) { epErrT = t || ""; epMsg(); if (t) window.scrollTo({ top: 0 }); }
+  function epErr(t) {                             // stays until the next action in the view or 20 s; background renders don't clear it
+    clearTimeout(epErr.t); epErrT = t || ""; epMsg();
+    if (t) { $("ep-msg").scrollIntoView({ block: "nearest" }); epErr.t = setTimeout(() => epErr(""), 20000); }
+  }
   async function epPut(path, body) {
     try {
       const r = await api(path, { method: "PUT", body: JSON.stringify(body) });
@@ -2182,7 +2188,7 @@
     });
   }
   function epShow(on) {
-    epOpen = on; clearTimeout(epTimer); epReq++;
+    epOpen = on; clearTimeout(epTimer); epReq++; epErr("");
     $("casa-energia").hidden = !on; $("casa-main").hidden = on;
     if (on) { window.scrollTo({ top: 0 }); epChartSig = epAreasSig = epSetSig = null; $("ep-areas").replaceChildren(); epPaint(); epLoop(); }
   }

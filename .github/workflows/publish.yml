@@ -2,7 +2,7 @@ name: publish-core
 
 on:
   push:
-    branches: [main]
+    branches: [main, "experimento/**"]   # experimento/* publishes only ashur-core:experimental, never :latest
   workflow_dispatch:
 
 permissions:
@@ -36,10 +36,11 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/sergiolin5/ashur-core:latest
-            ghcr.io/sergiolin5/ashur-core:${{ steps.ver.outputs.core }}
+            ${{ github.ref == 'refs/heads/main' && 'ghcr.io/sergiolin5/ashur-core:latest' || 'ghcr.io/sergiolin5/ashur-core:experimental' }}
+            ${{ github.ref == 'refs/heads/main' && format('ghcr.io/sergiolin5/ashur-core:{0}', steps.ver.outputs.core) || '' }}
             ghcr.io/sergiolin5/ashur-core:${{ github.sha }}
       - name: Node image
+        if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -51,6 +52,7 @@ jobs:
             ghcr.io/sergiolin5/ashur-node:${{ steps.ver.outputs.core }}
             ghcr.io/sergiolin5/ashur-node:${{ github.sha }}
       - name: Updater image
+        if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: .

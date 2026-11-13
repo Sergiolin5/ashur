@@ -29,11 +29,12 @@ def test_energia_serie_orders_and_filters(tmp_path):
     db.energia_upsert(c, [_fila("sensor.a", 7200.0, 2, 0.3), _fila("sensor.a", 0.0, 2, 0.1),
                           _fila("sensor.a", 3600.0, 2, 0.2, w_max=500.0, fuente="calculado"),
                           _fila("sensor.a", 0.0, 1, 5.0)])
-    serie = db.energia_serie(c, ["sensor.a", "sensor.b"], 2, 0, 7200)
+    serie = db.energia_serie(c, ["sensor.a", "sensor.b"], 2, 0, 7201)
     assert [f["inicio"] for f in serie["sensor.a"]] == [0.0, 3600.0, 7200.0]
     assert serie["sensor.a"][1] == {"inicio": 3600.0, "kwh": 0.2, "w_max": 500.0, "fuente": "calculado"}
     assert serie.get("sensor.b", []) == []
-    assert [f["inicio"] for f in db.energia_serie(c, ["sensor.a"], 2, 3600, 3600)["sensor.a"]] == [3600.0]
+    assert [f["inicio"] for f in db.energia_serie(c, ["sensor.a"], 2, 0, 7200)["sensor.a"]] == [0.0, 3600.0]
+    assert [f["inicio"] for f in db.energia_serie(c, ["sensor.a"], 2, 3600, 3601)["sensor.a"]] == [3600.0]
 
 
 def test_energia_dia(tmp_path):
@@ -70,3 +71,12 @@ def test_nivel_validation(tmp_path):
     assert db.casa_disps(c)["s"]["nivel_energia"] == 2
     db.casa_disp_set(c, "s", nivel_energia=None)
     assert db.casa_disps(c)["s"]["nivel_energia"] is None
+
+
+def test_energia_upsert_is_atomic(tmp_path):
+    db = DB(str(tmp_path / "t.db"))
+    c = _casa(db)
+    with pytest.raises(Exception):
+        db.energia_upsert(c, [_fila("sensor.a", 0.0, 1, 1.0), _fila("sensor.a", 1.0, 9, 1.0)])
+    db.casa_nivel_set(c, 2)  # a later commit must not persist the half batch
+    assert db.energia_serie(c, ["sensor.a"], 1, 0, 10) == {}

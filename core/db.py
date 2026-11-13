@@ -1233,14 +1233,19 @@ class DB:
         if not datos:
             return 0
         with self.lock:
-            self.conn.executemany(
-                "INSERT INTO casa_energia (casa_id, entity_id, inicio, resolucion, kwh, w_max, fuente) VALUES (?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (casa_id, entity_id, inicio, resolucion) DO UPDATE SET "
-                "kwh = excluded.kwh, w_max = excluded.w_max, fuente = excluded.fuente", datos)
-            self.conn.commit()
+            try:
+                self.conn.executemany(
+                    "INSERT INTO casa_energia (casa_id, entity_id, inicio, resolucion, kwh, w_max, fuente) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT (casa_id, entity_id, inicio, resolucion) DO UPDATE SET "
+                    "kwh = excluded.kwh, w_max = excluded.w_max, fuente = excluded.fuente", datos)
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
         return len(datos)
 
     def energia_serie(self, casa_id: int, entity_ids: list[str], resolucion: int, desde: float, hasta: float) -> dict[str, list[dict]]:
+        """Rows with desde <= inicio < hasta (half-open, so adjacent windows never share a period), per entity, by inicio."""
         out: dict[str, list[dict]] = {}
         if not entity_ids:
             return out
@@ -1250,7 +1255,7 @@ class DB:
                 q = ",".join("?" * len(ids))
                 for r in self.conn.execute(
                         f"SELECT entity_id, inicio, kwh, w_max, fuente FROM casa_energia WHERE casa_id = ? AND resolucion = ? "
-                        f"AND inicio >= ? AND inicio <= ? AND entity_id IN ({q}) ORDER BY entity_id, inicio",
+                        f"AND inicio >= ? AND inicio < ? AND entity_id IN ({q}) ORDER BY entity_id, inicio",
                         (casa_id, resolucion, desde, hasta, *ids)).fetchall():
                     out.setdefault(r["entity_id"], []).append(
                         {"inicio": r["inicio"], "kwh": r["kwh"], "w_max": r["w_max"], "fuente": r["fuente"]})

@@ -380,6 +380,38 @@
   .casa-btn { margin: 0; width: auto; min-height: 36px; padding: 6px 12px; font-size: var(--fs-small); background: var(--field); color: var(--label); border-radius: var(--r-control); }
   .casa-tools { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
   .casa-foot { margin-top: var(--s5); }
+  /* ---- casa: energía ---- */
+  .ep-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin-bottom: var(--s4); }
+  .ep-card { margin: 0; width: auto; display: block; text-align: left; padding: var(--s3) var(--pad); background: var(--row); color: var(--label);
+             border: 1px solid var(--border); border-radius: var(--r-card); min-width: 0; }
+  .ep-card .k { display: block; color: var(--secondary); font-size: var(--fs-meta); }
+  .ep-card .v { display: block; margin-top: 2px; font: 500 24px/1.15 var(--mono); color: var(--tint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ep-card .v.warn { color: var(--amber); font-size: var(--fs-small); line-height: 1.7; }
+  .ep-per, .ep-lv { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+  .ep-per { margin-bottom: var(--s3); }
+  .ep-per .casa-pill, .ep-lv .casa-pill { min-height: 40px; }
+  .ep-lv .casa-pill { padding: 6px 14px; }
+  .ep-total .k { color: var(--secondary); font-size: var(--fs-meta); }
+  .ep-total .v { font: 500 28px/1.2 var(--mono); color: var(--tint); }
+  .ep-chart { display: block; width: 100%; height: auto; margin-top: var(--s2); }
+  .ep-chart .b { fill: var(--tint); } .ep-chart .nm { fill: var(--secondary); } .ep-chart .ax { stroke: var(--separator); stroke-width: 1; }
+  .ep-axis { display: flex; justify-content: space-between; color: var(--secondary); font: var(--fs-meta) var(--mono); margin-top: 2px; }
+  .ep-area { background: var(--row); border: 1px solid var(--border); border-radius: var(--r-card); margin-bottom: var(--s3); overflow: hidden; }
+  .ep-ah { display: block; width: 100%; margin: 0; padding: var(--s3) var(--pad); text-align: left; background: none; color: var(--label); border-radius: 0; }
+  .ep-ah .l { display: flex; justify-content: space-between; gap: var(--s3); font-weight: 500; }
+  .ep-ah .cv, .ep-dev .cv { font: var(--fs-meta) var(--mono); color: var(--tint); white-space: nowrap; }
+  .ep-bar { height: 6px; margin-top: var(--s2); background: var(--field); border-radius: 3px; overflow: hidden; }
+  .ep-bar i { display: block; height: 100%; background: var(--tint); }
+  .ep-devs { border-top: 1px solid var(--separator); }
+  .ep-dev { padding: var(--s3) var(--pad); } .ep-dev + .ep-dev { border-top: 1px solid var(--separator); }
+  .ep-dev .dh { display: flex; justify-content: space-between; gap: var(--s3); font-weight: 500; }
+  .ep-dev .dm { color: var(--secondary); font-size: var(--fs-meta); margin-top: 2px; }
+  .ep-spark { display: block; width: 100%; height: 36px; margin: var(--s2) 0; }
+  .ep-spark path { fill: none; stroke: var(--tint); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .ep-lv .own, .ep-lv .fill { color: var(--secondary); font-size: var(--fs-meta); } .ep-lv .fill { color: var(--amber); }
+  .ep-fold { margin: 0 0 var(--s3); width: 100%; text-align: left; }
+  .ep-set { margin-top: var(--s5); } .ep-set h3 { margin: var(--s4) 0 var(--s2); font: 600 var(--fs-small) var(--font); }
+  .ep-set select { width: 100%; }
   .casa-sw { position: relative; width: 51px; height: 31px; flex: none; }
   .casa-sw input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
   .casa-sw .trk { position: absolute; inset: 0; border-radius: 16px; background: var(--control); transition: background var(--dur); }
@@ -518,10 +550,37 @@
 
   <div id="casa" hidden>
     <!-- casa -->
+    <div id="casa-main">
     <div class="casa-head"><h2>Casa</h2><div id="casa-pills" style="display:contents"></div></div>
     <div class="casa-ha" id="casa-ha" role="status" hidden></div>
+    <div class="ep-cards" id="casa-ahora" hidden>
+      <button type="button" class="ep-card" id="casa-card-ahora"><span class="k">Ahora</span><span class="v">–</span></button>
+      <button type="button" class="ep-card" id="casa-card-hoy"><span class="k">Hoy</span><span class="v">–</span></button>
+    </div>
     <div id="casa-list"></div>
     <div class="casa-foot"><button type="button" class="casa-btn" id="casa-org">Organizar</button></div>
+    </div>
+    <!-- energía -->
+    <div id="casa-energia" hidden>
+      <div class="casa-head"><button type="button" class="casa-btn" id="ep-back" aria-label="Volver a la casa">‹ Casa</button><h2>Energía</h2></div>
+      <div class="casa-ha" id="ep-msg" role="status" hidden></div>
+      <div class="ep-per" id="ep-per" role="group" aria-label="Periodo"></div>
+      <div class="ep-total"><div class="k" id="ep-tk">Total</div><div class="v" id="ep-tv">–</div></div>
+      <svg class="ep-chart" id="ep-chart" viewBox="0 0 340 110" role="img" aria-label="Sin datos"></svg>
+      <div class="ep-axis"><span id="ep-a0"></span><span id="ep-a1"></span></div>
+      <div class="note" id="ep-leg" hidden></div>
+      <div class="casa-area">Por área</div>
+      <div id="ep-areas"></div>
+      <div id="ep-sin"></div>
+      <div class="ep-set">
+        <h3>Nivel de la casa</h3>
+        <div class="ep-lv" id="ep-nivel" role="group" aria-label="Nivel de la casa"></div>
+        <h3>Medidor de tablero</h3>
+        <select id="ep-tab" aria-label="Medidor de tablero"></select>
+        <div class="note">Si eliges uno, el total es su lectura y la diferencia aparece como «no medido».</div>
+        <div class="cerr casa-ha" id="ep-err" role="alert" hidden></div>
+      </div>
+    </div>
   </div>
 
   <div id="dashboard" hidden>
@@ -1575,6 +1634,7 @@
   }
   function showSignin(error) {
     key = null; role = null; clearTimeout(casaTimer);        // casa: the poll ends with the session
+    clearTimeout(epTimer); epOpen = false; epReq++; $("casa-energia").hidden = true; $("casa-main").hidden = false;   // energía too
     try { localStorage.removeItem(KEY); } catch (e) {}
     for (const id of ["dashboard", "settings", "chat", "diary", "casa", "tabs", "composer", "guest-signout", "greet"]) $(id).hidden = true;
     $("thread").replaceChildren(); lastDay = null;
@@ -1625,7 +1685,7 @@
     $("dashboard").hidden = t !== "status";
     $("settings").hidden = t !== "settings";
     if (t === "diary") loadDiary();
-    casaLoop();
+    casaLoop(); epLoop();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
     if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadLotes(); loadLoteConfig(); loadUpdate(); loadTotp(); loadPersonas(); loadBase(); loadSpace(); loadDiag(); }
@@ -1807,7 +1867,7 @@
     $("casa-list").replaceChildren(...nodes);
   }
   function casaRender(d) {
-    casaData = d; casaId = d.casa;
+    casaData = d; casaId = d.casa; epCards(d);
     const all = [...d.favoritos, ...d.ocultos, ...d.areas.flatMap((a) => a.dispositivos)];
     for (const x of all) casaDev[x.entity_id] = x;
     const ha = $("casa-ha");
@@ -1859,6 +1919,261 @@
     casaSigLast = null; if (casaData) casaRender(casaData);
   });
   document.addEventListener("visibilitychange", casaLoop);
+
+  // --- casa: energía -------------------------------------------------------
+  // The «Ahora / Hoy» cards ride the 5 s casa poll (text only). The energy view polls every 60 s while open and visible;
+  // its areas/devices are keyed (data-area / data-entity) and patched in place, rebuilt only when the set changes.
+  const EP_PER = [["hoy", "Hoy"], ["7", "7 días"], ["30", "30 días"], ["12m", "12 meses"]];
+  const EP_STAT = { pendiente: "pendiente", sin_estadisticas: "sin estadísticas", error: "con error" };
+  const EP_STAT_LONG = { sin_estadisticas: "Tu Home Assistant no ofrece estadísticas por REST (actualízalo)",
+                         error: "Las estadísticas de Home Assistant fallaron; reintento en unos minutos", pendiente: "Las estadísticas aún se están leyendo" };
+  let epOpen = false, epTimer = null, epReq = 0, epPer = "hoy", epData = null, epMaxNivel = 1, epAreasSig = null, epChartSig = null, epSetSig = null;
+  const epOpenAreas = new Set(), epNombres = {}; let epSinOpen = false;
+  const epNum = (v) => new Intl.NumberFormat("es-CO", { maximumFractionDigits: v >= 10 ? 1 : 2 }).format(v);
+  const epKwh = (v) => epNum(v) + " kWh";
+  const epOk = () => epOpen && tab === "casa" && !document.hidden && !!key && unlocked;
+  function epCards(d) {
+    const box = $("casa-ahora"), e = d.energia;
+    box.hidden = !d.casa || !e;
+    if (box.hidden) return;
+    const set = (id, t, warn) => { const v = $(id).querySelector(".v"); if (v.textContent !== t) v.textContent = t; v.classList.toggle("warn", !!warn); };
+    set("casa-card-ahora", typeof e.ahora_w === "number" ? casaW(e.ahora_w) : "–");
+    if (e.estadisticas !== "ok") set("casa-card-hoy", EP_STAT[e.estadisticas] || EP_STAT.error, true);
+    else set("casa-card-hoy", typeof e.hoy_kwh === "number" ? epKwh(e.hoy_kwh) : "–");
+  }
+  const epDay0 = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+  const epYmd = (ts) => { const x = new Date(ts * 1000); return x.getFullYear() * 10000 + (x.getMonth() + 1) * 100 + x.getDate(); };
+  function epKind(per, res) { return per === "7" || per === "30" ? "day" : per === "12m" ? "month" : res === 3 ? "min5" : res === 2 ? "hour" : "day"; }
+  function epRes(per) { return per === "5m" ? 3 : per === "hoy" && epMaxNivel >= 2 ? 2 : 1; }
+  function epBuckets(per, res, now) {            // the slots the chart draws: [{key, t}] oldest first; gaps stay empty
+    const out = [], d0 = epDay0(now), kind = epKind(per, res);
+    if (kind === "day") {
+      const n = per === "7" ? 7 : per === "30" ? 30 : 1;
+      for (let i = n - 1; i >= 0; i--) { const x = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() - i); out.push({ key: epYmd(x / 1000), t: x / 1000 }); }
+    } else if (kind === "month") {
+      for (let i = 11; i >= 0; i--) { const x = new Date(d0.getFullYear(), d0.getMonth() - i, 1); out.push({ key: x.getFullYear() * 12 + x.getMonth(), t: x / 1000 }); }
+    } else {
+      const step = kind === "hour" ? 3600 : 300;
+      for (let t = Math.floor(d0 / 1000 / step) * step; t <= now / 1000; t += step) out.push({ key: Math.floor(t / step), t });
+    }
+    return out;
+  }
+  function epKey(kind, ts) {
+    if (kind === "day") return epYmd(ts);
+    if (kind === "month") { const x = new Date(ts * 1000); return x.getFullYear() * 12 + x.getMonth(); }
+    return Math.floor(ts / (kind === "hour" ? 3600 : 300));
+  }
+  const epAgg = (serie, kind, slots, f) => {    // one value per slot (null where Home Assistant gave none)
+    const m = new Map();
+    for (const p of serie || []) { const v = f(p); if (typeof v === "number") m.set(epKey(kind, p.inicio), (m.get(epKey(kind, p.inicio)) || 0) + v); }
+    return slots.map((s) => (m.has(s.key) ? m.get(s.key) : null));
+  };
+  function epRange(per, res, now) {
+    const d0 = epDay0(now) / 1000;
+    if (per === "hoy" || per === "5m") return [res === 1 ? d0 - 21600 : d0, now / 1000];
+    if (per === "7") return [d0 - 6 * 86400 - 21600, now / 1000];
+    if (per === "30") return [d0 - 29 * 86400 - 21600, now / 1000];
+    const x = new Date(now); return [new Date(x.getFullYear(), x.getMonth() - 11, 1) / 1000 - 21600, now / 1000];
+  }
+  const svg = (tag, attrs, cls) => {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (cls) n.setAttribute("class", cls);
+    return n;
+  };
+  function epBars(slots, tot, nm) {              // total per slot; «no medido» stacked on top in --secondary
+    const W = 340, H = 100, max = Math.max(0, ...tot.map((v) => v || 0)) || 1, w = W / slots.length, bw = Math.max(1, w * 0.72), nodes = [];
+    slots.forEach((s, i) => {
+      const t = tot[i]; if (t === null) return;
+      const gap = Math.min(nm[i] || 0, t), h = (t / max) * H, hg = (gap / max) * H, x = (i * w + (w - bw) / 2).toFixed(2);
+      if (h - hg > 0.05) nodes.push(svg("rect", { x, y: (H - h + hg).toFixed(2), width: bw.toFixed(2), height: (h - hg).toFixed(2) }, "b"));
+      if (hg > 0.05) nodes.push(svg("rect", { x, y: (H - h).toFixed(2), width: bw.toFixed(2), height: hg.toFixed(2) }, "nm"));
+    });
+    nodes.push(svg("line", { x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5 }, "ax"));
+    return nodes;
+  }
+  function epSparkD(vals) {                      // gaps in the data break the line
+    const W = 200, H = 32, n = vals.length, max = Math.max(0, ...vals.map((v) => v || 0)) || 1; let d = "", pen = false;
+    vals.forEach((v, i) => {
+      if (v === null) { pen = false; return; }
+      const x = (n > 1 ? (i * W) / (n - 1) : W / 2).toFixed(1), y = (H - (v / max) * (H - 2) - 1).toFixed(1);
+      d += (pen ? "L" : "M") + x + " " + y; pen = true;
+      if (i === n - 1 || vals[i + 1] === null) { if (i === 0 || vals[i - 1] === null) d += "L" + x + " " + y; }   // a lone point still draws a dot
+    });
+    return d;
+  }
+  function epPerBtns(d) {
+    const per = [...EP_PER]; if (epMaxNivel >= 3) per.splice(1, 0, ["5m", "cada 5 min"]);
+    const sig = per.map((p) => p[0]).join(",");
+    const box = $("ep-per");
+    if (box.dataset.sig !== sig) {
+      box.dataset.sig = sig;
+      box.replaceChildren(...per.map(([k, t]) => { const b = el("button", "casa-pill", t); b.type = "button"; b.dataset.per = k;
+        b.addEventListener("click", () => { epPer = k; epChartSig = epAreasSig = null; epPaint(); epLoad(); }); return b; }));
+    }
+    for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.per === epPer));
+  }
+  function epPaint() { epPerBtns(); }
+  function epDevNode(d) {
+    const n = el("div", "ep-dev"); n.dataset.entity = d.entity_id;
+    const dh = el("div", "dh"); dh.append(el("span", "t"), el("span", "cv")); n.append(dh, el("div", "dm"));
+    const sp = svg("svg", { viewBox: "0 0 200 32", preserveAspectRatio: "none", role: "img" }, "ep-spark"); sp.append(svg("path", { d: "" }));
+    const lv = el("div", "ep-lv"); lv.setAttribute("role", "group");
+    for (const k of [1, 2, 3]) {
+      const b = el("button", "casa-pill", String(k)); b.type = "button"; b.dataset.nivel = k;
+      b.addEventListener("click", () => epNivel(d.entity_id, k)); lv.append(b);
+    }
+    lv.append(el("span", "own"), el("span", "fill"));
+    const er = el("div", "cerr"); er.hidden = true; er.setAttribute("role", "alert");
+    n.append(sp, lv, er);
+    return n;
+  }
+  const epTxt = (n, t) => { if (n.textContent !== t) n.textContent = t; };
+  function epFillDev(n, d, kind, slots) {
+    const q = (c) => n.querySelector(c);
+    epTxt(q(".t"), d.nombre); epTxt(q(".cv"), epKwh(d.kwh));
+    epTxt(q(".dm"), d.fuente + (typeof d.w_max === "number" ? " · máx " + casaW(d.w_max) : ""));
+    const vals = epAgg(d.serie, kind, slots, (p) => p.kwh), sp = q(".ep-spark");
+    const path = sp.firstChild, dd = epSparkD(vals); if (path.getAttribute("d") !== dd) path.setAttribute("d", dd);
+    const lab = d.nombre + ": " + epKwh(d.kwh); if (sp.getAttribute("aria-label") !== lab) sp.setAttribute("aria-label", lab);
+    const lv = q(".ep-lv"); lv.setAttribute("aria-label", "Nivel de " + d.nombre);
+    for (const b of lv.querySelectorAll("button")) b.setAttribute("aria-pressed", String(+b.dataset.nivel === d.nivel));
+    epTxt(q(".own"), d.nivel_propio ? "" : "(de la casa)");
+    epTxt(q(".fill"), d.rellenando ? "rellenando…" : "");
+  }
+  function epAreaNode(a) {
+    const n = el("div", "ep-area"); n.dataset.area = a.nombre;
+    const h = el("button", "ep-ah"); h.type = "button"; h.setAttribute("aria-expanded", "false");
+    const l = el("div", "l"); l.append(el("span", "t"), el("span", "cv")); const bar = el("div", "ep-bar"); bar.append(document.createElement("i"));
+    h.append(l, bar);
+    const ds = el("div", "ep-devs"); ds.hidden = true;
+    h.addEventListener("click", () => {
+      const open = ds.hidden; ds.hidden = !open; h.setAttribute("aria-expanded", String(open));
+      if (open) epOpenAreas.add(a.nombre); else epOpenAreas.delete(a.nombre);
+    });
+    n.append(h, ds);
+    if (epOpenAreas.has(a.nombre)) { ds.hidden = false; h.setAttribute("aria-expanded", "true"); }
+    return n;
+  }
+  function epRender(d) {
+    epData = d;
+    for (const a of d.areas) for (const x of a.dispositivos) epNombres[x.entity_id] = x.nombre;
+    epMaxNivel = Math.max(1, ...d.areas.flatMap((a) => a.dispositivos.map((x) => x.nivel)));
+    const kind = epKind(epPer, d.resolucion), slots = epBuckets(epPer, d.resolucion, Date.now());
+    epPerBtns();
+    // the stats note
+    const est = casaData && casaData.energia && casaData.energia.estadisticas, msg = $("ep-msg");
+    msg.hidden = !est || est === "ok"; if (!msg.hidden) msg.textContent = EP_STAT_LONG[est] || EP_STAT_LONG.error;
+    // total chart
+    const tot = epAgg(d.total, kind, slots, (p) => p.kwh), nm = d.no_medido ? epAgg(d.no_medido, kind, slots, (p) => p.kwh) : slots.map(() => null);
+    const sum = tot.reduce((a, v) => a + (v || 0), 0), sumNm = nm.reduce((a, v) => a + (v || 0), 0);
+    const per = EP_PER.concat([["5m", "cada 5 min"]]).find((p) => p[0] === epPer)[1];
+    epTxt($("ep-tk"), "Total · " + per); epTxt($("ep-tv"), epKwh(sum));
+    const csig = JSON.stringify([epPer, d.resolucion, tot, nm]);
+    const ch = $("ep-chart");
+    ch.setAttribute("aria-label", "Consumo " + per + ": " + epKwh(sum) + (d.no_medido ? ", de los cuales " + epKwh(sumNm) + " no medido" : ""));
+    if (csig !== epChartSig) {
+      epChartSig = csig; ch.replaceChildren(...epBars(slots, tot, nm));
+      const lab = (s) => new Date(s.t * 1000).toLocaleString("es-CO", kind === "month" ? { month: "short", year: "2-digit" } : kind === "day" ? { day: "numeric", month: "short" } : { hour: "2-digit", minute: "2-digit", hour12: false });
+      epTxt($("ep-a0"), slots.length > 1 ? lab(slots[0]) : ""); epTxt($("ep-a1"), slots.length > 1 ? lab(slots[slots.length - 1]) : lab(slots[0]));
+    }
+    const leg = $("ep-leg"); leg.hidden = !d.no_medido;
+    if (d.no_medido) leg.textContent = "En gris: no medido (" + epKwh(sumNm) + "), lo que el tablero lee y los sensores no explican.";
+    // areas
+    const top = Math.max(0, ...d.areas.map((a) => a.kwh)) || 1, asig = [epPer, d.resolucion, d.areas.map((a) => a.nombre + "=" + a.dispositivos.map((x) => x.entity_id).join(",")).join(";")].join("#");
+    if (asig !== epAreasSig) {
+      epAreasSig = asig;
+      $("ep-areas").replaceChildren(...d.areas.map((a) => { const n = epAreaNode(a); const ds = n.querySelector(".ep-devs"); ds.append(...a.dispositivos.map(epDevNode)); return n; }));
+      if (!d.areas.length) $("ep-areas").append(el("div", "note", "Todavía no hay mediciones para este periodo."));
+    }
+    for (const a of d.areas) {
+      const n = $("ep-areas").querySelector('[data-area="' + CSS.escape(a.nombre) + '"]'); if (!n) continue;
+      epTxt(n.querySelector(".ep-ah .t"), a.nombre); epTxt(n.querySelector(".ep-ah .cv"), epKwh(a.kwh));
+      const w = (a.kwh / top * 100).toFixed(1) + "%", bar = n.querySelector(".ep-bar i"); if (bar.style.width !== w) bar.style.width = w;
+      n.querySelector(".ep-ah").setAttribute("aria-label", a.nombre + ": " + epKwh(a.kwh));
+      for (const x of a.dispositivos) { const dn = n.querySelector('[data-entity="' + CSS.escape(x.entity_id) + '"]'); if (dn) epFillDev(dn, x, kind, slots); }
+    }
+    // sin medición
+    const sin = d.sin_medicion || [], ssig = sin.map((x) => x.entity_id).join(",") + "|" + epSinOpen;
+    if ($("ep-sin").dataset.sig !== ssig) {
+      $("ep-sin").dataset.sig = ssig;
+      if (!sin.length) $("ep-sin").replaceChildren();
+      else {
+        const b = el("button", "casa-btn ep-fold", (epSinOpen ? "▾ " : "▸ ") + "Sin medición (" + sin.length + ")"); b.type = "button"; b.setAttribute("aria-expanded", String(epSinOpen));
+        b.addEventListener("click", () => { epSinOpen = !epSinOpen; epRender(epData); });
+        const l = el("div", "group"); l.hidden = !epSinOpen;
+        for (const x of sin) { const r = el("div", "row"); r.append(el("div", "main", x.nombre)); l.append(r); }
+        $("ep-sin").replaceChildren(b, l);
+      }
+    }
+    // settings: house level and panel meter
+    const fuentes = d.areas.flatMap((a) => a.dispositivos).map((x) => [x.entity_id, x.nombre + " (" + x.fuente + ")"]);
+    if (d.tablero && !fuentes.some((f) => f[0] === d.tablero)) fuentes.unshift([d.tablero, (epNombres[d.tablero] || d.tablero)]);
+    const sel = $("ep-tab"), setsig = fuentes.map((f) => f.join("=")).join("|");
+    if (setsig !== epSetSig) {
+      epSetSig = setsig;
+      sel.replaceChildren(...[["", "Ninguno"], ...fuentes].map(([v, t]) => { const o = el("option", "", t); o.value = v; return o; }));
+    }
+    if (document.activeElement !== sel) sel.value = d.tablero || "";
+    const nl = $("ep-nivel");
+    if (!nl.children.length) for (const k of [1, 2, 3]) { const b = el("button", "casa-pill", String(k)); b.type = "button"; b.dataset.nivel = k; b.addEventListener("click", () => epNivel(null, k)); nl.append(b); }
+    for (const b of nl.children) b.setAttribute("aria-pressed", String(+b.dataset.nivel === d.nivel_casa));
+  }
+  function epErr(t) { const e = $("ep-err"); e.textContent = t || ""; e.hidden = !t; clearTimeout(e._t); if (t) e._t = setTimeout(() => { e.hidden = true; }, 8000); }
+  async function epPut(path, body) {
+    try {
+      const r = await api(path, { method: "PUT", body: JSON.stringify(body) });
+      if (r.ok) return null;
+      const j = await r.json().catch(() => ({}));
+      return typeof j.detail === "string" ? j.detail : "No se pudo (HTTP " + r.status + ")";
+    } catch (e) { return "Sin conexión con el núcleo"; }
+  }
+  async function epNivel(eid, k) {
+    const prev = eid ? epData.areas.flatMap((a) => a.dispositivos).find((x) => x.entity_id === eid) : null;
+    epErr("");
+    const e = await epPut("api/casa/" + casaId + "/energia/nivel", eid ? { entity_id: eid, nivel: k } : { nivel: k });
+    if (e) { epErr(e); return; }
+    if (prev && k > prev.nivel) { const n = document.querySelector('#ep-areas [data-entity="' + CSS.escape(eid) + '"] .fill'); if (n) n.textContent = "rellenando…"; }
+    epLoad(true);
+  }
+  async function epLoad(force) {
+    if (!epOpen || !casaId) return;
+    const my = ++epReq, per = epPer, now = Date.now();
+    try {
+      let res = epRes(per), [desde, hasta] = epRange(per, res, now), r;
+      for (let i = 0; i < 2; i++) {              // the first answer tells the levels; if «Hoy» then wants hours, ask again once
+        r = await api("api/casa/" + casaId + "/energia?resolucion=" + res + "&desde=" + desde + "&hasta=" + hasta, { signal: AbortSignal.timeout(10000) });
+        if (!r.ok) break;
+        const d = await r.json();
+        if (my !== epReq || !epOpen || per !== epPer) return;
+        epRender(d);
+        if (epRes(per) === res) return;
+        res = epRes(per); [desde, hasta] = epRange(per, res, now);
+      }
+      if (!r.ok && my === epReq) { const j = await r.json().catch(() => ({})); epErr(typeof j.detail === "string" ? j.detail : "No se pudo leer la energía (HTTP " + r.status + ")"); }
+    } catch (e) {}
+  }
+  function epLoop() {                            // every 60 s only while the view is open, the tab shown and the page visible
+    clearTimeout(epTimer);
+    if (!epOk()) return;
+    epLoad().finally(() => {
+      if (!epOk()) return;
+      const fill = epData && epData.areas.some((a) => a.dispositivos.some((x) => x.rellenando));
+      clearTimeout(epTimer); epTimer = setTimeout(epLoop, fill ? 10000 : 60000);       // a backfill is polled sooner, until its data is in
+    });
+  }
+  function epShow(on) {
+    epOpen = on; clearTimeout(epTimer); epReq++;
+    $("casa-energia").hidden = !on; $("casa-main").hidden = on;
+    if (on) { window.scrollTo({ top: 0 }); epChartSig = epAreasSig = epSetSig = null; $("ep-areas").replaceChildren(); epPaint(); epLoop(); }
+  }
+  for (const id of ["casa-card-ahora", "casa-card-hoy"]) $(id).addEventListener("click", () => epShow(true));
+  $("ep-back").addEventListener("click", () => epShow(false));
+  $("ep-tab").addEventListener("change", async () => {
+    epErr(""); const e = await epPut("api/casa/" + casaId + "/energia/total", { entity_id: $("ep-tab").value || null });
+    if (e) epErr(e); epChartSig = null; epLoad(true);
+  });
+  document.addEventListener("visibilitychange", epLoop);
 
   async function loadHistory() {
     historyLoaded = true;

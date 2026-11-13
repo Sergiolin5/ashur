@@ -179,6 +179,11 @@ def test_root_is_the_status_page_and_holds_no_data(env):
     assert "Content-Security-Policy" in r.headers
 
 
+def test_panel_serves_the_casa_energy_view(env):
+    c, _ = env
+    assert 'id="casa-energia"' in c.get("/").text
+
+
 def test_overview_needs_admin_and_shows_live_progress(env):
     c, clock = env
     h = register(c)

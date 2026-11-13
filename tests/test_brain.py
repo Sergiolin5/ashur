@@ -362,7 +362,7 @@ def test_guest_only_reaches_the_chat(tmp_path):
     c, fake, _ = make(tmp_path, [])
     g = _guest(c)
     G = {"X-Admin-Key": g["key"]}
-    assert c.get("/api/whoami", headers=G).json() == {"role": "guest", "name": "Ana"}
+    assert c.get("/api/whoami", headers=G).json() == {"role": "guest", "name": "Ana", "owner": "Sergio"}
     for path in ("/api/overview", "/api/memory", "/api/summaries", "/api/guests", "/status", "/log"):
         assert c.get(path, headers=G).status_code == 401, path
     assert c.post("/api/memory/import", headers=G, json={"lines": ["x"], "dry_run": False}).status_code == 401
@@ -804,3 +804,13 @@ def test_a_photo_goes_to_claude_only_with_the_yes_and_is_never_stored(tmp_path):
     assert c.post("/api/chat", headers=A, json={"message": "x", "imagen": big}).status_code == 413
     g = c.post("/api/guests", headers=A, json={"name": "Ana"}).json()["key"]
     assert c.post("/api/chat", headers={"X-Admin-Key": g}, json={"message": "x", "imagen": PHOTO}).status_code == 403
+
+
+def test_owner_name_is_what_guests_see(tmp_path):
+    c, fake, _ = make(tmp_path, [])
+    g = _guest(c)
+    G = {"X-Admin-Key": g["key"]}
+    assert c.put("/api/owner", headers=G, json={"name": "X"}).status_code == 401
+    assert c.put("/api/owner", headers=A, json={"name": "  "}).status_code == 400
+    assert c.put("/api/owner", headers=A, json={"name": " Francisco "}).json() == {"owner": "Francisco"}
+    assert c.get("/api/whoami", headers=G).json()["owner"] == "Francisco"

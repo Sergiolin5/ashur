@@ -1919,11 +1919,23 @@ def create_app(
 
     @app.get("/api/whoami")
     def whoami(x_admin_key: str = Header(default=""), guest: Optional[dict] = Depends(require_chat)):
+        owner = db.setting("owner_name") or "Sergio"          # what guests see: "Ashur, el asistente de <owner>"
         if guest:
-            return {"role": "guest", "name": guest["name"]}
+            return {"role": "guest", "name": guest["name"], "owner": owner}
         if _same(x_admin_key, admin_key):
-            return {"role": "admin", "name": "Sergio"}
-        return {"role": "self", "name": "Sergio"}          # his chat-only key: the chat view, as himself
+            return {"role": "admin", "name": owner, "owner": owner}
+        return {"role": "self", "name": owner, "owner": owner}    # his chat-only key: the chat view, as himself
+
+    class OwnerIn(BaseModel):
+        name: str
+
+    @app.put("/api/owner", dependencies=[Depends(require_admin)])
+    def owner_put(body: OwnerIn):
+        name = body.name.strip()[:40]
+        if not name:
+            raise HTTPException(400, "Escribe un nombre.")
+        db.set_setting("owner_name", name)
+        return {"owner": name}
 
     @app.post("/api/chat")
     def chat(body: ChatIn, guest: Optional[dict] = Depends(require_chat)):

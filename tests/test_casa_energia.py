@@ -506,6 +506,29 @@ def test_energia_endpoint_totals_and_no_medido(en):
     assert c.get("/api/casa/1/energia", headers=A).json()["tablero"] is None
 
 
+def test_energia_hoy_mixed_levels_agree_with_the_card(en):
+    c, clock, fake, app = en
+    db = app.state.db
+    assert c.put("/api/casa/1/energia/nivel", headers=A, json={"entity_id": "sensor.nevera_kwh", "nivel": 2}).status_code == 200
+    db.energia_upsert(1, [_fila3("sensor.nevera_kwh", 2.5), _fila3("sensor.tv_w", 1.0),
+                          _fila("sensor.nevera_kwh", HOY + 3600, 2, 0.4), _fila("sensor.nevera_kwh", HOY + 7200, 2, 0.6)])
+    clock.now += 4
+    card = c.get("/api/casa", headers=A).json()["energia"]["hoy_kwh"]
+    j = c.get(f"/api/casa/1/energia?resolucion=2&desde={HOY}&hasta={T0}", headers=A).json()
+    assert card == 3.5 and j["total_kwh"] == 3.5 and j["no_medido_kwh"] is None
+    assert {a["nombre"]: a["kwh"] for a in j["areas"] if a["kwh"]} == {"Cocina": 2.5, "Sala": 1.0}
+    nev = j["areas"][0]["dispositivos"][0]
+    assert nev["kwh"] == 2.5 and [x["kwh"] for x in nev["serie"]] == [0.4, 0.6]       # the series follow the resolution
+    assert [x["kwh"] for x in j["total"]] == [0.4, 0.6]
+    j = c.get(f"/api/casa/1/energia?resolucion=2&desde={HOY + 3600}&hasta={T0}", headers=A).json()   # under a day: that day's row
+    assert j["total_kwh"] == 3.5
+    c.put("/api/casa/1/energia/total", headers=A, json={"entity_id": "sensor.casa_kwh"})
+    db.energia_upsert(1, [_fila3("sensor.casa_kwh", 10.0)])
+    j = c.get(f"/api/casa/1/energia?resolucion=2&desde={HOY}&hasta={T0}", headers=A).json()
+    assert j["total_kwh"] == 10.0 and j["no_medido_kwh"] == 6.5 and j["tz"] == "America/Bogota"
+    assert j["tablero_nombre"] == "Tablero"
+
+
 def test_hidden_sources_do_not_count(en):
     c, clock, fake, app = en
     app.state.db.energia_upsert(1, [_fila3("sensor.nevera_kwh", 4.0), _fila3("sensor.tv_w", 3.0)])

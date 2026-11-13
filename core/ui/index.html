@@ -578,7 +578,6 @@
         <h3>Medidor de tablero</h3>
         <select id="ep-tab" aria-label="Medidor de tablero"></select>
         <div class="note">Si eliges uno, el total es su lectura y la diferencia aparece como «no medido».</div>
-        <div class="cerr casa-ha" id="ep-err" role="alert" hidden></div>
       </div>
     </div>
   </div>
@@ -1927,7 +1926,7 @@
   const EP_STAT = { pendiente: "pendiente", sin_estadisticas: "sin estadísticas", error: "con error" };
   const EP_STAT_LONG = { sin_estadisticas: "Tu Home Assistant no ofrece estadísticas por REST (actualízalo)",
                          error: "Las estadísticas de Home Assistant fallaron; reintento en unos minutos", pendiente: "Las estadísticas aún se están leyendo" };
-  let epOpen = false, epTimer = null, epReq = 0, epPer = "hoy", epData = null, epMaxNivel = 1, epAreasSig = null, epChartSig = null, epSetSig = null;
+  let epTz = Intl.DateTimeFormat().resolvedOptions().timeZone, epErrT = "", epOpen = false, epTimer = null, epReq = 0, epPer = "hoy", epData = null, epMaxNivel = 1, epAreasSig = null, epChartSig = null, epSetSig = null;
   const epOpenAreas = new Set(), epNombres = {}; let epSinOpen = false;
   const epNum = (v) => new Intl.NumberFormat("es-CO", { maximumFractionDigits: v >= 10 ? 1 : 2 }).format(v);
   const epKwh = (v) => epNum(v) + " kWh";
@@ -1941,26 +1940,38 @@
     if (e.estadisticas !== "ok") set("casa-card-hoy", EP_STAT[e.estadisticas] || EP_STAT.error, true);
     else set("casa-card-hoy", typeof e.hoy_kwh === "number" ? epKwh(e.hoy_kwh) : "–");
   }
-  const epDay0 = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
-  const epYmd = (ts) => { const x = new Date(ts * 1000); return x.getFullYear() * 10000 + (x.getMonth() + 1) * 100 + x.getDate(); };
+  // the house's own time zone (from the endpoint), never the phone's: days, «Hoy» and labels follow it
+  let epFmt = null;
+  const epParts = (ts) => {
+    if (!epFmt || epFmt.tz !== epTz) epFmt = { tz: epTz, f: null };
+    const f = epFmt.f || (epFmt.f = new Intl.DateTimeFormat("en-GB", { timeZone: epTz, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric", hourCycle: "h23" }));
+    const o = {}; for (const x of f.formatToParts(new Date(ts * 1000))) o[x.type] = +x.value;
+    return o;
+  };
+  const epMid = (ts) => { ts = Math.floor(ts); const q = epParts(ts); return ts - (q.hour * 3600 + q.minute * 60 + q.second); };      // midnight (house tz) of that instant's day
+  const epDay0 = (ms) => epMid(ms / 1000);
+  const epYmd = (ts) => { const q = epParts(ts); return q.year * 10000 + q.month * 100 + q.day; };
+  const epMon = (y, m, i) => { const t = y * 12 + (m - 1) - i; return [Math.floor(t / 12), t % 12]; };         // i months before (y, m)
+  const epMonStart = (y, m) => epMid(Date.UTC(y, m, 1, 12) / 1000);                                           // m is 0-based
   function epKind(per, res) { return per === "7" || per === "30" ? "day" : per === "12m" ? "month" : res === 3 ? "min5" : res === 2 ? "hour" : "day"; }
   function epRes(per) { return per === "5m" ? 3 : per === "hoy" && epMaxNivel >= 2 ? 2 : 1; }
   function epBuckets(per, res, now) {            // the slots the chart draws: [{key, t}] oldest first; gaps stay empty
     const out = [], d0 = epDay0(now), kind = epKind(per, res);
     if (kind === "day") {
       const n = per === "7" ? 7 : per === "30" ? 30 : 1;
-      for (let i = n - 1; i >= 0; i--) { const x = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() - i); out.push({ key: epYmd(x / 1000), t: x / 1000 }); }
+      for (let i = n - 1; i >= 0; i--) { const t = epMid(d0 - i * 86400 + 43200); out.push({ key: epYmd(t), t }); }
     } else if (kind === "month") {
-      for (let i = 11; i >= 0; i--) { const x = new Date(d0.getFullYear(), d0.getMonth() - i, 1); out.push({ key: x.getFullYear() * 12 + x.getMonth(), t: x / 1000 }); }
+      const q = epParts(now / 1000);
+      for (let i = 11; i >= 0; i--) { const [y, m] = epMon(q.year, q.month, i); out.push({ key: y * 12 + m, t: epMonStart(y, m) }); }
     } else {
       const step = kind === "hour" ? 3600 : 300;
-      for (let t = Math.floor(d0 / 1000 / step) * step; t <= now / 1000; t += step) out.push({ key: Math.floor(t / step), t });
+      for (let t = Math.floor(d0 / step) * step; t <= now / 1000; t += step) out.push({ key: Math.floor(t / step), t });
     }
     return out;
   }
   function epKey(kind, ts) {
     if (kind === "day") return epYmd(ts);
-    if (kind === "month") { const x = new Date(ts * 1000); return x.getFullYear() * 12 + x.getMonth(); }
+    if (kind === "month") { const q = epParts(ts); return q.year * 12 + q.month - 1; }
     return Math.floor(ts / (kind === "hour" ? 3600 : 300));
   }
   const epAgg = (serie, kind, slots, f) => {    // one value per slot (null where Home Assistant gave none)
@@ -1969,11 +1980,11 @@
     return slots.map((s) => (m.has(s.key) ? m.get(s.key) : null));
   };
   function epRange(per, res, now) {
-    const d0 = epDay0(now) / 1000;
-    if (per === "hoy" || per === "5m") return [res === 1 ? d0 - 21600 : d0, now / 1000];
-    if (per === "7") return [d0 - 6 * 86400 - 21600, now / 1000];
-    if (per === "30") return [d0 - 29 * 86400 - 21600, now / 1000];
-    const x = new Date(now); return [new Date(x.getFullYear(), x.getMonth() - 11, 1) / 1000 - 21600, now / 1000];
+    const d0 = epDay0(now);
+    if (per === "hoy" || per === "5m") return [d0, now / 1000];
+    if (per === "7") return [epMid(d0 - 6 * 86400 + 43200), now / 1000];
+    if (per === "30") return [epMid(d0 - 29 * 86400 + 43200), now / 1000];
+    const q = epParts(now / 1000), [y, m] = epMon(q.year, q.month, 11); return [epMonStart(y, m), now / 1000];
   }
   const svg = (tag, attrs, cls) => {
     const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
@@ -2019,9 +2030,9 @@
     const dh = el("div", "dh"); dh.append(el("span", "t"), el("span", "cv")); n.append(dh, el("div", "dm"));
     const sp = svg("svg", { viewBox: "0 0 200 32", preserveAspectRatio: "none", role: "img" }, "ep-spark"); sp.append(svg("path", { d: "" }));
     const lv = el("div", "ep-lv"); lv.setAttribute("role", "group");
-    for (const k of [1, 2, 3]) {
-      const b = el("button", "casa-pill", String(k)); b.type = "button"; b.dataset.nivel = k;
-      b.addEventListener("click", () => epNivel(d.entity_id, k)); lv.append(b);
+    for (const k of [1, 2, 3, 0]) {            // 0 = «casa»: no level of its own, it follows the house
+      const b = el("button", "casa-pill", k ? String(k) : "casa"); b.type = "button"; b.dataset.nivel = k;
+      b.addEventListener("click", () => epNivel(d.entity_id, k || null)); lv.append(b);
     }
     lv.append(el("span", "own"), el("span", "fill"));
     const er = el("div", "cerr"); er.hidden = true; er.setAttribute("role", "alert");
@@ -2037,7 +2048,10 @@
     const path = sp.firstChild, dd = epSparkD(vals); if (path.getAttribute("d") !== dd) path.setAttribute("d", dd);
     const lab = d.nombre + ": " + epKwh(d.kwh); if (sp.getAttribute("aria-label") !== lab) sp.setAttribute("aria-label", lab);
     const lv = q(".ep-lv"); lv.setAttribute("aria-label", "Nivel de " + d.nombre);
-    for (const b of lv.querySelectorAll("button")) b.setAttribute("aria-pressed", String(+b.dataset.nivel === d.nivel));
+    for (const b of lv.querySelectorAll("button")) {
+      const k = +b.dataset.nivel; b.setAttribute("aria-pressed", String(k ? d.nivel_propio && k === d.nivel : !d.nivel_propio));
+      if (!k) epTxt(b, "casa (" + (epData ? epData.nivel_casa : d.nivel) + ")");
+    }
     epTxt(q(".own"), d.nivel_propio ? "" : "(de la casa)");
     epTxt(q(".fill"), d.rellenando ? "rellenando…" : "");
   }
@@ -2057,28 +2071,28 @@
   }
   function epRender(d) {
     epData = d;
+    if (d.tz && d.tz !== epTz) { try { new Intl.DateTimeFormat("es-CO", { timeZone: d.tz }); epTz = d.tz; epChartSig = epAreasSig = null; epLoad(); return; } catch (e) {} }
     for (const a of d.areas) for (const x of a.dispositivos) epNombres[x.entity_id] = x.nombre;
     epMaxNivel = Math.max(1, ...d.areas.flatMap((a) => a.dispositivos.map((x) => x.nivel)));
     const kind = epKind(epPer, d.resolucion), slots = epBuckets(epPer, d.resolucion, Date.now());
-    epPerBtns();
-    // the stats note
-    const est = casaData && casaData.energia && casaData.energia.estadisticas, msg = $("ep-msg");
-    msg.hidden = !est || est === "ok"; if (!msg.hidden) msg.textContent = EP_STAT_LONG[est] || EP_STAT_LONG.error;
+    if (epPer === "5m" && epMaxNivel < 3) { epPer = "hoy"; epChartSig = epAreasSig = null; epLoad(); return; }     // no sensor at level 3 anymore
+    epPerBtns(); epErrT = ""; epMsg();
     // total chart
     const tot = epAgg(d.total, kind, slots, (p) => p.kwh), nm = d.no_medido ? epAgg(d.no_medido, kind, slots, (p) => p.kwh) : slots.map(() => null);
     const sum = tot.reduce((a, v) => a + (v || 0), 0), sumNm = nm.reduce((a, v) => a + (v || 0), 0);
     const per = EP_PER.concat([["5m", "cada 5 min"]]).find((p) => p[0] === epPer)[1];
-    epTxt($("ep-tk"), "Total · " + per); epTxt($("ep-tv"), epKwh(sum));
+    const sumT = typeof d.total_kwh === "number" ? d.total_kwh : sum, sumM = typeof d.no_medido_kwh === "number" ? d.no_medido_kwh : sumNm;
+    epTxt($("ep-tk"), "Total · " + per); epTxt($("ep-tv"), epKwh(sumT));
     const csig = JSON.stringify([epPer, d.resolucion, tot, nm]);
     const ch = $("ep-chart");
-    ch.setAttribute("aria-label", "Consumo " + per + ": " + epKwh(sum) + (d.no_medido ? ", de los cuales " + epKwh(sumNm) + " no medido" : ""));
+    ch.setAttribute("aria-label", "Consumo " + per + ": " + epKwh(sumT) + (d.no_medido ? ", de los cuales " + epKwh(sumM) + " no medido" : ""));
     if (csig !== epChartSig) {
       epChartSig = csig; ch.replaceChildren(...epBars(slots, tot, nm));
-      const lab = (s) => new Date(s.t * 1000).toLocaleString("es-CO", kind === "month" ? { month: "short", year: "2-digit" } : kind === "day" ? { day: "numeric", month: "short" } : { hour: "2-digit", minute: "2-digit", hour12: false });
+      const lab = (s) => new Date(s.t * 1000).toLocaleString("es-CO", { timeZone: epTz, ...(kind === "month" ? { month: "short", year: "2-digit" } : kind === "day" ? { day: "numeric", month: "short" } : { hour: "2-digit", minute: "2-digit", hour12: false }) });
       epTxt($("ep-a0"), slots.length > 1 ? lab(slots[0]) : ""); epTxt($("ep-a1"), slots.length > 1 ? lab(slots[slots.length - 1]) : lab(slots[0]));
     }
     const leg = $("ep-leg"); leg.hidden = !d.no_medido;
-    if (d.no_medido) leg.textContent = "En gris: no medido (" + epKwh(sumNm) + "), lo que el tablero lee y los sensores no explican.";
+    if (d.no_medido) leg.textContent = "En gris: no medido (" + epKwh(sumM) + "), lo que el tablero lee y los sensores no explican.";
     // areas
     const top = Math.max(0, ...d.areas.map((a) => a.kwh)) || 1, asig = [epPer, d.resolucion, d.areas.map((a) => a.nombre + "=" + a.dispositivos.map((x) => x.entity_id).join(",")).join(";")].join("#");
     if (asig !== epAreasSig) {
@@ -2108,7 +2122,7 @@
     }
     // settings: house level and panel meter
     const fuentes = d.areas.flatMap((a) => a.dispositivos).map((x) => [x.entity_id, x.nombre + " (" + x.fuente + ")"]);
-    if (d.tablero && !fuentes.some((f) => f[0] === d.tablero)) fuentes.unshift([d.tablero, (epNombres[d.tablero] || d.tablero)]);
+    if (d.tablero && !fuentes.some((f) => f[0] === d.tablero)) fuentes.unshift([d.tablero, (d.tablero_nombre || epNombres[d.tablero] || d.tablero)]);
     const sel = $("ep-tab"), setsig = fuentes.map((f) => f.join("=")).join("|");
     if (setsig !== epSetSig) {
       epSetSig = setsig;
@@ -2119,7 +2133,12 @@
     if (!nl.children.length) for (const k of [1, 2, 3]) { const b = el("button", "casa-pill", String(k)); b.type = "button"; b.dataset.nivel = k; b.addEventListener("click", () => epNivel(null, k)); nl.append(b); }
     for (const b of nl.children) b.setAttribute("aria-pressed", String(+b.dataset.nivel === d.nivel_casa));
   }
-  function epErr(t) { const e = $("ep-err"); e.textContent = t || ""; e.hidden = !t; clearTimeout(e._t); if (t) e._t = setTimeout(() => { e.hidden = true; }, 8000); }
+  function epMsg() {                              // the top line: an error if there is one, else the statistics note
+    const est = casaData && casaData.energia && casaData.energia.estadisticas, msg = $("ep-msg");
+    const t = epErrT || (est && est !== "ok" ? EP_STAT_LONG[est] || EP_STAT_LONG.error : "");
+    msg.hidden = !t; epTxt(msg, t);
+  }
+  function epErr(t) { epErrT = t || ""; epMsg(); if (t) window.scrollTo({ top: 0 }); }
   async function epPut(path, body) {
     try {
       const r = await api(path, { method: "PUT", body: JSON.stringify(body) });
@@ -2133,7 +2152,7 @@
     epErr("");
     const e = await epPut("api/casa/" + casaId + "/energia/nivel", eid ? { entity_id: eid, nivel: k } : { nivel: k });
     if (e) { epErr(e); return; }
-    if (prev && k > prev.nivel) { const n = document.querySelector('#ep-areas [data-entity="' + CSS.escape(eid) + '"] .fill'); if (n) n.textContent = "rellenando…"; }
+    if (prev && (k || epData.nivel_casa) > prev.nivel) { const n = document.querySelector('#ep-areas [data-entity="' + CSS.escape(eid) + '"] .fill'); if (n) n.textContent = "rellenando…"; }
     epLoad(true);
   }
   async function epLoad(force) {
@@ -2170,8 +2189,9 @@
   for (const id of ["casa-card-ahora", "casa-card-hoy"]) $(id).addEventListener("click", () => epShow(true));
   $("ep-back").addEventListener("click", () => epShow(false));
   $("ep-tab").addEventListener("change", async () => {
-    epErr(""); const e = await epPut("api/casa/" + casaId + "/energia/total", { entity_id: $("ep-tab").value || null });
-    if (e) epErr(e); epChartSig = null; epLoad(true);
+    epErr(""); const sel = $("ep-tab"), e = await epPut("api/casa/" + casaId + "/energia/total", { entity_id: sel.value || null });
+    if (e) { sel.blur(); sel.value = (epData && epData.tablero) || ""; epErr(e); return; }       // back to what the server has
+    epChartSig = null; epLoad(true);
   });
   document.addEventListener("visibilitychange", epLoop);
 

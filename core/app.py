@@ -1962,18 +1962,27 @@ def create_app(
         fu, disps, tab = casa_fuentes(e, states, devices), db.casa_disps(cid), casa_tablero(cid)
         fuera = casa_mod.ocultas(fu, disps)
         medidos = sorted(s for s in fu if s != tab and s not in fuera)
-        series = db.energia_serie(cid, medidos + ([tab] if tab else []), resolucion, desde, hasta)
+        todos = medidos + ([tab] if tab else [])
+        tz = casa_tz(row)
+        # Totals, areas and devices always come from the day rows (every sensor has them, whatever its level); for a range
+        # shorter than a day that is the day row of that day. The requested resolution only drives the series (bars, sparklines).
+        d1 = casa_mod.inicio_dia(desde, tz) if hasta - desde < 86400 else desde
+        dias = db.energia_serie(cid, todos, 1, d1, hasta)
+        series = dias if resolucion == 1 else db.energia_serie(cid, todos, resolucion, desde, hasta)
         total, no_medido = casa_mod.totales(series, medidos, tab)
+        t_dia, nm_dia = casa_mod.totales(dias, medidos, tab)
+        total_kwh = round(sum(p["kwh"] for p in t_dia), 6)
+        no_medido_kwh = round(sum(p["kwh"] for p in nm_dia), 6) if nm_dia is not None else None
         por_area: dict[str, list] = {}
         for s in medidos:
-            quien, serie = fu[s]["dueno"] or s, series.get(s) or []
+            quien, serie, dserie = fu[s]["dueno"] or s, series.get(s) or [], dias.get(s) or []
             nivel, propio = nivel_de(row, disps, s), (disps.get(s) or {}).get("nivel_energia") is not None
-            w = [p["w_max"] for p in serie if p["w_max"] is not None]
+            w = [p["w_max"] for p in serie + (dserie if resolucion != 1 else []) if p["w_max"] is not None]
             por_area.setdefault(areas.get(quien) or areas.get(s) or casa_mod.SIN_AREA, []).append({
                 "entity_id": s, "nombre": casa_nombre_de(states, quien),
                 "fuente": "medido" if fu[s]["tipo"] == "kwh" else "calculado de W",
                 "nivel": nivel, "nivel_propio": propio, "rellenando": relleno_pendiente(cid, s, nivel),
-                "kwh": round(sum(p["kwh"] or 0.0 for p in serie), 6), "w_max": max(w) if w else None,
+                "kwh": round(sum(p["kwh"] or 0.0 for p in dserie), 6), "w_max": max(w) if w else None,
                 "serie": [{"inicio": p["inicio"], "kwh": p["kwh"], "w_max": p["w_max"]} for p in serie]})
         lista = [{"nombre": n, "kwh": round(sum(d["kwh"] for d in ds), 6),
                   "dispositivos": sorted(ds, key=lambda d: (-d["kwh"], d["nombre"]))} for n, ds in por_area.items()]
@@ -1982,8 +1991,9 @@ def create_app(
                if st["entity_id"].split(".", 1)[0] in ("light", "switch", "cover") and casa_mod.controlable(st)
                and st["entity_id"] not in duenos and not (disps.get(st["entity_id"]) or {}).get("oculto")]
         return {"resolucion": resolucion, "desde": desde, "hasta": hasta, "total": total, "no_medido": no_medido,
-                "areas": sorted(lista, key=lambda a: (-a["kwh"], a["nombre"])),
-                "sin_medicion": sorted(sin, key=lambda d: d["nombre"]), "nivel_casa": row["nivel_energia_def"], "tablero": tab}
+                "total_kwh": total_kwh, "no_medido_kwh": no_medido_kwh, "areas": sorted(lista, key=lambda a: (-a["kwh"], a["nombre"])),
+                "sin_medicion": sorted(sin, key=lambda d: d["nombre"]), "nivel_casa": row["nivel_energia_def"], "tablero": tab,
+                "tablero_nombre": casa_nombre_de(states, tab) if tab else None, "tz": str(tz)}
 
     class CasaNivel(BaseModel):
         entity_id: Optional[str] = Field(default=None, min_length=1, max_length=255)

@@ -1835,6 +1835,20 @@ def create_app(
     def relleno_clave(cid: int, eid: str, resolucion: int) -> str:
         return f"casa_relleno:{cid}:{eid}:{resolucion}"
 
+    def relleno_desde_clave(cid: int, resolucion: int, eid: Optional[str] = None) -> str:
+        """When a level was last raised (for the house, or for one sensor): a backfill mark older than that is stale."""
+        return f"casa_relleno_desde:{cid}:{resolucion}" + (f":{eid}" if eid else "")
+
+    def relleno_pendiente(cid: int, eid: str, resolucion: int) -> bool:
+        def ts(key: str) -> float:
+            try:
+                return float(db.setting(key) or 0)
+            except ValueError:
+                return 0.0
+        marca = ts(relleno_clave(cid, eid, resolucion))
+        epoca = max(ts(relleno_desde_clave(cid, resolucion)), ts(relleno_desde_clave(cid, resolucion, eid)))
+        return not marca or marca < epoca
+
     def casa_fuentes(e: dict, states: list, devices: Optional[dict]) -> dict:
         """Energy sources from the view's cache, else from the last sync. Without devices there are none: guessing
         would count a plug's W sensor next to its own kWh sensor."""
@@ -1886,7 +1900,7 @@ def create_app(
         disps, tz = db.casa_disps(cid), casa_tz(row)
         for r in due:
             ids = [s for s in sorted(fu) if r == 1 or nivel_de(row, disps, s) == r]
-            pend = [s for s in ids if not db.setting(relleno_clave(cid, s, r))]
+            pend = [s for s in ids if relleno_pendiente(cid, s, r)]
             reg = [s for s in ids if s not in pend]
             if pend:
                 for a, b in casa_mod.tramos(casa_mod.relleno_desde(r, now, tz), now, casa_mod.TRAMO_S[r]):
@@ -1920,7 +1934,7 @@ def create_app(
                     e["en_falla_t"] = clock()
                     db.log(clock(), None, "casa_energia_falla", {"casa": row["id"], "motivo": motivo, "causa": causa})
             else:
-                e["en_estado"] = "ok"
+                e["en_estado"], e["en_falla_t"] = "ok", None          # a new failure after recovery is logged again
         finally:
             e["en_lock"].release()
 
@@ -1958,7 +1972,7 @@ def create_app(
             por_area.setdefault(areas.get(quien) or areas.get(s) or casa_mod.SIN_AREA, []).append({
                 "entity_id": s, "nombre": casa_nombre_de(states, quien),
                 "fuente": "medido" if fu[s]["tipo"] == "kwh" else "calculado de W",
-                "nivel": nivel, "nivel_propio": propio, "rellenando": not db.setting(relleno_clave(cid, s, nivel)),
+                "nivel": nivel, "nivel_propio": propio, "rellenando": relleno_pendiente(cid, s, nivel),
                 "kwh": round(sum(p["kwh"] or 0.0 for p in serie), 6), "w_max": max(w) if w else None,
                 "serie": [{"inicio": p["inicio"], "kwh": p["kwh"], "w_max": p["w_max"]} for p in serie]})
         lista = [{"nombre": n, "kwh": round(sum(d["kwh"] for d in ds), 6),
@@ -1975,10 +1989,10 @@ def create_app(
         entity_id: Optional[str] = Field(default=None, min_length=1, max_length=255)
         nivel: Optional[int] = None
 
-    def energia_subir(cid: int, ids: list, nivel: int) -> None:
-        """A raised level backfills on the next tick: its mark is cleared and its resolution is due at once."""
-        for s in ids:
-            db.set_setting(relleno_clave(cid, s, nivel), "")
+    def energia_subir(cid: int, nivel: int, eid: Optional[str] = None) -> None:
+        """A raised level backfills on the next tick: the raise's time makes older marks stale (for the house, every
+        sensor, even ones Home Assistant can't list right now), and its resolution is due at once."""
+        db.set_setting(relleno_desde_clave(cid, nivel, eid), str(clock()))
         casa_entry(cid)["en_t"].pop(nivel, None)
 
     @app.put("/api/casa/{cid}/energia/nivel", dependencies=[Depends(require_admin)])
@@ -1993,7 +2007,7 @@ def create_app(
                 raise HTTPException(400, "el nivel de la casa es 1, 2 o 3")
             db.casa_nivel_set(cid, b.nivel)
             if b.nivel > row["nivel_energia_def"]:
-                energia_subir(cid, [s for s in fu if (disps.get(s) or {}).get("nivel_energia") is None], b.nivel)
+                energia_subir(cid, b.nivel)
         else:
             if b.entity_id not in fu:
                 raise HTTPException(400, "ese sensor no es una fuente de energía")
@@ -2001,7 +2015,7 @@ def create_app(
             db.casa_disp_set(cid, b.entity_id, nivel_energia=b.nivel)
             ahora = b.nivel or row["nivel_energia_def"]
             if ahora > antes:
-                energia_subir(cid, [b.entity_id], ahora)
+                energia_subir(cid, ahora, b.entity_id)
         db.log(clock(), None, "casa_energia_nivel", {"casa": cid, "entity": b.entity_id, "nivel": b.nivel})
         return {"ok": True}
 

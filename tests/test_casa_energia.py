@@ -405,7 +405,9 @@ def test_level_down_keeps_rows(en):
     assert _calls(fake, "hour") == [] and _calls(fake, "day")
     assert len(app.state.db.energia_serie(1, ["sensor.nevera_kwh"], 2, 0, T0 + DIA)["sensor.nevera_kwh"]) == n
     assert _nivel(c, "sensor.nevera_kwh", 2).status_code == 200           # raising again backfills again
-    assert not app.state.db.setting("casa_relleno:1:sensor.nevera_kwh:2")
+    assert app.state.db.setting("casa_relleno_desde:1:2:sensor.nevera_kwh")
+    d = {x["entity_id"]: x for a in c.get("/api/casa/1/energia?resolucion=2", headers=A).json()["areas"] for x in a["dispositivos"]}
+    assert d["sensor.nevera_kwh"]["rellenando"] is True
     clock.now += 60
     app.state.energia_due()
     assert _calls(fake, "hour")[0]["start"] < clock.now - 80 * DIA
@@ -578,3 +580,69 @@ def test_energy_needs_admin(en):
     assert c.put("/api/casa/1/energia/nivel", json={"entity_id": None, "nivel": 2}).status_code == 401
     assert c.put("/api/casa/1/energia/total", json={"entity_id": None}).status_code == 401
     assert c.get("/api/casa/1/energia", headers={"X-Admin-Key": "nope"}).status_code == 401
+
+
+# ---- review fixes: raises survive outages, hoy without sources, failure log after recovery ----
+def test_house_raise_while_ha_down_backfills_after_recovery(en, tmp_path):
+    c, clock, fake, app = en
+    assert _nivel(c, None, 2).status_code == 200
+    app.state.energia_due()                                     # hours backfilled once for every source
+    assert _calls(fake, "hour")
+    assert _nivel(c, None, 1).status_code == 200
+    clock.now += 3 * 3600
+    caido = FakeHA()                                            # the core restarts while Home Assistant is down
+
+    def no_responde():
+        raise C.HAError("sin_respuesta")
+    caido.states = no_responde
+    app2 = create_app(str(tmp_path / "t.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None, ha_url="http://ha",
+                      ha_client_fn=lambda url, tok: caido, env={"ASHUR_HA_TOKEN": "t"})
+    c2 = TestClient(app2)
+    assert _nivel(c2, None, 2).status_code == 200               # no sources known now
+    caido.states = lambda: caido.estados                        # Home Assistant is back
+    clock.now += 60
+    app2.state.energia_due()
+    horas = _calls(caido, "hour")
+    assert horas and horas[0]["start"] < clock.now - 80 * DIA   # the gap is backfilled again
+    assert {i for x in horas for i in x["ids"]} == {"sensor.casa_kwh", "sensor.nevera_kwh"}
+    caido.stats_calls.clear()
+    clock.now += 15 * 60
+    app2.state.energia_due()
+    assert all(x["end"] - x["start"] <= 4 * 3600 for x in caido.stats_calls if x["period"] == "hour")   # only once
+
+
+def test_hoy_kwh_none_without_sources():
+    assert C.hoy_kwh({"sensor.oculto": 3.0}, {}, None, set()) is None
+    fu = {"sensor.a": {"tipo": "kwh", "potencia": None, "dueno": None}}
+    assert C.hoy_kwh({"sensor.a": 1.0, "sensor.viejo": 9.0}, fu, None, set()) == 1.0
+    assert C.hoy_kwh({"sensor.t": 4.0}, {}, "sensor.t", set()) == 4.0
+
+
+def test_hoy_kwh_none_when_devices_unknown(en):
+    c, clock, fake, app = en
+    app.state.db.energia_upsert(1, [_fila3("sensor.nevera_kwh", 4.0), _fila3("sensor.tv_w", 3.0)])
+    app.state.db.casa_disp_set(1, "switch.tv", oculto=1)
+
+    def boom():
+        raise C.HAError("error")
+    fake.devices = boom
+    assert c.get("/api/casa", headers=A).json()["energia"]["hoy_kwh"] is None
+
+
+def test_failure_after_recovery_is_logged_again(en):
+    c, clock, fake, app = en
+    assert _nivel(c, None, 3).status_code == 200               # 5-minute calendar: due again soon after a success
+    fake.stats_fail = C.HAError("error")
+    app.state.energia_due()
+    assert len(_ev(app, "casa_energia_falla")) == 1
+    fake.stats_fail = None
+    clock.now += 16 * 60
+    app.state.energia_due()
+    assert c.get("/api/casa", headers=A).json()["energia"]["estadisticas"] == "ok"
+    fake.stats_fail = C.HAError("sin_respuesta")
+    clock.now += 6 * 60                                         # 22 min after the first log: a new failure after recovery
+    app.state.energia_due()
+    assert len(_ev(app, "casa_energia_falla")) == 2
+    clock.now += 16 * 60
+    app.state.energia_due()                                     # still failing: no second log inside the hour
+    assert len(_ev(app, "casa_energia_falla")) == 2

@@ -433,7 +433,9 @@ def ahora_w(states: list, fu: dict, tablero: Optional[str], fuera: set) -> Optio
 def hoy_kwh(dia: dict, fu: dict, tablero: Optional[str], fuera: set) -> Optional[float]:
     if tablero:
         return dia.get(tablero)
-    vals = [v for k, v in dia.items() if k not in fuera and (not fu or k in fu)]
+    if not fu:
+        return None                                     # sources unknown: hidden ones can't be told apart
+    vals = [v for k, v in dia.items() if k not in fuera and k in fu]
     return round(sum(vals), 6) if vals else None
 
 

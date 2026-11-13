@@ -1965,11 +1965,12 @@
   // Tailnet: the session is requested silently and renewed on its own; Funnel: it needs the authenticator code (sheet).
   const CAM_VIDA = 14 * 60 * 1000;               // sessions last 15 min on the server; renew a minute early
   let camDoor = null, camSes = null, camList = [], camSig = null, camBusy = false, camAsking = false, camProbing = false;
-  let camView = null, camFb = null, camIce = null, camPc = null, camPending = null, camGen = 0;
+  let camView = null, camFb = null, camIce = null, camPc = null, camPending = null, camGen = 0, camRt = null, camFlight = null;
+  let camLast = 0, camRenews = [], camGaveUp = false;       // renewals: one at a time, >= 15 s apart, at most 3 per minute
   const camUrl = (n, ruta) => "api/casa/camaras/" + encodeURIComponent(n) + "/" + ruta + (ruta.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(camSes ? camSes.v : "");
   const camMsg = (t) => { const m = $("cam-msg"); if (m.textContent !== (t || "")) m.textContent = t || ""; m.hidden = !t; };
   function camStopPlayer() {                     // peer, tracks, <video> source and every timer of the live view
-    clearTimeout(camFb); clearTimeout(camIce); camFb = camIce = null;
+    clearTimeout(camFb); clearTimeout(camIce); clearTimeout(camRt); camFb = camIce = camRt = null;
     if (camPc) { try { camPc.ontrack = camPc.onconnectionstatechange = null; camPc.close(); } catch (e) {} camPc = null; }
     const v = document.querySelector("#cam-live video");
     if (v) {
@@ -1982,15 +1983,21 @@
     const live = $("cam-live"); if (!live.hidden || live.firstChild) { live.replaceChildren(); live.hidden = true; }
     if (!$("cam-sheet").hidden) camSheetClose();
   }
-  function camReset() { camClose(); camSes = null; camList = []; camSig = null; camAsking = false; $("casa-camaras").hidden = true; $("cam-grid").replaceChildren(); }
-  async function camNewSession(code) {          // → "" when the session exists, otherwise the text to show
-    try {
-      const r = await api("api/casa/camaras/sesion", { method: "POST", keepSession: true, headers: code ? { "X-TOTP": code } : {} });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) return typeof j.detail === "string" ? j.detail : "No se pudo abrir la sesión de video (HTTP " + r.status + ")";
-      camSes = { v: j.v, until: Date.now() + CAM_VIDA };
-      return "";
-    } catch (e) { return "Sin conexión con el núcleo"; }
+  function camReset() { camClose(); camSes = null; camLast = 0; camRenews = []; camGaveUp = false; camFlight = null; camList = []; camSig = null; camAsking = false; $("casa-camaras").hidden = true; $("cam-grid").replaceChildren(); }
+  function camNewSession(code) {                // → "" when the session exists, otherwise the text to show; concurrent callers share one request
+    if (camFlight) return camFlight;
+    camFlight = (async () => {
+      try {
+        const r = await api("api/casa/camaras/sesion", { method: "POST", keepSession: true, headers: code ? { "X-TOTP": code } : {} });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) return typeof j.detail === "string" ? j.detail : "No se pudo abrir la sesión de video (HTTP " + r.status + ")";
+        camSes = { v: j.v, until: Date.now() + CAM_VIDA }; camLast = Date.now();
+        for (const im of document.querySelectorAll("#cam-grid img")) { im._f = 0; im._nx = 0; }
+        return "";
+      } catch (e) { return "Sin conexión con el núcleo"; }
+      finally { camFlight = null; }
+    })();
+    return camFlight;
   }
   function camSheetClose() { const s = $("cam-sheet"); s.hidden = true; $("cam-code").value = ""; camAsking = false; }
   function camAsk(then) {                        // Funnel: the authenticator code sheet
@@ -2013,26 +2020,50 @@
     $("cam-code-no").onclick = () => { camPending = null; camSheetClose(); };
     s.onclick = (ev) => { if (ev.target === s) { camPending = null; camSheetClose(); } };
   }
-  async function camEnsure() {                   // true when a session is usable now (tailnet: silently renewed)
+  function camNoSes() {                          // the live view has no session now: waits for the renewal, or says it gave up
+    if (!camView) return;
+    camStopPlayer(); camView.resume = !camGaveUp;
+    camNote(camGaveUp ? "No pude renovar la sesión de video" : "Renovando la sesión de video…", camGaveUp);
+  }
+  async function camEnsure() {                   // true when a session is usable now (tailnet: silently renewed, single-flight, throttled)
     if (camSes && camSes.until - Date.now() > 60000) return true;
     if (camDoor !== "tailnet") { if (camSes && camSes.until <= Date.now()) camSes = null; return !!camSes; }
-    const old = !!camSes, e = await camNewSession("");
+    if (camFlight) { const e = await camFlight; return !e && !!camSes; }
+    const now = Date.now(), old = !!camSes;
+    if (camGaveUp) return old;
+    if (camLast && now - camLast < 15000) return old;                       // too soon after the last one: a later tick tries again
+    camRenews = camRenews.filter((t) => now - t < 60000);
+    if (camRenews.length >= 3) { camGaveUp = true; camMsg("No pude renovar la sesión de video"); camNoSes(); return old; }
+    camRenews.push(now);
+    const e = await camNewSession("");
     if (e) { camMsg(e); return false; }
-    camMsg("");
+    if (!$("cam-msg").textContent.startsWith("El servicio")) camMsg("");
     if (old && camView && camView.mode === "hls") camPlay();         // HLS segments carry the old v: restart on the new one
     return true;
   }
-  async function camProbe(url) {                 // an <img>/<video> error doesn't say why: ask the same URL, without credentials
-    if (camProbing) return; camProbing = true;
+  function camRetry(my) {                        // a failure that is not a 401: 2 s, 5 s, 15 s, then stop with «Reintentar»
+    if (!camView || my !== camGen) return;
+    const w = [2000, 5000, 15000], k = camView.tries || 0;
+    if (k >= w.length) { camNote("No se pudo reproducir el video", true); camRetryBtn(true); return; }
+    camView.tries = k + 1; camNote("El video se interrumpió; reintento en " + w[k] / 1000 + " s…", true);
+    clearTimeout(camRt); camRt = setTimeout(() => { camRt = null; if (my === camGen && camView) camPlay(); }, w[k]);
+  }
+  function camRetryBtn(show) { const b = document.getElementById("cam-retry"); if (b) b.hidden = !show; }
+  async function camProbe(url, other, thumb) {   // an <img>/<video> error doesn't say why: ask the same URL, without credentials
+    if (thumb) { if (camProbing) return; camProbing = true; }
     try {
       const r = await fetch(url, { cache: "no-store", headers: {} });
-      if (r.status === 401) { camSes = null; if (camDoor === "tailnet") { await camEnsure(); if (camView) camPlay(); } else { camRender(); if (camView) camAsk(() => camPlay()); } }
-    } catch (e) {} finally { camProbing = false; }
+      if (r.status === 401) {
+        camSes = null;
+        if (camDoor === "tailnet") { if (await camEnsure()) { if (camView) camPlay(); } else camNoSes(); }
+        else { camRender(); if (camView) { camStopPlayer(); camAsk(() => camPlay()); } }
+      } else if (other) other();
+    } catch (e) { if (other) other(); } finally { if (thumb) camProbing = false; }
   }
   function camThumbs() {
     if (!camSes) return;
     for (const im of document.querySelectorAll("#cam-grid img")) {
-      if (im.dataset.on !== "1" || (!im.complete && Date.now() - (im._t || 0) < 10000)) continue;
+      if (im.dataset.on !== "1" || (im._nx || 0) > Date.now() || (!im.complete && Date.now() - (im._t || 0) < 10000)) continue;
       im._t = Date.now(); im.src = camUrl(im.dataset.cam, "foto.jpg") + "&t=" + Date.now();
     }
   }
@@ -2045,7 +2076,12 @@
       $("cam-grid").replaceChildren(...camList.map((c) => {
         const b = el("button", "cam-tile"); b.type = "button"; b.dataset.cam = c.nombre;
         const im = el("img"); im.alt = ""; im.dataset.cam = c.nombre; im.decoding = "async";
-        im.addEventListener("error", () => { if (camSes) camProbe(camUrl(c.nombre, "foto.jpg") + "&t=" + Date.now()); });
+        im.addEventListener("load", () => { im._f = 0; im._nx = 0; });
+        im.addEventListener("error", () => {         // 3 failures in a row: this tile alone retries every 30 s and stops probing
+          im._f = (im._f || 0) + 1;
+          if (im._f >= 3) im._nx = Date.now() + 30000;
+          else if (camSes) camProbe(camUrl(c.nombre, "foto.jpg") + "&t=" + Date.now(), null, true);
+        });
         b.append(im, el("span", "dot"), el("span", "nm", c.nombre));
         b.addEventListener("click", () => camTap(c.nombre));
         return b;
@@ -2060,6 +2096,7 @@
     sec.hidden = false;
   }
   function camTap(n) {
+    camGaveUp = false; camRenews = [];
     if (camSes || camDoor === "tailnet") { camOpen(n); return; }
     camAsk(() => camOpen(n));
   }
@@ -2076,8 +2113,10 @@
       bar.append(p);
     }
     const snd = casaBtn("Sonido", () => { v.muted = !v.muted; snd.textContent = v.muted ? "Sonido" : "Silenciar"; });
+    const rb = casaBtn("Reintentar", () => { camGaveUp = false; camRenews = []; camMsg(""); camView.tries = 0; camRetryBtn(false); camPlay(); });
+    rb.id = "cam-retry"; rb.hidden = true;
     const cl = casaBtn("Cerrar", () => camClose()); cl.setAttribute("aria-label", "Cerrar la vista en vivo");
-    bar.append(snd, cl);
+    bar.append(snd, rb, cl);
     live.replaceChildren(v, bar, note);
     camPlay();
   }
@@ -2085,10 +2124,11 @@
   async function camPlay() {
     if (!camView) return;
     const my = ++camGen, n = camView.nombre; camStopPlayer();
-    if (!(await camEnsure()) && !camSes) { if (my === camGen) camNote("Sin sesión de video.", true); return; }
+    if (!(await camEnsure()) && !camSes) { if (my === camGen) camNoSes(); return; }
     if (my !== camGen || !camView) return;
+    camView.resume = false; camRetryBtn(false);
     const v = document.querySelector("#cam-live video");
-    if (camDoor === "tailnet" && window.RTCPeerConnection) { camView.mode = "webrtc"; camWebrtc(n, v, my); }
+    if (camDoor === "tailnet" && window.RTCPeerConnection && !camView.forceHls) { camView.mode = "webrtc"; camWebrtc(n, v, my); }
     else camHls(n, v, my);
   }
   function camHls(n, v, my) {
@@ -2097,14 +2137,14 @@
       camNote("Este navegador no reproduce HLS; desde la tailnet usa el video en vivo directo", true); return;
     }
     camNote("en vivo · HLS ~5 s");
-    v.onerror = () => { if (my === camGen && camSes) { camNote("El video se interrumpió; reviso la sesión…", true); camProbe(camUrl(n, "hls/stream.m3u8")); } };
-    v.onplaying = () => { if (my === camGen) camNote("en vivo · HLS ~5 s"); };
+    v.onerror = () => { if (my === camGen && camSes) camProbe(camUrl(n, "hls/stream.m3u8"), () => camRetry(my), false); };
+    v.onplaying = () => { if (my === camGen) { camNote("en vivo · HLS ~5 s"); camView.tries = 0; } };
     v.src = camUrl(n, "hls/stream.m3u8");
     const p = v.play(); if (p && p.catch) p.catch(() => {});
   }
   async function camWebrtc(n, v, my) {
     camNote("conectando…");
-    const fallback = () => { if (my !== camGen) return; camStopPlayer(); camGen++; camHls(n, document.querySelector("#cam-live video"), camGen); };
+    const fallback = () => { if (my !== camGen) return; camView.forceHls = true; camStopPlayer(); camGen++; camHls(n, document.querySelector("#cam-live video"), camGen); };
     camFb = setTimeout(fallback, 8000);          // no track in 8 s: HLS
     try {
       const pc = new RTCPeerConnection(); camPc = pc;
@@ -2114,10 +2154,10 @@
         clearTimeout(camFb); camFb = null;
         if (!v.srcObject) v.srcObject = new MediaStream();
         v.srcObject.addTrack(ev.track);
-        camNote("en vivo · directo");
+        camNote("en vivo · directo"); camView.tries = 0;
         const p = v.play(); if (p && p.catch) p.catch(() => {});
       };
-      pc.onconnectionstatechange = () => { if (my === camGen && (pc.connectionState === "failed") && camFb === null) { camNote("Se cortó la conexión directa", true); } };
+      pc.onconnectionstatechange = () => { if (my === camGen && pc.connectionState === "failed") fallback(); };      // once: HLS does not come back to WebRTC
       await pc.setLocalDescription(await pc.createOffer());
       await new Promise((res) => {               // wait for the candidates (bounded), so the offer carries them
         if (pc.iceGatheringState === "complete") return res();
@@ -2127,7 +2167,7 @@
       if (my !== camGen) return;
       const r = await fetch(camUrl(n, "webrtc"), { method: "POST", cache: "no-store", headers: { "Content-Type": "application/sdp" }, body: pc.localDescription.sdp });
       if (my !== camGen) return;
-      if (r.status === 401) { camSes = null; clearTimeout(camFb); camFb = null; if (await camEnsure()) { if (my === camGen) camPlay(); } return; }
+      if (r.status === 401) { camSes = null; clearTimeout(camFb); camFb = null; if (await camEnsure()) { if (my === camGen) camPlay(); } else if (my === camGen) camNoSes(); return; }
       if (!r.ok) { fallback(); return; }
       await pc.setRemoteDescription({ type: "answer", sdp: await r.text() });
     } catch (e) { if (my === camGen) fallback(); }
@@ -2146,11 +2186,13 @@
       camList = d.camaras || [];
       if (d.estado !== "ok") { camMsg("El servicio de cámaras no responde" + (d.causa ? " · " + d.causa : "")); camClose(); }
       else if ($("cam-msg").textContent.startsWith("El servicio")) camMsg("");
-      await camEnsure();
+      if (d.estado === "ok") {
+        if (await camEnsure() && camView && camView.resume && camSes) camPlay();      // a renewal that waited out its cooldown
+      }
       camRender(); camThumbs();
     } catch (e) {} finally { camBusy = false; }
   }
-  $("cam-ver").addEventListener("click", () => camAsk(null));
+  $("cam-ver").addEventListener("click", () => { camGaveUp = false; camRenews = []; camAsk(null); });
 
   // --- casa: energía -------------------------------------------------------
   // The «Ahora / Hoy» cards ride the 5 s casa poll (text only). The energy view polls every 60 s while open and visible;

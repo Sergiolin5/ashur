@@ -4,6 +4,7 @@ import re
 from typing import Optional
 
 import httpx
+from urllib.parse import urlsplit
 
 SIN_AREA = "Sin área"
 
@@ -26,9 +27,10 @@ CONFIRMAR = {"lock", "cover"}
 class HAError(Exception):
     """motivo: sin_respuesta | token_invalido | error"""
 
-    def __init__(self, motivo: str):
+    def __init__(self, motivo: str, causa: str = ""):
         super().__init__(motivo)
         self.motivo = motivo
+        self.causa = causa                      # short, Spanish, never carries the token or headers
 
 
 class HAClient:
@@ -43,11 +45,32 @@ class HAClient:
     def __repr__(self) -> str:
         return f"HAClient({self._base!r})"
 
+    def _causa(self, x: Exception) -> str:
+        """Why the request failed, from the exception class and message only (never headers), plus host:port."""
+        msg = str(x).lower()
+        if isinstance(x, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+            c = "tiempo agotado"
+        elif isinstance(x, httpx.ConnectError) and any(k in msg for k in (
+                "name or service not known", "nodename nor servname", "getaddrinfo", "temporary failure in name resolution")):
+            c = "no se encontró el nombre"
+        elif isinstance(x, httpx.ConnectError) and "refused" in msg:
+            c = "conexión rechazada"
+        elif "ssl" in msg or "tls" in msg or "certificate" in msg or "ssl" in type(x).__name__.lower():
+            c = "error de TLS"
+        else:
+            c = type(x).__name__
+        try:
+            u = urlsplit(self._base)
+            port = u.port or (443 if u.scheme == "https" else 80)
+            return f"{c} en {u.hostname}:{port}" if u.hostname else c
+        except ValueError:
+            return c
+
     def _req(self, method: str, path: str, **kw) -> httpx.Response:
         try:
             r = self._http.request(method, self._base + path, headers=self._headers, **kw)
-        except httpx.HTTPError:
-            raise HAError("sin_respuesta") from None
+        except httpx.HTTPError as x:
+            raise HAError("sin_respuesta", self._causa(x)) from None
         if r.status_code == 401:
             raise HAError("token_invalido")
         if r.status_code >= 400:

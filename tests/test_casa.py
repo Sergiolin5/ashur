@@ -1,4 +1,6 @@
 """Casa (0.57.0): the tables behind the Home Assistant tab."""
+import json
+
 import httpx
 import pytest
 
@@ -510,3 +512,46 @@ def test_areas_401_is_not_a_bad_token(casa_env):
 def test_states_drops_malformed_items():
     h = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[1, {"state": "x"}, {"entity_id": 5}, _st("light.a")])))
     assert [x["entity_id"] for x in C.HAClient("http://ha", "t", http=h).states()] == ["light.a"]
+
+
+# --- 0.57.1: say why Home Assistant can't be reached ---
+def _causa(exc):
+    def h(r):
+        raise exc
+    with pytest.raises(C.HAError) as e:
+        _client(h).states()
+    assert e.value.motivo == "sin_respuesta"
+    return e.value.causa
+
+
+def test_causa_refused_dns_timeout_tls_other():
+    c = _causa(httpx.ConnectError("[Errno 111] Connection refused"))
+    assert "conexión rechazada en" in c and "ha.local:8123" in c and "SECRETO" not in c
+    assert "no se encontró el nombre" in _causa(httpx.ConnectError("[Errno -2] Name or service not known"))
+    assert "tiempo agotado" in _causa(httpx.ConnectTimeout("x"))
+    assert "tiempo agotado" in _causa(httpx.ReadTimeout("x"))
+    assert "error de TLS" in _causa(httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"))
+    assert _causa(httpx.RemoteProtocolError("boom")).startswith("RemoteProtocolError en ")
+
+
+def test_causa_in_api_log_and_control(tmp_path):
+    clock, fake = VirtualClock(), FakeHA()
+    app = create_app(str(tmp_path / "t.db"), ENROLL, ADMIN, clock=clock, sweep_every_s=None, ha_url="http://ha",
+                     ha_client_fn=lambda url, tok: fake, env={"ASHUR_HA_TOKEN": "SECRETO123"})
+    c = TestClient(app)
+    assert c.get("/api/casa", headers=A).json()["ha_causa"] is None
+    fake.fail = C.HAError("sin_respuesta", "conexión rechazada en 127.0.0.1:8123")
+    clock.now += 10
+    r = c.get("/api/casa", headers=A)
+    assert r.json()["ha"] == "sin_respuesta" and r.json()["ha_causa"] == "conexión rechazada en 127.0.0.1:8123"
+    ev = _events(app, "casa_ha_falla")
+    assert len(ev) == 1 and json.loads(ev[0][1])["causa"] == "conexión rechazada en 127.0.0.1:8123"
+    fake.fail, fake.call_fail = None, C.HAError("sin_respuesta", "conexión rechazada en 127.0.0.1:8123")
+    clock.now += 10
+    r2 = c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "on"})
+    assert r2.status_code == 502 and r2.json()["detail"] == "Home Assistant no responde (conexión rechazada en 127.0.0.1:8123)"
+    fake.call_fail = None
+    clock.now += 10
+    assert c.get("/api/casa", headers=A).json()["ha_causa"] is None
+    rows = app.state.db.conn.execute("SELECT * FROM session_log").fetchall()
+    assert "SECRETO123" not in r.text + r2.text + str(rows)

@@ -255,7 +255,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.57.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.57.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1639,13 +1639,17 @@ def create_app(
     # --- casa (0.57.0): Home Assistant over REST; the token is read from the environment at each use and never stored ---
     CASA_TXT = {"sin_respuesta": "Home Assistant no responde", "token_invalido": "El token de Home Assistant no es válido",
                 "error": "Home Assistant devolvió un error"}
+    def casa_txt(motivo: str, causa: str = "") -> str:
+        t = CASA_TXT.get(motivo, CASA_TXT["error"])
+        return f"{t} ({causa})" if causa else t
+
     casa_mem: dict[int, dict] = {}              # per house: lock, states/areas with their times, last good time, last failure logged
     casa_mem_lock = threading.Lock()
 
     def casa_entry(cid: int) -> dict:
         with casa_mem_lock:
             return casa_mem.setdefault(cid, {"lock": threading.Lock(), "states": None, "states_t": 0.0, "areas": {}, "areas_t": None,
-                                             "visto": None, "fail_t": None, "client": None, "fail_s": None, "fail_a": None, "ha": "ok"})
+                                             "visto": None, "fail_t": None, "client": None, "fail_s": None, "fail_a": None, "ha": "ok", "causa": None})
 
     def casa_client(row: dict, e: dict) -> HAClient:
         token = env.get(row["ha_token_env"], "")
@@ -1659,10 +1663,10 @@ def create_app(
             e["client"] = ((row["ha_url"], token), HAClient(row["ha_url"], token))
         return e["client"][1]
 
-    def casa_falla(row: dict, e: dict, motivo: str) -> None:
+    def casa_falla(row: dict, e: dict, motivo: str, causa: str = "") -> None:
         if e["fail_t"] is None or clock() - e["fail_t"] >= 600:
             e["fail_t"] = clock()
-            db.log(clock(), None, "casa_ha_falla", {"casa": row["id"], "motivo": motivo})
+            db.log(clock(), None, "casa_ha_falla", {"casa": row["id"], "motivo": motivo, "causa": causa})
 
     def casa_refresh(row: dict, with_areas: bool) -> dict:
         """Fresh enough states (3 s) and areas (300 s) from Home Assistant; raises HAError. Call with the entry's lock held.
@@ -1671,18 +1675,19 @@ def create_app(
 
         def step(key: str, fetch: Callable[[HAClient], None]) -> None:
             if e[key] and now < e[key][0]:
-                raise HAError(e[key][1])
+                raise HAError(e[key][1], e[key][2])
             try:
                 fetch(casa_client(row, e))
             except Exception as x:
                 motivo = x.motivo if isinstance(x, HAError) else "error"
+                causa = x.causa if isinstance(x, HAError) else ""
                 if key == "fail_a" and motivo == "token_invalido" and e["fail_s"] is None and e["states"] is not None:
                     e["areas_t"] = clock()                      # states answered: the token is fine, only the template API is refused (non-admin token)
                     casa_falla(row, e, "areas_sin_permiso")
                     return
                 # the window starts when the failure happens, not when the request began (a 5 s timeout would eat a 3 s window)
-                e[key] = (clock() + (120 if motivo == "token_invalido" else 3), motivo)
-                raise HAError(motivo) from None
+                e[key] = (clock() + (120 if motivo == "token_invalido" else 3), motivo, causa)
+                raise HAError(motivo, causa) from None
             e[key] = None
 
         def get_states(cli: HAClient) -> None:
@@ -1704,7 +1709,7 @@ def create_app(
         if casa is not None and not row:
             raise HTTPException(404, "esa casa no existe")
         out = {"casas": [{"id": r["id"], "nombre": r["nombre"]} for r in rows], "casa": row["id"] if row else None,
-               "ha": "sin_configurar", "visto": None}
+               "ha": "sin_configurar", "ha_causa": None, "visto": None}
         if not row:
             return {**out, **casa_mod.vista([], {}, {})}
         e, ha = casa_entry(row["id"]), "ok"
@@ -1713,15 +1718,18 @@ def create_app(
                 try:
                     casa_refresh(row, True)
                 except HAError as x:
-                    ha = x.motivo
-                    casa_falla(row, e, ha)
-                e["ha"] = ha
+                    ha, causa = x.motivo, x.causa
+                    casa_falla(row, e, ha, causa)
+                else:
+                    causa = None
+                e["ha"], e["causa"] = ha, causa
                 states, areas, visto = e["states"] or [], e["areas"], e["visto"]
             finally:
                 e["lock"].release()
         else:                                                   # a slow Home Assistant call holds the lock: serve the cache, don't queue
             ha, states, areas, visto = e["ha"], e["states"] or [], e["areas"], e["visto"]
-        return {**out, "ha": ha, "visto": visto, **casa_mod.vista(states, areas, db.casa_disps(row["id"]))}
+        causa = (e["causa"] or None) if ha != "ok" else None
+        return {**out, "ha": ha, "ha_causa": causa, "visto": visto, **casa_mod.vista(states, areas, db.casa_disps(row["id"]))}
 
     class CasaControl(BaseModel):
         entity_id: str = Field(min_length=1, max_length=255)
@@ -1745,7 +1753,7 @@ def create_app(
             try:
                 casa_refresh(row, False)
             except HAError as x:
-                raise HTTPException(502, CASA_TXT.get(x.motivo, CASA_TXT["error"])) from None
+                raise HTTPException(502, casa_txt(x.motivo, x.causa)) from None
             st = next((s for s in e["states"] if s.get("entity_id") == b.entity_id), None)
             if not st:
                 raise HTTPException(404, "ese dispositivo ya no está en Home Assistant")
@@ -1755,18 +1763,18 @@ def create_app(
                 raise HTTPException(400, "Ese dispositivo no se controla desde Ashur") from None
             if dominio in casa_mod.CONFIRMAR and not b.confirm:
                 return confirmar(f"¿{b.accion.capitalize()} {casa_nombre_de(e['states'], b.entity_id)}?")
-            ok, motivo = True, None
+            ok, motivo, causa = True, None, ""
             try:
                 casa_client(row, e).call(dominio, servicio, b.entity_id)
             except HAError as x:
-                ok, motivo = False, x.motivo
+                ok, motivo, causa = False, x.motivo, x.causa
             except Exception:
                 ok, motivo = False, "error"
             if ok:
                 e["states_t"] = -1e18                           # the next read asks Home Assistant again (the old states stay as cache)
         db.log(clock(), None, "casa_control", {"casa": cid, "entity": b.entity_id, "accion": b.accion, "ok": ok})
         if not ok:
-            raise HTTPException(502, CASA_TXT.get(motivo, CASA_TXT["error"]))
+            raise HTTPException(502, casa_txt(motivo, causa))
         return {"ok": True}
 
     class CasaDispositivo(BaseModel):

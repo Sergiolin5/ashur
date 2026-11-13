@@ -363,3 +363,90 @@ def vista(states: list, areas: dict, prefs: dict, devices: Optional[dict] = None
         "areas": [{"nombre": n, "dispositivos": sorted(por_area[n], key=key)} for n in nombres],
         "ocultos": sorted(ocultos, key=key),
     }
+
+
+# ---- energy (0.58.0): calendar, ranges and totals, all pure ----
+PERIODO = {1: "day", 2: "hour", 3: "5minute"}
+CADA_S = {1: 3600, 2: 900, 3: 300}                 # how often each resolution is asked again
+RELLENO_DIAS = {1: 365, 2: 90, 3: 10}               # backfill, the first time or after raising a level
+TRAMO_S = {1: 30 * 86400, 2: 30 * 86400, 3: 86400}  # one statistics call covers at most this
+MAX_DIAS = {1: 400, 2: 92, 3: 10}                   # widest range the energy endpoint serves
+LOTE_IDS = 50
+
+
+def tramos(desde: float, hasta: float, paso: float) -> list:
+    """[desde, hasta) cut into consecutive half-open pieces of at most paso seconds."""
+    out, a = [], desde
+    while a < hasta:
+        b = min(a + paso, hasta)
+        out.append((a, b))
+        a = b
+    return out
+
+
+def inicio_dia(ts: float, tz) -> float:
+    d = datetime.fromtimestamp(ts, tz)
+    return d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def _piso(ts: float, paso: int) -> float:
+    return float(int(ts // paso) * paso)
+
+
+def ventana_desde(resolucion: int, ahora: float, tz) -> float:
+    """Start of the regular request: yesterday and today, the last 3 hours, the last 30 minutes."""
+    if resolucion == 1:
+        return inicio_dia(inicio_dia(ahora, tz) - 1, tz)
+    if resolucion == 2:
+        return _piso(ahora, 3600) - 3 * 3600
+    return _piso(ahora, 300) - 1800
+
+
+def relleno_desde(resolucion: int, ahora: float, tz) -> float:
+    atras = ahora - RELLENO_DIAS[resolucion] * 86400
+    if resolucion == 1:
+        return inicio_dia(atras, tz)
+    return _piso(atras, 3600 if resolucion == 2 else 300)
+
+
+def ocultas(fu: dict, disps: dict) -> set:
+    """Sources hidden by Sergio, directly or through the device they belong to: they never add to a total."""
+    def oc(eid):
+        return bool((disps.get(eid) or {}).get("oculto"))
+    return {eid for eid, f in fu.items() if oc(eid) or (f.get("dueno") and oc(f["dueno"]))}
+
+
+def ahora_w(states: list, fu: dict, tablero: Optional[str], fuera: set) -> Optional[float]:
+    """The panel meter's power now, or the sum of the power sensors (each source's own W, or its paired W)."""
+    by = {s["entity_id"]: s for s in states}
+
+    def w(src):
+        pot = src if fu[src]["tipo"] == "w" else fu[src].get("potencia")
+        return _potencia(by[pot]) if pot in by else None
+
+    if tablero:
+        return w(tablero) if tablero in fu else None
+    vals = [v for v in (w(s) for s in fu if s not in fuera) if v is not None]
+    return round(sum(vals), 3) if vals else None
+
+
+def hoy_kwh(dia: dict, fu: dict, tablero: Optional[str], fuera: set) -> Optional[float]:
+    if tablero:
+        return dia.get(tablero)
+    vals = [v for k, v in dia.items() if k not in fuera and (not fu or k in fu)]
+    return round(sum(vals), 6) if vals else None
+
+
+def totales(series: dict, medidos: list, tablero: Optional[str]) -> tuple:
+    """(total, no_medido) per period start. With a panel meter the total is its reading and «no medido» is
+    what the others do not explain (never negative); without one, the total is the sum and no_medido is None."""
+    suma = {}
+    for eid in medidos:
+        for p in series.get(eid) or []:
+            if p["kwh"] is not None:
+                suma[p["inicio"]] = suma.get(p["inicio"], 0.0) + p["kwh"]
+    if not tablero:
+        return [{"inicio": t, "kwh": round(v, 6)} for t, v in sorted(suma.items())], None
+    tab = [p for p in series.get(tablero) or [] if p["kwh"] is not None]
+    total = [{"inicio": p["inicio"], "kwh": p["kwh"]} for p in tab]
+    return total, [{"inicio": p["inicio"], "kwh": round(max(0.0, p["kwh"] - suma.get(p["inicio"], 0.0)), 6)} for p in tab]

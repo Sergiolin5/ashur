@@ -1692,6 +1692,11 @@
   function casaEstado(d) {
     if (typeof d.potencia_w === "number") return casaW(d.potencia_w);
     if (d.dominio === "scene") return "";
+    if (d.dominio === "alarm_control_panel") {
+      if (d.estado === "disarmed") return "desarmada";
+      if (d.estado === "triggered") return "disparada";
+      if (String(d.estado || "").startsWith("armed_")) return "armada";
+    }
     if (d.dominio === "switch" && d.estado === "on") return "encendido";
     if (d.dominio === "switch" && d.estado === "off") return "apagado";
     return CASA_ES[d.estado] || String(d.estado || "");

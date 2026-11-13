@@ -37,6 +37,9 @@ class HAClient:
         self._headers = {"Authorization": f"Bearer {token}"}
         self._http = http or httpx.Client(timeout=timeout)
 
+    def close(self) -> None:
+        self._http.close()
+
     def __repr__(self) -> str:
         return f"HAClient({self._base!r})"
 
@@ -58,7 +61,7 @@ class HAClient:
             raise HAError("error") from None
         if not isinstance(data, list):
             raise HAError("error")
-        return data
+        return [x for x in data if isinstance(x, dict) and isinstance(x.get("entity_id"), str)]
 
     def areas(self) -> dict:
         r = self._req("POST", "/api/template", json={"template": AREAS_TEMPLATE})
@@ -112,7 +115,7 @@ def vista(states: list, areas: dict, prefs: dict) -> dict:
         d = _dominio(st)
         attrs = st.get("attributes") or {}
         es_sensor = d == "sensor" and attrs.get("unit_of_measurement") in ("W", "kW")
-        if not (controlable(st) or es_sensor):
+        if not (controlable(st) or es_sensor or d == "alarm_control_panel"):      # alarm panels: visible, never controllable
             continue
         eid = st["entity_id"]
         p = prefs.get(eid) or {}

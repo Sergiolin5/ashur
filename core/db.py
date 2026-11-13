@@ -1158,8 +1158,14 @@ class DB:
     CASA_DISP_FIELDS = ("orden", "favorito", "oculto")
 
     def casa_ensure(self, nombre: str, ha_url: str, ha_token_env: str) -> int:
+        """The env-managed house: found by URL, else by its token variable (a changed ASHUR_HA_URL moves the house, it does not add one)."""
+        ha_url = ha_url.strip().rstrip("/")
         with self.lock:
             r = self.conn.execute("SELECT id FROM casas WHERE ha_url = ?", (ha_url,)).fetchone()
+            if not r:
+                r = self.conn.execute("SELECT id FROM casas WHERE ha_token_env = ? ORDER BY id LIMIT 1", (ha_token_env,)).fetchone()
+                if r:
+                    self.conn.execute("UPDATE casas SET ha_url = ? WHERE id = ?", (ha_url, r[0]))
             if r:
                 self.conn.execute("UPDATE casas SET nombre = ? WHERE id = ?", (nombre, r[0]))
                 cid = r[0]

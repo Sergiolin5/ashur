@@ -1645,7 +1645,7 @@ def create_app(
     def casa_entry(cid: int) -> dict:
         with casa_mem_lock:
             return casa_mem.setdefault(cid, {"lock": threading.Lock(), "states": None, "states_t": 0.0, "areas": {}, "areas_t": None,
-                                             "visto": None, "fail_t": None, "client": None, "fail_s": None, "fail_a": None})
+                                             "visto": None, "fail_t": None, "client": None, "fail_s": None, "fail_a": None, "ha": "ok"})
 
     def casa_client(row: dict, e: dict) -> HAClient:
         token = env.get(row["ha_token_env"], "")
@@ -1654,8 +1654,15 @@ def create_app(
         if ha_client_fn:
             return ha_client_fn(row["ha_url"], token)
         if not e["client"] or e["client"][0] != (row["ha_url"], token):
+            if e["client"]:
+                e["client"][1].close()                          # the old token's connections are not reused
             e["client"] = ((row["ha_url"], token), HAClient(row["ha_url"], token))
         return e["client"][1]
+
+    def casa_falla(row: dict, e: dict, motivo: str) -> None:
+        if e["fail_t"] is None or clock() - e["fail_t"] >= 600:
+            e["fail_t"] = clock()
+            db.log(clock(), None, "casa_ha_falla", {"casa": row["id"], "motivo": motivo})
 
     def casa_refresh(row: dict, with_areas: bool) -> dict:
         """Fresh enough states (3 s) and areas (300 s) from Home Assistant; raises HAError. Call with the entry's lock held.
@@ -1669,7 +1676,12 @@ def create_app(
                 fetch(casa_client(row, e))
             except Exception as x:
                 motivo = x.motivo if isinstance(x, HAError) else "error"
-                e[key] = (now + 3, motivo)
+                if key == "fail_a" and motivo == "token_invalido" and e["fail_s"] is None and e["states"] is not None:
+                    e["areas_t"] = clock()                      # states answered: the token is fine, only the template API is refused (non-admin token)
+                    casa_falla(row, e, "areas_sin_permiso")
+                    return
+                # the window starts when the failure happens, not when the request began (a 5 s timeout would eat a 3 s window)
+                e[key] = (clock() + (120 if motivo == "token_invalido" else 3), motivo)
                 raise HAError(motivo) from None
             e[key] = None
 
@@ -1696,15 +1708,19 @@ def create_app(
         if not row:
             return {**out, **casa_mod.vista([], {}, {})}
         e, ha = casa_entry(row["id"]), "ok"
-        with e["lock"]:
+        if e["lock"].acquire(timeout=1):
             try:
-                casa_refresh(row, True)
-            except HAError as x:
-                ha = x.motivo
-                if e["fail_t"] is None or clock() - e["fail_t"] >= 600:
-                    e["fail_t"] = clock()
-                    db.log(clock(), None, "casa_ha_falla", {"casa": row["id"], "motivo": ha})
-            states, areas, visto = e["states"] or [], e["areas"], e["visto"]
+                try:
+                    casa_refresh(row, True)
+                except HAError as x:
+                    ha = x.motivo
+                    casa_falla(row, e, ha)
+                e["ha"] = ha
+                states, areas, visto = e["states"] or [], e["areas"], e["visto"]
+            finally:
+                e["lock"].release()
+        else:                                                   # a slow Home Assistant call holds the lock: serve the cache, don't queue
+            ha, states, areas, visto = e["ha"], e["states"] or [], e["areas"], e["visto"]
         return {**out, "ha": ha, "visto": visto, **casa_mod.vista(states, areas, db.casa_disps(row["id"]))}
 
     class CasaControl(BaseModel):

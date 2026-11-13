@@ -221,7 +221,6 @@ def test_casa_lists_devices_by_area(casa_env):
     sala = next(a for a in j["areas"] if a["nombre"] == "Sala")
     assert [d["entity_id"] for d in sala["dispositivos"]] == ["light.sala"]
     assert all(d["entity_id"] != "light.fantasma" for a in j["areas"] for d in a["dispositivos"])   # saved/area-only ghosts never show
-    assert "alarm_control_panel.casa" not in str(j)
 
 
 def test_casa_needs_admin(casa_env):
@@ -419,3 +418,95 @@ def test_areas_failure_does_not_block_control(casa_env):
     assert r.status_code == 200 and fake.calls == [("light", "turn_off", "light.sala")]
     j = c.get("/api/casa", headers=A).json()                           # states keep refreshing; areas keep their old value
     assert j["ha"] == "error" and any(d["entity_id"] == "light.sala" for d in j["areas"][0]["dispositivos"])
+
+
+# ---- final review fixes ----
+def test_backoff_counts_from_the_failure_not_the_request(casa_env):
+    c, clock, fake, _ = casa_env
+    c.get("/api/casa", headers=A)
+    clock.now += 400
+
+    def slow():
+        fake.n_states += 1
+        clock.now += 5                                        # the 5 s timeout elapses before the error
+        raise C.HAError("sin_respuesta")
+    fake.states = slow
+    n = fake.n_states
+    assert c.get("/api/casa", headers=A).json()["ha"] == "sin_respuesta"
+    clock.now += 2                                            # still inside 3 s after the failure
+    assert c.get("/api/casa", headers=A).json()["ha"] == "sin_respuesta"
+    assert fake.n_states == n + 1
+
+
+def test_casa_view_serves_cache_when_lock_is_busy(casa_env):
+    import threading
+    c, clock, fake, _ = casa_env
+    first = c.get("/api/casa", headers=A).json()
+    clock.now += 10                                           # states are stale: the next GET goes to Home Assistant
+    inside, release = threading.Event(), threading.Event()
+
+    def slow():
+        inside.set()
+        release.wait(10)
+        return fake.estados
+    fake.states = slow
+    t = threading.Thread(target=lambda: c.get("/api/casa", headers=A))
+    t.start()
+    assert inside.wait(5)
+    try:
+        j = c.get("/api/casa", headers=A).json()              # waits 1 s for the lock, then serves the cache
+    finally:
+        release.set()
+        t.join()
+    assert j["ha"] == "ok" and j["areas"] == first["areas"] and j["visto"] == first["visto"]
+
+
+def test_changed_ha_url_updates_the_house(tmp_path):
+    db_path = str(tmp_path / "t.db")
+    for url in ("http://a", "http://b/"):
+        app = create_app(db_path, ENROLL, ADMIN, clock=VirtualClock(), sweep_every_s=None, ha_url=url,
+                         ha_client_fn=lambda u, t: FakeHA(), env={"ASHUR_HA_TOKEN": "t"})
+    rows = app.state.db.casas()
+    assert len(rows) == 1 and rows[0]["ha_url"] == "http://b"
+    assert DB(str(tmp_path / "x.db")).casa_ensure("n", "http://c/", "T") == 1
+
+
+def test_alarm_panel_is_visible_and_read_only(casa_env):
+    c, _, fake, _ = casa_env
+    j = c.get("/api/casa", headers=A).json()
+    alarma = next(d for a in j["areas"] for d in a["dispositivos"] if d["entity_id"] == "alarm_control_panel.casa")
+    assert alarma["controlable"] is False and alarma["confirmar"] is False and alarma["estado"] == "armed_away"
+    r = c.post("/api/casa/1/control", headers=A, json={"entity_id": "alarm_control_panel.casa", "accion": "desarmar"})
+    assert r.status_code == 400 and fake.calls == []
+
+
+def test_bad_token_waits_120s(casa_env):
+    c, clock, fake, _ = casa_env
+    fake.fail = C.HAError("token_invalido")
+    c.get("/api/casa", headers=A)
+    n = fake.n_states
+    clock.now += 100
+    assert c.get("/api/casa", headers=A).json()["ha"] == "token_invalido"
+    assert fake.n_states == n
+    clock.now += 30
+    c.get("/api/casa", headers=A)
+    assert fake.n_states == n + 1
+
+
+def test_areas_401_is_not_a_bad_token(casa_env):
+    c, clock, fake, app = casa_env
+
+    def areas():
+        raise C.HAError("token_invalido")
+    fake.areas = areas
+    j = c.get("/api/casa", headers=A).json()
+    assert j["ha"] == "ok" and any(d["entity_id"] == "light.sala" for a in j["areas"] for d in a["dispositivos"])
+    assert [r[1] for r in _events(app, "casa_ha_falla")] and "areas_sin_permiso" in _events(app, "casa_ha_falla")[0][1]
+    clock.now += 400
+    c.get("/api/casa", headers=A)
+    assert len(_events(app, "casa_ha_falla")) == 1            # throttled at 600 s
+
+
+def test_states_drops_malformed_items():
+    h = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[1, {"state": "x"}, {"entity_id": 5}, _st("light.a")])))
+    assert [x["entity_id"] for x in C.HAClient("http://ha", "t", http=h).states()] == ["light.a"]

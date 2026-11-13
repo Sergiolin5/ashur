@@ -1227,21 +1227,25 @@ class DB:
             self.conn.execute("UPDATE casas SET nivel_energia_def = ? WHERE id = ?", (nivel, casa_id))
             self.conn.commit()
 
+    ENERGIA_LOTE = 2000                   # rows per commit: a 10-day 5-minute backfill never holds the lock for long
+
     def energia_upsert(self, casa_id: int, filas: list[dict]) -> int:
+        """Insert or replace rows, ENERGIA_LOTE at a time, each chunk in its own transaction (rolled back on error).
+        A failure mid-batch keeps the chunks already committed: that is fine, because the upsert is idempotent (the
+        same period is rewritten, never duplicated) and the backfill mark is only written after the whole range succeeds."""
         datos = [(casa_id, f["entity_id"], float(f["inicio"]), f["resolucion"], f.get("kwh"), f.get("w_max"), f["fuente"])
                  for f in filas]
-        if not datos:
-            return 0
-        with self.lock:
-            try:
-                self.conn.executemany(
-                    "INSERT INTO casa_energia (casa_id, entity_id, inicio, resolucion, kwh, w_max, fuente) VALUES (?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT (casa_id, entity_id, inicio, resolucion) DO UPDATE SET "
-                    "kwh = excluded.kwh, w_max = excluded.w_max, fuente = excluded.fuente", datos)
-                self.conn.commit()
-            except Exception:
-                self.conn.rollback()
-                raise
+        for i in range(0, len(datos), self.ENERGIA_LOTE):
+            with self.lock:
+                try:
+                    self.conn.executemany(
+                        "INSERT INTO casa_energia (casa_id, entity_id, inicio, resolucion, kwh, w_max, fuente) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT (casa_id, entity_id, inicio, resolucion) DO UPDATE SET "
+                        "kwh = excluded.kwh, w_max = excluded.w_max, fuente = excluded.fuente", datos[i:i + self.ENERGIA_LOTE])
+                    self.conn.commit()
+                except Exception:
+                    self.conn.rollback()
+                    raise
         return len(datos)
 
     def energia_serie(self, casa_id: int, entity_ids: list[str], resolucion: int, desde: float, hasta: float) -> dict[str, list[dict]]:
@@ -1261,11 +1265,18 @@ class DB:
                         {"inicio": r["inicio"], "kwh": r["kwh"], "w_max": r["w_max"], "fuente": r["fuente"]})
         return out
 
-    def energia_dia(self, casa_id: int, inicio_dia: float) -> dict[str, float]:
+    def energia_dia(self, casa_id: int, entity_ids: list[str], inicio_dia: float) -> dict[str, float]:
+        """Day rows (resolución 1) starting at inicio_dia for these sources; by entity_id, so it seeks on the key."""
+        out: dict[str, float] = {}
         with self.lock:
-            return {r["entity_id"]: r["kwh"] for r in self.conn.execute(
-                "SELECT entity_id, kwh FROM casa_energia WHERE casa_id = ? AND resolucion = 1 AND inicio = ? AND kwh IS NOT NULL",
-                (casa_id, float(inicio_dia))).fetchall()}
+            for i in range(0, len(entity_ids), 500):
+                ids = entity_ids[i:i + 500]
+                q = ",".join("?" * len(ids))
+                for r in self.conn.execute(
+                        f"SELECT entity_id, kwh FROM casa_energia WHERE casa_id = ? AND entity_id IN ({q}) AND resolucion = 1 "
+                        f"AND inicio = ? AND kwh IS NOT NULL", (casa_id, *ids, float(inicio_dia))).fetchall():
+                    out[r["entity_id"]] = r["kwh"]
+        return out
 
     MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
 

@@ -42,7 +42,9 @@ def test_energia_dia(tmp_path):
     c = _casa(db)
     db.energia_upsert(c, [_fila("sensor.a", 0.0, 1, 4.0), _fila("sensor.a", 0.0, 2, 0.5),
                           _fila("sensor.b", 0.0, 1, 2.0), _fila("sensor.a", 86400.0, 1, 9.0)])
-    assert db.energia_dia(c, 0.0) == {"sensor.a": 4.0, "sensor.b": 2.0}
+    assert db.energia_dia(c, ["sensor.a", "sensor.b"], 0.0) == {"sensor.a": 4.0, "sensor.b": 2.0}
+    assert db.energia_dia(c, ["sensor.b", "sensor.x"], 0.0) == {"sensor.b": 2.0}      # only the ids asked for
+    assert db.energia_dia(c, [], 0.0) == {}
 
 
 def test_energia_casa_scoped(tmp_path):
@@ -52,7 +54,7 @@ def test_energia_casa_scoped(tmp_path):
     db.energia_upsert(c2, [_fila("sensor.a", 0.0, 1, 2.0)])
     assert db.energia_serie(c1, ["sensor.a"], 1, 0, 10)["sensor.a"][0]["kwh"] == 1.0
     assert db.energia_serie(c2, ["sensor.a"], 1, 0, 10)["sensor.a"][0]["kwh"] == 2.0
-    assert db.energia_dia(c2, 0.0) == {"sensor.a": 2.0}
+    assert db.energia_dia(c2, ["sensor.a"], 0.0) == {"sensor.a": 2.0}
 
 
 def test_nivel_validation(tmp_path):
@@ -221,7 +223,8 @@ def test_fuentes_two_channel_plug_keeps_all_channels():
         sts += [_st(f"sensor.k{i}", "1", unit_of_measurement="kWh", state_class="total_increasing"),
                 _st(f"sensor.w{i}", "5", unit_of_measurement="W", state_class="measurement")]
         dev.update({f"sensor.k{i}": "d", f"sensor.w{i}": "d"})
-    assert C.fuentes(sts, dev) == {k: {"tipo": "kwh", "potencia": None, "dueno": None} for k in ("sensor.k1", "sensor.k2")}
+    assert C.fuentes(sts, dev) == {k: {"tipo": "kwh", "potencia": None, "dueno": None, "w_sueltos": ["sensor.w1", "sensor.w2"]}
+                                   for k in ("sensor.k1", "sensor.k2")}
     v = C.vista(sts, {}, {}, devices=dev)
     ids = {d["entity_id"] for a in v["areas"] for d in a["dispositivos"]}
     assert {"sensor.w1", "sensor.w2", "switch.c1", "switch.c2"} <= ids
@@ -678,3 +681,140 @@ def test_failure_after_recovery_is_logged_again(en):
     clock.now += 16 * 60
     app.state.energia_due()                                     # still failing: no second log inside the hour
     assert len(_ev(app, "casa_energia_falla")) == 2
+
+
+# ---- final review fixes: cumulative levels, «Quitar del total», every W channel in «Ahora», chunked writes ----
+def _enchufe_doble(fake, w1="100", w2="200"):
+    """A two-channel plug: two controllables, two kWh and two W sensors on one HA device (no pairing possible)."""
+    fake.estados = fake.estados + [
+        _st("switch.p1", "on", friendly_name="Enchufe 1"), _st("switch.p2", "on", friendly_name="Enchufe 2"),
+        _st("sensor.p_k1", "1", unit_of_measurement="kWh", state_class="total_increasing"),
+        _st("sensor.p_k2", "1", unit_of_measurement="kWh", state_class="total_increasing"),
+        _st("sensor.p_w1", w1, unit_of_measurement="W", state_class="measurement"),
+        _st("sensor.p_w2", w2, unit_of_measurement="W", state_class="measurement")]
+    fake.dev = {**fake.dev, **{e: "d3" for e in ("switch.p1", "switch.p2", "sensor.p_k1", "sensor.p_k2", "sensor.p_w1", "sensor.p_w2")}}
+
+
+def test_level_3_house_writes_hours_and_5min(en):
+    c, clock, fake, app = en
+    assert _nivel(c, None, 3).status_code == 200
+    for r in (2, 3):                                            # 1 → 3 marks both resolutions as raised
+        assert app.state.db.setting(f"casa_relleno_desde:1:{r}")
+    app.state.energia_due()
+    db = app.state.db
+    assert db.energia_serie(1, ["sensor.nevera_kwh"], 2, 0, T0 + DIA)["sensor.nevera_kwh"]
+    assert db.energia_serie(1, ["sensor.nevera_kwh"], 3, 0, T0 + DIA)["sensor.nevera_kwh"]
+    assert {i for x in _calls(fake, "hour") for i in x["ids"]} == {"sensor.nevera_kwh", "sensor.casa_kwh"}
+    j = c.get(f"/api/casa/1/energia?resolucion=2&desde={HOY}&hasta={T0}", headers=A).json()
+    assert j["total"] and all(p["kwh"] for p in j["total"])     # «Hoy» by hours has bars
+    assert all(x["nivel"] >= 2 for a in j["areas"] for x in a["dispositivos"])        # so the ep-part note stays hidden
+
+
+def test_raising_plug_2_to_3_keeps_hourly_sync(en):
+    c, clock, fake, app = en
+    db = app.state.db
+    _nivel(c, "sensor.nevera_kwh", 2)
+    app.state.energia_due()
+    epoca2 = db.setting("casa_relleno_desde:1:2:sensor.nevera_kwh")
+    clock.now += 60
+    assert _nivel(c, "sensor.nevera_kwh", 3).status_code == 200
+    assert db.setting("casa_relleno_desde:1:2:sensor.nevera_kwh") == epoca2           # hours are not refilled
+    assert db.setting("casa_relleno_desde:1:3:sensor.nevera_kwh")
+    fake.stats_calls.clear()
+    clock.now += 16 * 60
+    app.state.energia_due()
+    horas, cinco = _calls(fake, "hour"), _calls(fake, "5minute")
+    assert any("sensor.nevera_kwh" in x["ids"] for x in horas)
+    assert all(x["end"] - x["start"] <= 4 * 3600 for x in horas)
+    assert cinco and cinco[0]["start"] < clock.now - 9 * DIA and all(x["ids"] == ["sensor.nevera_kwh"] for x in cinco)
+    fake.stats_calls.clear()
+    clock.now += 15 * 60
+    app.state.energia_due()
+    assert any("sensor.nevera_kwh" in x["ids"] for x in _calls(fake, "hour"))       # still on the hourly calendar
+
+
+def test_plug_1_to_3_backfills_hours_too(en):
+    c, clock, fake, app = en
+    app.state.energia_due()
+    fake.stats_calls.clear()
+    assert _nivel(c, "sensor.nevera_kwh", 3).status_code == 200
+    clock.now += 60
+    app.state.energia_due()
+    assert _calls(fake, "hour")[0]["start"] < clock.now - 80 * DIA
+    assert _calls(fake, "5minute")[0]["start"] < clock.now - 9 * DIA
+
+
+def test_quitar_del_total_and_volver(en):
+    c, clock, fake, app = en
+    db = app.state.db
+    db.energia_upsert(1, [_fila3("sensor.nevera_kwh", 4.0), _fila3("sensor.tv_w", 3.0), _fila3("sensor.casa_kwh", 10.0)])
+    j = c.get("/api/casa/1/energia", headers=A).json()
+    assert j["total_kwh"] == 17.0 and j["fuera_del_total"] == []
+    put = lambda eid, oc, conf: c.put("/api/casa/1/dispositivo", headers=A, json={"entity_id": eid, "oculto": oc, "confirm": conf})
+    r = put("sensor.casa_kwh", True, False)                    # a standalone kWh helper: asks first
+    assert r.status_code == 409 and "del total" in r.json()["texto"]
+    assert put("sensor.casa_kwh", True, True).status_code == 200
+    assert put("sensor.nevera_kwh", True, True).status_code == 200      # a merged owner row: the source, not the owner
+    j = c.get("/api/casa/1/energia", headers=A).json()
+    assert j["total_kwh"] == 3.0 and {x["inicio"]: x["kwh"] for x in j["total"]} == {HOY: 3.0}
+    assert [x["entity_id"] for x in j["fuera_del_total"]] == ["sensor.casa_kwh", "sensor.nevera_kwh"]
+    assert {x["entity_id"] for a in j["areas"] for x in a["dispositivos"]} == {"sensor.tv_w"}
+    assert "switch.nevera" not in [x["entity_id"] for x in j["sin_medicion"]]          # still measured, just not counted
+    clock.now += 4
+    casa = c.get("/api/casa", headers=A).json()
+    assert any(d["entity_id"] == "switch.nevera" for a in casa["areas"] for d in a["dispositivos"])   # still in Casa
+    assert casa["energia"]["hoy_kwh"] == 3.0 and casa["energia"]["ahora_w"] == 40.0
+    r = put("sensor.nevera_kwh", False, False)
+    assert r.status_code == 409 and "Volver a contar" in r.json()["texto"]
+    assert put("sensor.nevera_kwh", False, True).status_code == 200
+    j = c.get("/api/casa/1/energia", headers=A).json()
+    assert j["total_kwh"] == 7.0 and [x["entity_id"] for x in j["fuera_del_total"]] == ["sensor.casa_kwh"]
+    assert c.put("/api/casa/1/energia/total", headers=A, json={"entity_id": "sensor.casa_kwh"}).status_code == 200
+    j = c.get("/api/casa/1/energia", headers=A).json()           # «no medido» = tablero − counted sources
+    assert j["total_kwh"] == 10.0 and j["no_medido_kwh"] == 3.0
+
+
+def test_ahora_sums_every_power_channel():
+    sts = [_st("sensor.k1", "1", unit_of_measurement="kWh", state_class="total_increasing"),
+           _st("sensor.k2", "1", unit_of_measurement="kWh", state_class="total_increasing"),
+           _st("sensor.w1", "100", unit_of_measurement="W", state_class="measurement"),
+           _st("sensor.w2", "200", unit_of_measurement="W", state_class="measurement"),
+           _st("sensor.e", "1", unit_of_measurement="kWh", state_class="total_increasing"),
+           _st("sensor.e_w", "0.05", unit_of_measurement="kW", state_class="measurement")]
+    dev = {"sensor.k1": "d", "sensor.k2": "d", "sensor.w1": "d", "sensor.w2": "d", "sensor.e": "p", "sensor.e_w": "p"}
+    fu = C.fuentes(sts, dev)
+    assert C.ahora_w(sts, fu, None, set()) == 350.0                       # 100 + 200 + a 50 W plug
+    assert C.ahora_w(sts, fu, None, {"sensor.k1"}) == 350.0               # the device's W still has a counted source
+    assert C.ahora_w(sts, fu, None, {"sensor.k1", "sensor.k2"}) == 50.0
+    assert C.ahora_w(sts, fu, "sensor.k1", set()) == 300.0                # a two-clamp kWh tablero: its two W
+    assert C.ahora_w(sts, fu, "sensor.e", set()) == 50.0                  # a kWh tablero with one paired W
+    sin_w = [s for s in sts if s["entity_id"] not in ("sensor.w1", "sensor.w2")]
+    assert C.ahora_w(sin_w, C.fuentes(sin_w, dev), "sensor.k1", set()) is None
+
+
+def test_ahora_and_sin_medicion_with_two_channel_plug(en):
+    c, clock, fake, app = en
+    _enchufe_doble(fake)
+    j = c.get("/api/casa", headers=A).json()
+    assert j["energia"]["ahora_w"] == 86 + 40 + 300.0
+    e = c.get("/api/casa/1/energia", headers=A).json()
+    assert [x["entity_id"] for x in e["sin_medicion"]] == ["light.sala"]            # the plug is measured
+    assert c.put("/api/casa/1/energia/total", headers=A, json={"entity_id": "sensor.p_k1"}).status_code == 200
+    clock.now += 4
+    assert c.get("/api/casa", headers=A).json()["energia"]["ahora_w"] == 300.0
+
+
+def test_energia_upsert_chunks(tmp_path):
+    db = DB(str(tmp_path / "t.db"))
+    c = _casa(db)
+    db.ENERGIA_LOTE = 2
+    assert db.energia_upsert(c, [_fila("sensor.a", float(i), 1, 1.0) for i in range(5)]) == 5
+    assert len(db.energia_serie(c, ["sensor.a"], 1, 0, 10)["sensor.a"]) == 5
+    with pytest.raises(Exception):                                          # chunk 3 fails: chunks 1–2 stay, 3 rolls back
+        db.energia_upsert(c, [_fila("sensor.b", float(i), 1, 1.0) for i in range(4)] + [_fila("sensor.b", 4.0, 9, 1.0)])
+    assert [p["inicio"] for p in db.energia_serie(c, ["sensor.b"], 1, 0, 10)["sensor.b"]] == [0.0, 1.0, 2.0, 3.0]
+    db.ENERGIA_LOTE = 4
+    with pytest.raises(Exception):
+        db.energia_upsert(c, [_fila("sensor.c", 0.0, 1, 1.0), _fila("sensor.c", 1.0, 9, 1.0)])
+    db.casa_nivel_set(c, 2)                                                 # the failed chunk is not committed later
+    assert db.energia_serie(c, ["sensor.c"], 1, 0, 10) == {}

@@ -219,6 +219,8 @@ def fuentes(states: list, devices: dict) -> dict:
             pot = g["w"][0] if len(g["kwh"]) == 1 and len(g["w"]) == 1 else None
             for k in g["kwh"]:
                 out[k] = {"tipo": "kwh", "potencia": pot, "dueno": dueno}
+                if pot is None and g["w"]:
+                    out[k]["w_sueltos"] = list(g["w"])    # unpaired power channels: no rows, but «Ahora» adds them
         else:
             for w in g["w"]:
                 out[w] = {"tipo": "w", "potencia": None, "dueno": dueno}
@@ -416,18 +418,30 @@ def ocultas(fu: dict, disps: dict) -> set:
     return {eid for eid, f in fu.items() if oc(eid) or (f.get("dueno") and oc(f["dueno"]))}
 
 
+def _ws(fu: dict, src: str) -> list:
+    """The power sensors behind a source: itself (W), its paired W, or its device's unpaired W channels."""
+    f = fu[src]
+    if f["tipo"] == "w":
+        return [src]
+    return [f["potencia"]] if f.get("potencia") else list(f.get("w_sueltos") or [])
+
+
 def ahora_w(states: list, fu: dict, tablero: Optional[str], fuera: set) -> Optional[float]:
-    """The panel meter's power now, or the sum of the power sensors (each source's own W, or its paired W)."""
+    """The panel meter's power now (a kWh meter: the W sensors of its own device), or the sum of every power
+    sensor behind a counted source, each once (W sources, paired W, and the unpaired W of multi-channel devices)."""
     by = {s["entity_id"]: s for s in states}
 
-    def w(src):
-        pot = src if fu[src]["tipo"] == "w" else fu[src].get("potencia")
-        return _potencia(by[pot]) if pot in by else None
+    def suma(ids):
+        vals = [v for v in (_potencia(by[i]) for i in ids if i in by) if v is not None]
+        return round(sum(vals), 3) if vals else None
 
     if tablero:
-        return w(tablero) if tablero in fu else None
-    vals = [v for v in (w(s) for s in fu if s not in fuera) if v is not None]
-    return round(sum(vals), 3) if vals else None
+        return suma(_ws(fu, tablero)) if tablero in fu else None
+    ids = []
+    for s in fu:
+        if s not in fuera:
+            ids += [w for w in _ws(fu, s) if w not in ids]
+    return suma(ids)
 
 
 def hoy_kwh(dia: dict, fu: dict, tablero: Optional[str], fuera: set) -> Optional[float]:

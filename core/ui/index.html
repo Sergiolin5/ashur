@@ -410,6 +410,7 @@
   .ep-spark path { fill: none; stroke: var(--tint); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
   .ep-lv .own, .ep-lv .fill { color: var(--secondary); font-size: var(--fs-meta); } .ep-lv .fill { color: var(--amber); }
   .ep-fold { margin: 0 0 var(--s3); width: 100%; text-align: left; }
+  .ep-qt { margin-top: var(--s2); } .ep-qt .casa-btn, #ep-fuera .row .casa-btn { min-height: 40px; flex: none; }
   .ep-set { margin-top: var(--s5); } .ep-set h3 { margin: var(--s4) 0 var(--s2); font: 600 var(--fs-small) var(--font); }
   .ep-set select { width: 100%; }
   .casa-sw { position: relative; width: 51px; height: 31px; flex: none; }
@@ -573,6 +574,7 @@
       <div class="casa-area">Por área</div>
       <div id="ep-areas"></div>
       <div id="ep-sin"></div>
+      <div id="ep-fuera"></div>
       <div class="ep-set">
         <h3>Nivel de la casa</h3>
         <div class="ep-lv" id="ep-nivel" role="group" aria-label="Nivel de la casa"></div>
@@ -1928,7 +1930,7 @@
   const EP_STAT_LONG = { sin_estadisticas: "Tu Home Assistant no ofrece estadísticas por REST (actualízalo)",
                          error: "Las estadísticas de Home Assistant fallaron; reintento en unos minutos", pendiente: "Las estadísticas aún se están leyendo" };
   let epTz = Intl.DateTimeFormat().resolvedOptions().timeZone, epErrT = "", epOpen = false, epTimer = null, epReq = 0, epPer = "hoy", epData = null, epMaxNivel = 1, epAreasSig = null, epChartSig = null, epSetSig = null;
-  const epOpenAreas = new Set(), epNombres = {}; let epSinOpen = false;
+  const epOpenAreas = new Set(), epNombres = {}; let epSinOpen = false, epFueraOpen = false;
   const epNum = (v) => new Intl.NumberFormat("es-CO", { maximumFractionDigits: v >= 10 ? 1 : 2 }).format(v);
   const epKwh = (v) => epNum(v) + " kWh";
   const epOk = () => epOpen && tab === "casa" && !document.hidden && !!key && unlocked;
@@ -2037,7 +2039,9 @@
     }
     lv.append(el("span", "own"), el("span", "fill"));
     const er = el("div", "cerr"); er.hidden = true; er.setAttribute("role", "alert");
-    n.append(sp, lv, er);
+    const qt = el("div", "ep-qt"), qb = casaBtn("Quitar del total", () => epContar(d.entity_id, false));   // asks in the sheet first
+    qb.setAttribute("aria-label", "Quitar " + d.nombre + " del total"); qt.append(qb);
+    n.append(sp, lv, qt, er);
     return n;
   }
   const epTxt = (n, t) => { if (n.textContent !== t) n.textContent = t; };
@@ -2123,6 +2127,22 @@
         $("ep-sin").replaceChildren(b, l);
       }
     }
+    // fuera del total: sources Sergio took out, folded, each with «Volver a contar»
+    const fu = d.fuera_del_total || [], fsig = fu.map((x) => x.entity_id + "=" + x.nombre).join(",") + "|" + epFueraOpen;
+    if ($("ep-fuera").dataset.sig !== fsig) {
+      $("ep-fuera").dataset.sig = fsig;
+      if (!fu.length) $("ep-fuera").replaceChildren();
+      else {
+        const b = el("button", "casa-btn ep-fold", (epFueraOpen ? "▾ " : "▸ ") + "Fuera del total (" + fu.length + ")"); b.type = "button"; b.setAttribute("aria-expanded", String(epFueraOpen));
+        b.addEventListener("click", () => { epFueraOpen = !epFueraOpen; epRender(epData); });
+        const l = el("div", "group"); l.hidden = !epFueraOpen;
+        for (const x of fu) {
+          const r = el("div", "row"), vb = casaBtn("Volver a contar", () => epContar(x.entity_id, true));
+          vb.setAttribute("aria-label", "Volver a contar " + x.nombre); r.append(el("div", "main", x.nombre), vb); l.append(r);
+        }
+        $("ep-fuera").replaceChildren(b, l);
+      }
+    }
     // settings: house level and panel meter
     const fuentes = d.areas.flatMap((a) => a.dispositivos).map((x) => [x.entity_id, x.nombre + " (" + x.fuente + ")"]);
     if (d.tablero && !fuentes.some((f) => f[0] === d.tablero)) fuentes.unshift([d.tablero, (d.tablero_nombre || epNombres[d.tablero] || d.tablero)]);
@@ -2160,6 +2180,11 @@
     if (e) { epErr(e); return; }
     if (prev && (k || epData.nivel_casa) > prev.nivel) { const n = document.querySelector('#ep-areas [data-entity="' + CSS.escape(eid) + '"] .fill'); if (n) n.textContent = "rellenando…"; }
     epLoad(true);
+  }
+  async function epContar(eid, contar) {          // oculto on the source itself; the 409 «confirmar» opens the sheet (two taps)
+    epErr("");
+    const e = await casaSend("PUT", "api/casa/" + casaId + "/dispositivo", { entity_id: eid, oculto: !contar });
+    if (e) epErr(e); else if (e === null) epLoad(true);
   }
   async function epLoad(force) {
     if (!epOpen || !casaId) return;

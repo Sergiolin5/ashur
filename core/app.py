@@ -1814,7 +1814,10 @@ def create_app(
             raise HTTPException(404, "esa casa no existe")
         actual = db.casa_disps(cid).get(b.entity_id) or {}
         if b.oculto is not None and b.oculto != bool(actual.get("oculto")) and not b.confirm:
-            nombre = casa_nombre_de(casa_entry(cid)["states"], b.entity_id)      # whatever is cached: no call to Home Assistant here
+            e = casa_entry(cid)                                                  # whatever is cached: no call to Home Assistant here
+            nombre = casa_nombre_de(e["states"], b.entity_id)
+            if b.entity_id in casa_fuentes(e, e["states"] or [], e["devices"]):  # an energy source: hiding it takes it out of the total
+                return confirmar(f"¿Quitar {nombre} del total de energía?" if b.oculto else f"¿Volver a contar {nombre} en el total?")
             return confirmar(f"¿Quitar {nombre} de la casa?" if b.oculto else f"¿Volver a mostrar {nombre}?")
         cambios = {k: int(v) for k, v in (("favorito", b.favorito), ("orden", b.orden), ("oculto", b.oculto)) if v is not None}
         if cambios:
@@ -1863,7 +1866,7 @@ def create_app(
         cid, tab = row["id"], casa_tablero(row["id"])
         fu = casa_fuentes(e, states, devices)
         fuera = casa_mod.ocultas(fu, disps)
-        dia = db.energia_dia(cid, casa_mod.inicio_dia(clock(), casa_tz(row)))
+        dia = db.energia_dia(cid, sorted(set(fu) | ({tab} if tab else set())), casa_mod.inicio_dia(clock(), casa_tz(row)))
         return {"ahora_w": casa_mod.ahora_w(states, fu, tab, fuera), "hoy_kwh": casa_mod.hoy_kwh(dia, fu, tab, fuera),
                 "total": "tablero" if tab else "suma", "estadisticas": e["en_estado"]}
 
@@ -1899,7 +1902,7 @@ def create_app(
         unidades = {s["entity_id"]: (s.get("attributes") or {}).get("unit_of_measurement") for s in states}
         disps, tz = db.casa_disps(cid), casa_tz(row)
         for r in due:
-            ids = [s for s in sorted(fu) if r == 1 or nivel_de(row, disps, s) == r]
+            ids = [s for s in sorted(fu) if nivel_de(row, disps, s) >= r]       # cumulative: 2 = day + hour, 3 = + 5 min
             pend = [s for s in ids if relleno_pendiente(cid, s, r)]
             reg = [s for s in ids if s not in pend]
             if pend:
@@ -1920,7 +1923,7 @@ def create_app(
             if now < e["en_espera"]:
                 return
             niveles = {row["nivel_energia_def"]} | {d["nivel_energia"] for d in db.casa_disps(row["id"]).values() if d["nivel_energia"]}
-            due = [r for r in (1, 2, 3) if (r == 1 or r in niveles) and now - e["en_t"].get(r, -1e18) >= casa_mod.CADA_S[r]]
+            due = [r for r in (1, 2, 3) if r <= max(niveles) and now - e["en_t"].get(r, -1e18) >= casa_mod.CADA_S[r]]
             if not due:
                 return
             try:
@@ -1982,29 +1985,37 @@ def create_app(
             por_area.setdefault(areas.get(quien) or areas.get(s) or casa_mod.SIN_AREA, []).append({
                 "entity_id": s, "nombre": casa_nombre_de(states, quien),
                 "fuente": "medido" if fu[s]["tipo"] == "kwh" else "calculado de W",
-                "nivel": nivel, "nivel_propio": propio, "rellenando": relleno_pendiente(cid, s, nivel),
+                "nivel": nivel, "nivel_propio": propio, "rellenando": any(relleno_pendiente(cid, s, r) for r in range(1, nivel + 1)),
                 "kwh": round(sum(p["kwh"] or 0.0 for p in dserie), 6), "w_max": max(w) if w else None,
                 "serie": [{"inicio": p["inicio"], "kwh": p["kwh"], "w_max": p["w_max"]} for p in serie]})
         lista = [{"nombre": n, "kwh": round(sum(d["kwh"] for d in ds), 6),
                   "dispositivos": sorted(ds, key=lambda d: (-d["kwh"], d["nombre"]))} for n, ds in por_area.items()]
         duenos = {f["dueno"] for f in fu.values()}
+        medidos_dev = {devices.get(s) for s in fu} - {None} if devices else set()      # HA devices with any source
         sin = [{"entity_id": st["entity_id"], "nombre": casa_nombre_de(states, st["entity_id"])} for st in states
                if st["entity_id"].split(".", 1)[0] in ("light", "switch", "cover") and casa_mod.controlable(st)
-               and st["entity_id"] not in duenos and not (disps.get(st["entity_id"]) or {}).get("oculto")]
+               and st["entity_id"] not in duenos and (devices or {}).get(st["entity_id"]) not in medidos_dev
+               and not (disps.get(st["entity_id"]) or {}).get("oculto")]
+        # sources Sergio took out of the total himself (not those hidden through their device: that one comes back in Casa)
+        fuera_total = [{"entity_id": s, "nombre": casa_nombre_de(states, s)} for s in sorted(fuera)
+                       if (disps.get(s) or {}).get("oculto")]
         return {"resolucion": resolucion, "desde": desde, "hasta": hasta, "total": total, "no_medido": no_medido,
                 "total_kwh": total_kwh, "no_medido_kwh": no_medido_kwh, "areas": sorted(lista, key=lambda a: (-a["kwh"], a["nombre"])),
-                "sin_medicion": sorted(sin, key=lambda d: d["nombre"]), "nivel_casa": row["nivel_energia_def"], "tablero": tab,
+                "sin_medicion": sorted(sin, key=lambda d: d["nombre"]),
+                "fuera_del_total": sorted(fuera_total, key=lambda d: d["nombre"]), "nivel_casa": row["nivel_energia_def"], "tablero": tab,
                 "tablero_nombre": casa_nombre_de(states, tab) if tab else None, "tz": str(tz)}
 
     class CasaNivel(BaseModel):
         entity_id: Optional[str] = Field(default=None, min_length=1, max_length=255)
         nivel: Optional[int] = None
 
-    def energia_subir(cid: int, nivel: int, eid: Optional[str] = None) -> None:
+    def energia_subir(cid: int, antes: int, nivel: int, eid: Optional[str] = None) -> None:
         """A raised level backfills on the next tick: the raise's time makes older marks stale (for the house, every
-        sensor, even ones Home Assistant can't list right now), and its resolution is due at once."""
-        db.set_setting(relleno_desde_clave(cid, nivel, eid), str(clock()))
-        casa_entry(cid)["en_t"].pop(nivel, None)
+        sensor, even ones Home Assistant can't list right now), and its resolutions are due at once. Levels are
+        cumulative, so 1 → 3 backfills both hours and 5 minutes."""
+        for r in range(antes + 1, nivel + 1):
+            db.set_setting(relleno_desde_clave(cid, r, eid), str(clock()))
+            casa_entry(cid)["en_t"].pop(r, None)
 
     @app.put("/api/casa/{cid}/energia/nivel", dependencies=[Depends(require_admin)])
     def casa_energia_nivel(cid: int, b: CasaNivel):
@@ -2018,7 +2029,7 @@ def create_app(
                 raise HTTPException(400, "el nivel de la casa es 1, 2 o 3")
             db.casa_nivel_set(cid, b.nivel)
             if b.nivel > row["nivel_energia_def"]:
-                energia_subir(cid, b.nivel)
+                energia_subir(cid, row["nivel_energia_def"], b.nivel)
         else:
             if b.entity_id not in fu:
                 raise HTTPException(400, "ese sensor no es una fuente de energía")
@@ -2026,7 +2037,7 @@ def create_app(
             db.casa_disp_set(cid, b.entity_id, nivel_energia=b.nivel)
             ahora = b.nivel or row["nivel_energia_def"]
             if ahora > antes:
-                energia_subir(cid, ahora, b.entity_id)
+                energia_subir(cid, antes, ahora, b.entity_id)
         db.log(clock(), None, "casa_energia_nivel", {"casa": cid, "entity": b.entity_id, "nivel": b.nivel})
         return {"ok": True}
 

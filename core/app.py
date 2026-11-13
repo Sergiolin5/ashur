@@ -34,6 +34,7 @@ from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
 from core import casa as casa_mod, habits, lotes, signals
 from core.casa import HAClient, HAError
+from zoneinfo import ZoneInfo
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, OWN_TOOL, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
@@ -239,6 +240,9 @@ def create_app(
                         app.state.notify_due()
                         app.state.daily_due()
                         app.state.propose_due()
+                        # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
+                        # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
+                        threading.Thread(target=lambda: _quiet(app.state.energia_due), daemon=True, name="casa-energia").start()
 
                 while True:
                     await asyncio.sleep(sweep_every_s)
@@ -255,7 +259,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.57.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.58.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1649,7 +1653,11 @@ def create_app(
     def casa_entry(cid: int) -> dict:
         with casa_mem_lock:
             return casa_mem.setdefault(cid, {"lock": threading.Lock(), "states": None, "states_t": 0.0, "areas": {}, "areas_t": None,
-                                             "visto": None, "fail_t": None, "client": None, "fail_s": None, "fail_a": None, "ha": "ok", "causa": None})
+                                             "visto": None, "fail_t": None, "client": None, "fail_s": None, "fail_a": None, "ha": "ok", "causa": None,
+                                             "devices": None, "devices_t": None, "fail_d": None,
+                                             # energy sync (0.58.0): its own lock and client, never the view's
+                                             "en_lock": threading.Lock(), "en_client": None, "en_t": {}, "en_espera": 0.0,
+                                             "en_estado": "pendiente", "en_falla_t": None, "en_fuentes": None})
 
     def casa_client(row: dict, e: dict) -> HAClient:
         token = env.get(row["ha_token_env"], "")
@@ -1696,22 +1704,22 @@ def create_app(
         def get_areas(cli: HAClient) -> None:
             e["areas"], e["areas_t"] = cli.areas(), now
 
+        def get_devices(cli: HAClient) -> None:
+            e["devices"], e["devices_t"] = cli.devices(), now
+
         if e["states"] is None or now - e["states_t"] >= 3:
             step("fail_s", get_states)
+        if with_areas and (e["devices_t"] is None or now - e["devices_t"] >= 300):
+            try:
+                step("fail_d", get_devices)
+            except HAError:
+                pass                                            # without devices the view simply doesn't merge power into its owner
         if with_areas and (e["areas_t"] is None or now - e["areas_t"] >= 300):
             step("fail_a", get_areas)
         return e
 
-    @app.get("/api/casa", dependencies=[Depends(require_admin)])
-    def casa_view(casa: Optional[int] = Query(default=None)):
-        rows = db.casas()
-        row = next((r for r in rows if r["id"] == casa), None) if casa is not None else (rows[0] if rows else None)
-        if casa is not None and not row:
-            raise HTTPException(404, "esa casa no existe")
-        out = {"casas": [{"id": r["id"], "nombre": r["nombre"]} for r in rows], "casa": row["id"] if row else None,
-               "ha": "sin_configurar", "ha_causa": None, "visto": None}
-        if not row:
-            return {**out, **casa_mod.vista([], {}, {})}
+    def casa_cache(row: dict) -> tuple:
+        """(entry, ha, causa, states, areas, devices, visto): fresh if the view lock is free within 1 s, else the cache."""
         e, ha = casa_entry(row["id"]), "ok"
         if e["lock"].acquire(timeout=1):
             try:
@@ -1723,13 +1731,29 @@ def create_app(
                 else:
                     causa = None
                 e["ha"], e["causa"] = ha, causa
-                states, areas, visto = e["states"] or [], e["areas"], e["visto"]
+                states, areas, devices, visto = e["states"] or [], e["areas"], e["devices"], e["visto"]
             finally:
                 e["lock"].release()
         else:                                                   # a slow Home Assistant call holds the lock: serve the cache, don't queue
-            ha, states, areas, visto = e["ha"], e["states"] or [], e["areas"], e["visto"]
+            ha, states, areas, devices, visto = e["ha"], e["states"] or [], e["areas"], e["devices"], e["visto"]
         causa = (e["causa"] or None) if ha != "ok" else None
-        return {**out, "ha": ha, "ha_causa": causa, "visto": visto, **casa_mod.vista(states, areas, db.casa_disps(row["id"]))}
+        return e, ha, causa, states, areas, devices, visto
+
+    @app.get("/api/casa", dependencies=[Depends(require_admin)])
+    def casa_view(casa: Optional[int] = Query(default=None)):
+        rows = db.casas()
+        row = next((r for r in rows if r["id"] == casa), None) if casa is not None else (rows[0] if rows else None)
+        if casa is not None and not row:
+            raise HTTPException(404, "esa casa no existe")
+        out = {"casas": [{"id": r["id"], "nombre": r["nombre"]} for r in rows], "casa": row["id"] if row else None,
+               "ha": "sin_configurar", "ha_causa": None, "visto": None}
+        if not row:
+            return {**out, "energia": {"ahora_w": None, "hoy_kwh": None, "total": "suma", "estadisticas": "pendiente"},
+                    **casa_mod.vista([], {}, {})}
+        e, ha, causa, states, areas, devices, visto = casa_cache(row)
+        disps = db.casa_disps(row["id"])
+        return {**out, "ha": ha, "ha_causa": causa, "visto": visto, "energia": energia_resumen(row, e, states, devices, disps),
+                **casa_mod.vista(states, areas, disps, devices)}
 
     class CasaControl(BaseModel):
         entity_id: str = Field(min_length=1, max_length=255)
@@ -1790,12 +1814,245 @@ def create_app(
             raise HTTPException(404, "esa casa no existe")
         actual = db.casa_disps(cid).get(b.entity_id) or {}
         if b.oculto is not None and b.oculto != bool(actual.get("oculto")) and not b.confirm:
-            nombre = casa_nombre_de(casa_entry(cid)["states"], b.entity_id)      # whatever is cached: no call to Home Assistant here
+            e = casa_entry(cid)                                                  # whatever is cached: no call to Home Assistant here
+            nombre = casa_nombre_de(e["states"], b.entity_id)
+            if b.entity_id in casa_fuentes(e, e["states"] or [], e["devices"]):  # an energy source: hiding it takes it out of the total
+                return confirmar(f"¿Quitar {nombre} del total de energía?" if b.oculto else f"¿Volver a contar {nombre} en el total?")
             return confirmar(f"¿Quitar {nombre} de la casa?" if b.oculto else f"¿Volver a mostrar {nombre}?")
         cambios = {k: int(v) for k, v in (("favorito", b.favorito), ("orden", b.orden), ("oculto", b.oculto)) if v is not None}
         if cambios:
             db.casa_disp_set(cid, b.entity_id, **cambios)
             db.log(clock(), None, "casa_dispositivo", {"casa": cid, "entity": b.entity_id, "cambio": cambios})
+        return {"ok": True}
+
+    # --- casa, energy (0.58.0): Home Assistant's statistics copied into casa_energia on a calendar, and read back ---
+    def casa_tz(row: dict):
+        try:
+            return ZoneInfo(row.get("tz") or "America/Bogota")
+        except Exception:
+            return ZoneInfo("America/Bogota")
+
+    def casa_tablero(cid: int) -> Optional[str]:
+        return db.setting(f"casa_total:{cid}") or None
+
+    def relleno_clave(cid: int, eid: str, resolucion: int) -> str:
+        return f"casa_relleno:{cid}:{eid}:{resolucion}"
+
+    def relleno_desde_clave(cid: int, resolucion: int, eid: Optional[str] = None) -> str:
+        """When a level was last raised (for the house, or for one sensor): a backfill mark older than that is stale."""
+        return f"casa_relleno_desde:{cid}:{resolucion}" + (f":{eid}" if eid else "")
+
+    def relleno_pendiente(cid: int, eid: str, resolucion: int) -> bool:
+        def ts(key: str) -> float:
+            try:
+                return float(db.setting(key) or 0)
+            except ValueError:
+                return 0.0
+        marca = ts(relleno_clave(cid, eid, resolucion))
+        epoca = max(ts(relleno_desde_clave(cid, resolucion)), ts(relleno_desde_clave(cid, resolucion, eid)))
+        return not marca or marca < epoca
+
+    def casa_fuentes(e: dict, states: list, devices: Optional[dict]) -> dict:
+        """Energy sources from the view's cache, else from the last sync. Without devices there are none: guessing
+        would count a plug's W sensor next to its own kWh sensor."""
+        if states and devices is not None:
+            return casa_mod.fuentes(states, devices)
+        return e["en_fuentes"] or {}
+
+    def nivel_de(row: dict, disps: dict, eid: str) -> int:
+        return (disps.get(eid) or {}).get("nivel_energia") or row["nivel_energia_def"]
+
+    def energia_resumen(row: dict, e: dict, states: list, devices: Optional[dict], disps: dict) -> dict:
+        cid, tab = row["id"], casa_tablero(row["id"])
+        fu = casa_fuentes(e, states, devices)
+        fuera = casa_mod.ocultas(fu, disps)
+        dia = db.energia_dia(cid, sorted(set(fu) | ({tab} if tab else set())), casa_mod.inicio_dia(clock(), casa_tz(row)))
+        return {"ahora_w": casa_mod.ahora_w(states, fu, tab, fuera, frozenset(k for k, d in disps.items() if (d or {}).get("oculto"))), "hoy_kwh": casa_mod.hoy_kwh(dia, fu, tab, fuera),
+                "total": "tablero" if tab else "suma", "estadisticas": e["en_estado"]}
+
+    def energia_client(row: dict, e: dict) -> HAClient:
+        token = env.get(row["ha_token_env"], "")
+        if not token:
+            raise HAError("token_invalido")
+        if ha_client_fn:
+            return ha_client_fn(row["ha_url"], token)
+        if not e["en_client"] or e["en_client"][0] != (row["ha_url"], token):
+            if e["en_client"]:
+                e["en_client"][1].close()
+            e["en_client"] = ((row["ha_url"], token), HAClient(row["ha_url"], token, timeout=20.0))
+        return e["en_client"][1]
+
+    def energia_pedir(cli: HAClient, cid: int, fu: dict, resolucion: int, desde: float, hasta: float,
+                      unidades: dict, ahora: float) -> None:
+        """One range for these sources: energy as change, W-only as mean and max, paired power as max; 50 ids a call."""
+        grupos = [([s for s in fu if fu[s]["tipo"] == "kwh"], ["change"]),
+                  ([s for s in fu if fu[s]["tipo"] == "w"], ["mean", "max"]),
+                  (sorted({fu[s]["potencia"] for s in fu if fu[s].get("potencia")}), ["max"])]
+        stats = {}
+        for ids, types in grupos:
+            for i in range(0, len(ids), casa_mod.LOTE_IDS):
+                stats.update(cli.statistics(ids[i:i + casa_mod.LOTE_IDS], desde, hasta, casa_mod.PERIODO[resolucion], types))
+        db.energia_upsert(cid, casa_mod.filas_desde_stats(stats, fu, resolucion, unidades, ahora=ahora))
+
+    def energia_sync(row: dict, e: dict, due: list, now: float) -> None:
+        cid, cli = row["id"], energia_client(row, e)
+        states = cli.states()
+        fu = casa_mod.fuentes(states, cli.devices())
+        e["en_fuentes"] = fu
+        unidades = {s["entity_id"]: (s.get("attributes") or {}).get("unit_of_measurement") for s in states}
+        disps, tz = db.casa_disps(cid), casa_tz(row)
+        for r in due:
+            ids = [s for s in sorted(fu) if nivel_de(row, disps, s) >= r]       # cumulative: 2 = day + hour, 3 = + 5 min
+            pend = [s for s in ids if relleno_pendiente(cid, s, r)]
+            reg = [s for s in ids if s not in pend]
+            if pend:
+                for a, b in casa_mod.tramos(casa_mod.relleno_desde(r, now, tz), now, casa_mod.TRAMO_S[r]):
+                    energia_pedir(cli, cid, {s: fu[s] for s in pend}, r, a, b, unidades, now)
+                for s in pend:
+                    db.set_setting(relleno_clave(cid, s, r), str(now))
+            if reg:
+                energia_pedir(cli, cid, {s: fu[s] for s in reg}, r, casa_mod.ventana_desde(r, now, tz), now, unidades, now)
+            e["en_t"][r] = now
+
+    def energia_casa(row: dict) -> None:
+        e = casa_entry(row["id"])
+        if not e["en_lock"].acquire(blocking=False):            # this house is already syncing in another thread
+            return
+        try:
+            now = clock()
+            if now < e["en_espera"]:
+                return
+            niveles = {row["nivel_energia_def"]} | {d["nivel_energia"] for d in db.casa_disps(row["id"]).values() if d["nivel_energia"]}
+            due = [r for r in (1, 2, 3) if r <= max(niveles) and now - e["en_t"].get(r, -1e18) >= casa_mod.CADA_S[r]]
+            if not due:
+                return
+            try:
+                energia_sync(row, e, due, now)
+            except Exception as x:
+                motivo = x.motivo if isinstance(x, HAError) else "error"
+                causa = x.causa if isinstance(x, HAError) else type(x).__name__
+                e["en_espera"] = clock() + (6 * 3600 if motivo == "sin_estadisticas" else 900)
+                e["en_estado"] = "sin_estadisticas" if motivo == "sin_estadisticas" else "error"
+                if e["en_falla_t"] is None or clock() - e["en_falla_t"] >= 3600:
+                    e["en_falla_t"] = clock()
+                    db.log(clock(), None, "casa_energia_falla", {"casa": row["id"], "motivo": motivo, "causa": causa})
+            else:
+                e["en_estado"], e["en_falla_t"] = "ok", None          # a new failure after recovery is logged again
+        finally:
+            e["en_lock"].release()
+
+    def energia_due() -> None:
+        for row in db.casas():
+            energia_casa(row)
+    app.state.energia_due = energia_due
+
+    def casa_o_404(cid: int) -> dict:
+        row = db.casa_get(cid)
+        if not row:
+            raise HTTPException(404, "esa casa no existe")
+        return row
+
+    @app.get("/api/casa/{cid}/energia", dependencies=[Depends(require_admin)])
+    def casa_energia(cid: int, resolucion: int = Query(default=1, ge=1, le=3),
+                     desde: Optional[float] = Query(default=None), hasta: Optional[float] = Query(default=None)):
+        row = casa_o_404(cid)
+        maximo = casa_mod.MAX_DIAS[resolucion] * 86400
+        hasta = clock() if hasta is None else hasta
+        if desde is None:                                       # the last 30 local days (or the most this resolution serves), from midnight
+            desde = casa_mod.inicio_dia(hasta - (min(30 * 86400, maximo) // 86400 - 1) * 86400, casa_tz(row))
+        if not desde < hasta or hasta - desde > maximo:
+            raise HTTPException(400, f"el rango tiene que ser de hasta {casa_mod.MAX_DIAS[resolucion]} días")
+        e, _, _, states, areas, devices, _ = casa_cache(row)
+        fu, disps, tab = casa_fuentes(e, states, devices), db.casa_disps(cid), casa_tablero(cid)
+        fuera = casa_mod.ocultas(fu, disps)
+        medidos = sorted(s for s in fu if s != tab and s not in fuera)
+        todos = medidos + ([tab] if tab else [])
+        tz = casa_tz(row)
+        # Totals, areas and devices always come from the day rows (every sensor has them, whatever its level); for a range
+        # shorter than a day that is the day row of that day. The requested resolution only drives the series (bars, sparklines).
+        d1 = casa_mod.inicio_dia(desde, tz) if hasta - desde < 86400 else desde
+        dias = db.energia_serie(cid, todos, 1, d1, hasta)
+        series = dias if resolucion == 1 else db.energia_serie(cid, todos, resolucion, desde, hasta)
+        total, no_medido = casa_mod.totales(series, medidos, tab)
+        t_dia, nm_dia = casa_mod.totales(dias, medidos, tab)
+        total_kwh = round(sum(p["kwh"] for p in t_dia), 6)
+        no_medido_kwh = round(sum(p["kwh"] for p in nm_dia), 6) if nm_dia is not None else None
+        por_area: dict[str, list] = {}
+        for s in medidos:
+            quien, serie, dserie = fu[s]["dueno"] or s, series.get(s) or [], dias.get(s) or []
+            nivel, propio = nivel_de(row, disps, s), (disps.get(s) or {}).get("nivel_energia") is not None
+            w = [p["w_max"] for p in serie + (dserie if resolucion != 1 else []) if p["w_max"] is not None]
+            por_area.setdefault(areas.get(quien) or areas.get(s) or casa_mod.SIN_AREA, []).append({
+                "entity_id": s, "nombre": casa_nombre_de(states, quien),
+                "fuente": "medido" if fu[s]["tipo"] == "kwh" else "calculado de W",
+                "nivel": nivel, "nivel_propio": propio, "rellenando": any(relleno_pendiente(cid, s, r) for r in range(1, nivel + 1)),
+                "kwh": round(sum(p["kwh"] or 0.0 for p in dserie), 6), "w_max": max(w) if w else None,
+                "serie": [{"inicio": p["inicio"], "kwh": p["kwh"], "w_max": p["w_max"]} for p in serie]})
+        lista = [{"nombre": n, "kwh": round(sum(d["kwh"] for d in ds), 6),
+                  "dispositivos": sorted(ds, key=lambda d: (-d["kwh"], d["nombre"]))} for n, ds in por_area.items()]
+        duenos = {f["dueno"] for f in fu.values()}
+        medidos_dev = {devices.get(s) for s in fu} - {None} if devices else set()      # HA devices with any source
+        sin = [{"entity_id": st["entity_id"], "nombre": casa_nombre_de(states, st["entity_id"])} for st in states
+               if st["entity_id"].split(".", 1)[0] in ("light", "switch", "cover") and casa_mod.controlable(st)
+               and st["entity_id"] not in duenos and (devices or {}).get(st["entity_id"]) not in medidos_dev
+               and not (disps.get(st["entity_id"]) or {}).get("oculto")]
+        # sources Sergio took out of the total himself (not those hidden through their device: that one comes back in Casa)
+        fuera_total = [{"entity_id": s, "nombre": casa_nombre_de(states, s)} for s in sorted(fuera)
+                       if (disps.get(s) or {}).get("oculto")]
+        return {"resolucion": resolucion, "desde": desde, "hasta": hasta, "total": total, "no_medido": no_medido,
+                "total_kwh": total_kwh, "no_medido_kwh": no_medido_kwh, "areas": sorted(lista, key=lambda a: (-a["kwh"], a["nombre"])),
+                "sin_medicion": sorted(sin, key=lambda d: d["nombre"]),
+                "fuera_del_total": sorted(fuera_total, key=lambda d: d["nombre"]), "nivel_casa": row["nivel_energia_def"], "tablero": tab,
+                "tablero_nombre": casa_nombre_de(states, tab) if tab else None, "tz": str(tz)}
+
+    class CasaNivel(BaseModel):
+        entity_id: Optional[str] = Field(default=None, min_length=1, max_length=255)
+        nivel: Optional[int] = None
+
+    def energia_subir(cid: int, antes: int, nivel: int, eid: Optional[str] = None) -> None:
+        """A raised level backfills on the next tick: the raise's time makes older marks stale (for the house, every
+        sensor, even ones Home Assistant can't list right now), and its resolutions are due at once. Levels are
+        cumulative, so 1 → 3 backfills both hours and 5 minutes."""
+        for r in range(antes + 1, nivel + 1):
+            db.set_setting(relleno_desde_clave(cid, r, eid), str(clock()))
+            casa_entry(cid)["en_t"].pop(r, None)
+
+    @app.put("/api/casa/{cid}/energia/nivel", dependencies=[Depends(require_admin)])
+    def casa_energia_nivel(cid: int, b: CasaNivel):
+        row = casa_o_404(cid)
+        if b.nivel is not None and b.nivel not in (1, 2, 3):
+            raise HTTPException(400, "el nivel es 1, 2 o 3")
+        e, _, _, states, _, devices, _ = casa_cache(row)
+        fu, disps = casa_fuentes(e, states, devices), db.casa_disps(cid)
+        if b.entity_id is None:
+            if b.nivel is None:
+                raise HTTPException(400, "el nivel de la casa es 1, 2 o 3")
+            db.casa_nivel_set(cid, b.nivel)
+            if b.nivel > row["nivel_energia_def"]:
+                energia_subir(cid, row["nivel_energia_def"], b.nivel)
+        else:
+            if b.entity_id not in fu:
+                raise HTTPException(400, "ese sensor no es una fuente de energía")
+            antes = nivel_de(row, disps, b.entity_id)
+            db.casa_disp_set(cid, b.entity_id, nivel_energia=b.nivel)
+            ahora = b.nivel or row["nivel_energia_def"]
+            if ahora > antes:
+                energia_subir(cid, antes, ahora, b.entity_id)
+        db.log(clock(), None, "casa_energia_nivel", {"casa": cid, "entity": b.entity_id, "nivel": b.nivel})
+        return {"ok": True}
+
+    class CasaTotal(BaseModel):
+        entity_id: Optional[str] = Field(default=None, min_length=1, max_length=255)
+
+    @app.put("/api/casa/{cid}/energia/total", dependencies=[Depends(require_admin)])
+    def casa_energia_total(cid: int, b: CasaTotal):
+        row = casa_o_404(cid)
+        if b.entity_id is not None:
+            e, _, _, states, _, devices, _ = casa_cache(row)
+            if b.entity_id not in casa_fuentes(e, states, devices):
+                raise HTTPException(400, "el medidor de tablero tiene que ser un sensor de energía o de potencia")
+        db.set_setting(f"casa_total:{cid}", b.entity_id or "")
+        db.log(clock(), None, "casa_energia_total", {"casa": cid, "entity": b.entity_id})
         return {"ok": True}
 
     class MarkScope(BaseModel):

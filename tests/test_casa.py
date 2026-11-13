@@ -29,7 +29,7 @@ def test_casa_disp_set_upserts(tmp_path):
     db.casa_disp_set(c, "light.sala", oculto=1)
     assert db.casa_disps(c) == {"light.sala": {"orden": 0, "favorito": 1, "oculto": 1, "nivel_energia": None}}
     with pytest.raises(ValueError):
-        db.casa_disp_set(c, "light.sala", nivel_energia=2)
+        db.casa_disp_set(c, "light.sala", nombre="x")
 
 
 # ---- core/casa.py: cliente HA y vista (sin red) ----

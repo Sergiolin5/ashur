@@ -113,13 +113,17 @@ solo en `/DATA/AppData/ashur/camaras/go2rtc.yaml` en el servidor; nada con clave
 3. Poner `ASHUR_CAMARAS_URL=http://127.0.0.1:1984` en las variables de ashur-core (sin ella, Casa no muestra cámaras).
 4. «Actualizar» Ashur y, desde la tailnet, abrir Casa y ver las miniaturas; tocar una para ver el video en vivo.
 5. Desde fuera de la tailnet, comprobar que pide el código TOTP.
-6. Opcional, para no pasar el límite de conexiones de las cámaras: en Home Assistant, cambiar cada cámara para que lea `rtsp://127.0.0.1:8554/<nombre>` del relay.
+6. Opcional, para no pasar el límite de conexiones de las cámaras: en Home Assistant, cambiar cada cámara para que lea `rtsp://127.0.0.1:8554/<nombre>` del relay. Eso supone Home Assistant en la red del host (`network_mode: host`), porque el relay RTSP escucha solo en `127.0.0.1`. Si Home Assistant corre en una red de Docker propia, `127.0.0.1` es su propio contenedor y no llega: habría que usar la IP LAN del servidor y quitar el `127.0.0.1` del `rtsp` en el compose, y eso deja el relay (con el video de las cámaras, sin clave) abierto en la LAN; hacerlo solo si Sergio acepta esa exposición. El compose no lo cambia.
+
+Miniaturas: el core pide cada foto con `width=640` (go2rtc la escala con ffmpeg). Para las miniaturas se recomienda el sub-stream de cada cámara (`?subtype=1`, ver abajo), que pesa menos de decodificar que el principal. Cuánta RAM usa `ashur-camaras` con todo abierto se mide en la etapa 4.
+
+Versión de go2rtc: el compose fija `alexxit/go2rtc:1.9.14` (v1.9.14, 2026-01-19), no `latest`. Subir esa etiqueta es un cambio deliberado: antes hay que volver a comprobar, en el `internal/app/README.md` de la nueva versión, que siguen valiendo `-config` repetido, la configuración JSON en línea y que cada configuración posterior pisa a la anterior. Sin esas tres cosas la línea de comando ya no fija la API en localhost.
 
 Seguridad: la API de go2rtc (sin clave) muestra y edita las claves de las cámaras. Por eso el compose
 fija en su línea de comando, después del archivo, `api` y `rtsp` en `127.0.0.1` (y apaga el puerto SRTP 8443):
 go2rtc admite varios `-config` y cada uno posterior pisa solo las claves que define
-([internal/app](https://github.com/AlexxIT/go2rtc/blob/master/internal/app/README.md); entrypoint/CMD en
-[docker/Dockerfile](https://github.com/AlexxIT/go2rtc/blob/master/docker/Dockerfile)). Si falta `go2rtc.yaml`, go2rtc
+([internal/app](https://github.com/AlexxIT/go2rtc/blob/v1.9.14/internal/app/README.md), [config.go](https://github.com/AlexxIT/go2rtc/blob/v1.9.14/internal/app/config.go); entrypoint/CMD en
+[docker/Dockerfile](https://github.com/AlexxIT/go2rtc/blob/v1.9.14/docker/Dockerfile)). Si falta `go2rtc.yaml`, go2rtc
 arranca igual, sin cámaras y con esos puertos en localhost; mira el log de la app si Casa no muestra miniaturas.
 Si cambias el compose, no quites esa línea: sin ella la API queda abierta en la LAN y la tailnet.
 
@@ -127,8 +131,8 @@ Sintaxis verificada en la documentación oficial de go2rtc:
 
 - `onvif://usuario:clave@ip[:puerto]` ([internal/onvif](https://github.com/AlexxIT/go2rtc/blob/master/internal/onvif/README.md)). El README solo muestra esa forma. Que `?subtype=N` elige el perfil (0 = primero, 1 = segundo) y que la URL RTSP se pide a la cámara salen del código ([pkg/onvif/client.go](https://github.com/AlexxIT/go2rtc/blob/master/pkg/onvif/client.go)), no de la documentación. Con VTA+ Primus no está probado cuál perfil es el secundario.
 - `webrtc.candidates: [IP:8555]` ([internal/webrtc](https://github.com/AlexxIT/go2rtc/blob/master/internal/webrtc/README.md)); no existe una opción «announce» aparte, se anuncia listando la IP como candidato.
-- API ([openapi](https://github.com/AlexxIT/go2rtc/blob/master/website/api/openapi.yaml)): `GET /api/frame.jpeg?src=<nombre>` (opcionales `width`/`w`, `height`/`h`, `rotate`); `GET /api/stream.m3u8?src=<nombre>` (HLS/TS; `&mp4` para fMP4, ver [HLS](https://github.com/AlexxIT/go2rtc/blob/master/internal/hls/README.md)); `POST /api/webrtc?src=<nombre>` con la oferta SDP (`Content-Type: application/sdp` o JSON `{type, sdp}`) y responde la respuesta SDP.
-- No verificado: que las cámaras VTA+ Primus anuncien un perfil ONVIF utilizable por go2rtc, y la compatibilidad con `alexxit/go2rtc:latest` de lo anterior (la documentación consultada corresponde a go2rtc 1.9.x, la rama master).
+- API ([openapi](https://github.com/AlexxIT/go2rtc/blob/master/website/api/openapi.yaml)): `GET /api/frame.jpeg?src=<nombre>` (opcionales `width`/`w`, `height`/`h`, `rotate`; en 1.9.14, [internal/mjpeg](https://github.com/AlexxIT/go2rtc/blob/v1.9.14/internal/mjpeg/README.md)); `GET /api/stream.m3u8?src=<nombre>` (HLS/TS; `&mp4` para fMP4, ver [HLS](https://github.com/AlexxIT/go2rtc/blob/master/internal/hls/README.md)); `POST /api/webrtc?src=<nombre>` con la oferta SDP (`Content-Type: application/sdp` o JSON `{type, sdp}`) y responde la respuesta SDP.
+- No verificado: que las cámaras VTA+ Primus anuncien un perfil ONVIF utilizable por go2rtc. Lo del `-config` y de `width` está comprobado en la etiqueta v1.9.14; el resto de los enlaces apunta a la rama master.
 
 ## Debugging on ZimaOS
 

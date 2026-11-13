@@ -1574,7 +1574,7 @@
     }
   }
   function showSignin(error) {
-    key = null; role = null;
+    key = null; role = null; clearTimeout(casaTimer);        // casa: the poll ends with the session
     try { localStorage.removeItem(KEY); } catch (e) {}
     for (const id of ["dashboard", "settings", "chat", "diary", "casa", "tabs", "composer", "guest-signout", "greet"]) $(id).hidden = true;
     $("thread").replaceChildren(); lastDay = null;
@@ -1838,13 +1838,13 @@
     if (casaBusy && !force) return;
     const my = ++casaReq; casaBusy = true;
     try {
-      const r = await api("api/casa" + (casaId ? "?casa=" + encodeURIComponent(casaId) : ""));
+      const r = await api("api/casa" + (casaId ? "?casa=" + encodeURIComponent(casaId) : ""), { signal: AbortSignal.timeout(8000) });
       if (r.ok && my === casaReq && tab === "casa") casaRender(await r.json());
     } catch (e) {} finally { if (my === casaReq) casaBusy = false; }
   }
   function casaLoop() {              // polls only while the tab is shown and the page is visible
     clearTimeout(casaTimer);
-    if (tab !== "casa" || document.hidden) return;
+    if (tab !== "casa" || document.hidden || !key || !unlocked) return;
     loadCasa();
     casaTimer = setTimeout(casaLoop, 5000);
   }

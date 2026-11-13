@@ -258,13 +258,14 @@ def test_hls_reescribe_playlist(tmp_path):
     m = pub.get(f"{base}stream.m3u8?v={pv}&src=patio")
     assert m.status_code == 200 and m.headers["content-type"].startswith("application/vnd.apple.mpegurl")
     assert m.headers["cache-control"] == "no-store"
-    assert "src=" not in m.text and m.text.splitlines()[-1] == f"{base}playlist.m3u8?id=s1&v={pv}"
+    assert "src=" not in m.text and m.text.splitlines()[-1] == f"playlist.m3u8?id=s1&v={pv}"      # relative: a path prefix survives
     call = [c for c in fake.calls if c.url.path == "/api/stream.m3u8"][-1]
     assert call.url.params["src"] == "sala" and "mp4" in call.url.params          # src from the path, never the query
     p = pub.get(f"{base}playlist.m3u8?id=s1&v={pv}")
     uris = [l for l in p.text.splitlines() if not l.startswith("#")] + \
            [l.split('URI="')[1].split('"')[0] for l in p.text.splitlines() if 'URI="' in l]
-    assert len(uris) == 3 and all(u.startswith(base) and u.endswith(f"&v={pv}") for u in uris)
+    assert len(uris) == 3 and all(u.endswith(f"&v={pv}") for u in uris)
+    assert sorted(u.split("?")[0] for u in uris) == ["init.mp4", "segment.m4s", "segment.m4s"]     # no "/", no scheme, no host
     assert "src=" not in p.text
     s = pub.get(f"{base}segment.m4s?id=s1&n=7&v={pv}&src=x")
     assert s.status_code == 200 and s.content.endswith(b"s17") and s.headers["content-type"] == "video/iso.segment"
@@ -427,3 +428,63 @@ def test_segmento_cortado_no_rompe(tmp_path):
     tail.get(f"/api/casa/camaras/sala/hls/stream.m3u8?v={v}")
     r = tail.get(f"/api/casa/camaras/sala/hls/segment.m4s?id=s1&n=1&v={v}")
     assert r.status_code == 200 and r.content == b"abc"
+
+
+def test_hls_uris_relativas_resuelven_bajo_un_prefijo(tmp_path):
+    """Behind a proxy that serves the core under /ashur/, the rewritten URIs resolve to the same camera's hls/ folder."""
+    from urllib.parse import urljoin
+    app, tail, pub, clock, fake, code = _con_totp(tmp_path)
+    pv = _sesion(pub, {**A, "X-TOTP": code()})
+    m = pub.get(f"/api/casa/camaras/sala/hls/stream.m3u8?v={pv}").text.splitlines()[-1]
+    url = urljoin("https://casa.example/ashur/api/casa/camaras/sala/hls/stream.m3u8?v=x", m)
+    assert url == f"https://casa.example/ashur/api/casa/camaras/sala/hls/playlist.m3u8?id=s1&v={pv}"
+    p = pub.get(f"/api/casa/camaras/sala/hls/playlist.m3u8?id=s1&v={pv}").text
+    seg = [l for l in p.splitlines() if not l.startswith("#")][0]
+    assert urljoin(url, seg) == f"https://casa.example/ashur/api/casa/camaras/sala/hls/segment.m4s?id=s1&n=7&v={pv}"
+    assert pub.get(f"/api/casa/camaras/sala/hls/{seg}").status_code == 200       # and it is still served
+
+
+def test_foto_pide_miniatura_de_640(tmp_path):
+    app, tail, pub, clock, fake = _app(tmp_path)
+    v = _sesion(tail)
+    assert tail.get(f"/api/casa/camaras/sala/foto.jpg?v={v}").status_code == 200
+    call = [c for c in fake.calls if c.url.path == "/api/frame.jpeg"][-1]
+    assert dict(call.url.params) == {"src": "sala", "width": "640"}
+
+
+def test_renovar_revoca_el_token_anterior(tmp_path):
+    app, tail, pub, clock, fake, code = _con_totp(tmp_path)
+    v1 = _sesion(tail)
+    r = tail.post("/api/casa/camaras/sesion", headers=A, json={"anterior": v1})
+    assert r.status_code == 200
+    v2 = r.json()["v"]
+    assert tail.get(f"/api/casa/camaras/sala/foto.jpg?v={v1}").status_code == 401        # the replaced token is gone
+    assert tail.get(f"/api/casa/camaras/sala/foto.jpg?v={v2}").status_code == 200
+    # another door's token is not touched: a tailnet renewal naming a Funnel token leaves it alive
+    pv = _sesion(pub, {**A, "X-TOTP": code()})
+    assert tail.post("/api/casa/camaras/sesion", headers=A, json={"anterior": pv}).status_code == 200
+    assert pub.get(f"/api/casa/camaras/sala/foto.jpg?v={pv}").status_code == 200
+    # Funnel renewal revokes its own previous one
+    clock.now += 30
+    r = pub.post("/api/casa/camaras/sesion", headers={**A, "X-TOTP": code()}, json={"anterior": pv})
+    assert r.status_code == 200
+    assert pub.get(f"/api/casa/camaras/sala/foto.jpg?v={pv}").status_code == 401
+    assert pub.get(f"/api/casa/camaras/sala/foto.jpg?v={r.json()['v']}").status_code == 200
+    # a wrong code revokes nothing; an unknown or missing anterior is fine
+    pv2 = r.json()["v"]
+    assert pub.post("/api/casa/camaras/sesion", headers={**A, "X-TOTP": "000000"}, json={"anterior": pv2}).status_code == 401
+    assert pub.get(f"/api/casa/camaras/sala/foto.jpg?v={pv2}").status_code == 200
+    assert tail.post("/api/casa/camaras/sesion", headers=A, json={"anterior": "x" * 43}).status_code == 200
+    assert tail.post("/api/casa/camaras/sesion", headers=A, json={}).status_code == 200
+    assert tail.post("/api/casa/camaras/sesion", headers=A, json={"anterior": "x" * 200}).status_code == 422
+    assert v1 not in _log(app) and pv not in _log(app)
+
+
+def test_renovar_no_deja_acumular_sesiones(tmp_path):
+    """A panel that renews with anterior keeps one session: other devices' sessions are not evicted by the 32 cap."""
+    app, tail, pub, clock, fake = _app(tmp_path)
+    otro = _sesion(tail)
+    v = _sesion(tail)
+    for _ in range(40):
+        v = tail.post("/api/casa/camaras/sesion", headers=A, json={"anterior": v}).json()["v"]
+    assert tail.get(f"/api/casa/camaras/sala/foto.jpg?v={otro}").status_code == 200

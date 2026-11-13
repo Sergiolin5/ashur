@@ -19,6 +19,7 @@ HLS_PARAMS = {"id": re.compile(r"[A-Za-z0-9_-]{1,64}"), "n": re.compile(r"[0-9]{
 PLAYLIST_MAX = 256 * 1024
 FOTO_MAX = 8 * 1024 * 1024
 SDP_MAX = 64 * 1024
+FOTO_ANCHO = 640                # thumbnails: go2rtc scales the frame (frame.jpeg `width`, internal/mjpeg/README.md, 1.9.14)
 TIMEOUT_CORTO = 5.0
 TIMEOUT_SEGMENTO = 20.0
 
@@ -184,7 +185,7 @@ class Go2rtc:
 
     def foto(self, nombre: str) -> bytes:
         try:
-            with self._http.stream("GET", self._base + "/api/frame.jpeg", params={"src": nombre},
+            with self._http.stream("GET", self._base + "/api/frame.jpeg", params={"src": nombre, "width": FOTO_ANCHO},
                                    timeout=TIMEOUT_CORTO) as r:
                 self._estado(r)
                 buf = bytearray()

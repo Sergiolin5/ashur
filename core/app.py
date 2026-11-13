@@ -2554,8 +2554,11 @@ def create_app(
             return {"camaras": [], "estado": "sin_respuesta", "causa": x.causa or None}
         return {"camaras": cams, "estado": "ok", "causa": None}
 
+    class SesionVideoIn(BaseModel):
+        anterior: Optional[str] = Field(default=None, max_length=128)    # the token this panel is replacing: revoked
+
     @app.post("/api/casa/camaras/sesion", dependencies=[Depends(require_admin)])
-    def camaras_sesion(request: Request, x_totp: str = Header(default="")):
+    def camaras_sesion(request: Request, body: Optional[SesionVideoIn] = None, x_totp: str = Header(default="")):
         if not camaras_url:
             raise HTTPException(404, "Las cámaras no están configuradas")
         public = on_public_port(request.scope)
@@ -2576,8 +2579,11 @@ def create_app(
                 db.log(now, None, "casa_video_totp_mal", {"bloqueo": True} if bloqueo else {})
                 raise HTTPException(401, "Código del autenticador incorrecto o ya usado.")
         s = {"v": secrets.token_urlsafe(32), "vence": now + VIDEO_SESION_S, "puerta": "funnel" if public else "tailnet", "hls": {}}
-        with video_lock:
-            video_sesiones[:] = [x for x in video_sesiones if now < x["vence"]][-(VIDEO_SESIONES_MAX - 1):] + [s]
+        viejo = (body.anterior or "").encode() if body else b""
+        with video_lock:                    # the previous token goes only if it is of this same door (a tailnet one can't end a Funnel one)
+            vivas = [x for x in video_sesiones if now < x["vence"]
+                     and not (viejo and x["puerta"] == s["puerta"] and hmac.compare_digest(x["v"].encode(), viejo))]
+            video_sesiones[:] = vivas[-(VIDEO_SESIONES_MAX - 1):] + [s]
         db.log(now, None, "casa_video_sesion", {"puerta": s["puerta"]})
         return {"v": s["v"], "vence": s["vence"]}
 
@@ -2649,7 +2655,8 @@ def create_app(
                 raise cam_http(CamError(cli.causa(x))) from None
             finally:
                 r.close()
-            out = cam_mod.reescribir_playlist(buf.decode("utf-8", "replace"), f"/api/casa/camaras/{nombre}/hls/", v)
+            # relative URIs (RFC 8216 §4.1: resolved against the playlist's own URL), so a path prefix in front of the core survives
+            out = cam_mod.reescribir_playlist(buf.decode("utf-8", "replace"), "", v)
             if ruta == "stream.m3u8":
                 nuevos = sorted(cam_mod.hls_ids(out))
                 with video_lock:

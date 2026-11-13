@@ -10,9 +10,20 @@ services:
     container_name: ashur-camaras
     restart: unless-stopped
     # host network: WebRTC needs UDP/TCP 8555 reachable on the tailnet and must see the
-    # cameras' LAN. The API (1984) and RTSP (8554) are bound to 127.0.0.1 by the config file,
-    # so only the core on this same server can reach them.
+    # cameras' LAN.
     network_mode: host
+    # The image's default command is `go2rtc -config /config/go2rtc.yaml` (entrypoint: tini),
+    # so we repeat it in full. Each later -config overrides the earlier ones for the keys it
+    # defines, so the inline last one pins the API (1984), RTSP (8554) and SRTP (8443) listeners
+    # even if go2rtc.yaml is missing or edited. Without it go2rtc listens on ALL interfaces
+    # (:1984 default) with an unauthenticated web UI that shows and edits camera credentials.
+    # If go2rtc.yaml does not exist go2rtc still starts (it skips a missing file) with no streams.
+    command:
+      - go2rtc
+      - -config
+      - /config/go2rtc.yaml
+      - -config
+      - '{"api":{"listen":"127.0.0.1:1984"},"rtsp":{"listen":"127.0.0.1:8554"},"srtp":{"listen":""}}'
     volumes:
       # go2rtc reads /config/go2rtc.yaml
       - /DATA/AppData/ashur/camaras:/config

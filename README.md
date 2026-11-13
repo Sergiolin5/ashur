@@ -114,6 +114,14 @@ solo en `/DATA/AppData/ashur/camaras/go2rtc.yaml` en el servidor; nada con clave
 4. Desde fuera de la tailnet, comprobar que pide el código TOTP.
 5. Opcional, para no pasar el límite de conexiones de las cámaras: en Home Assistant, cambiar cada cámara para que lea `rtsp://127.0.0.1:8554/<nombre>` del relay.
 
+Seguridad: la API de go2rtc (sin clave) muestra y edita las claves de las cámaras. Por eso el compose
+fija en su línea de comando, después del archivo, `api` y `rtsp` en `127.0.0.1` (y apaga el puerto SRTP 8443):
+go2rtc admite varios `-config` y cada uno posterior pisa solo las claves que define
+([internal/app](https://github.com/AlexxIT/go2rtc/blob/master/internal/app/README.md); entrypoint/CMD en
+[docker/Dockerfile](https://github.com/AlexxIT/go2rtc/blob/master/docker/Dockerfile)). Si falta `go2rtc.yaml`, go2rtc
+arranca igual, sin cámaras y con esos puertos en localhost; mira el log de la app si Casa no muestra miniaturas.
+Si cambias el compose, no quites esa línea: sin ella la API queda abierta en la LAN y la tailnet.
+
 Sintaxis verificada en la documentación oficial de go2rtc:
 
 - `onvif://usuario:clave@ip[:puerto]` ([internal/onvif](https://github.com/AlexxIT/go2rtc/blob/master/internal/onvif/README.md)). El README solo muestra esa forma. Que `?subtype=N` elige el perfil (0 = primero, 1 = segundo) y que la URL RTSP se pide a la cámara salen del código ([pkg/onvif/client.go](https://github.com/AlexxIT/go2rtc/blob/master/pkg/onvif/client.go)), no de la documentación. Con VTA+ Primus no está probado cuál perfil es el secundario.

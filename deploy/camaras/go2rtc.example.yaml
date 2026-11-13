@@ -1,5 +1,7 @@
 # Copy to /DATA/AppData/ashur/camaras/go2rtc.yaml on the server and fill in the placeholders.
 # Real credentials go ONLY in that copy, never in this file or in git.
+# api/rtsp listen below are ALSO forced in the compose command line, so they stay on 127.0.0.1
+# even if someone deletes these lines. Keep them anyway so the file says what is really running.
 api:
   listen: "127.0.0.1:1984"      # solo el core lo ve
 rtsp:

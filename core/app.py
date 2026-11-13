@@ -22,7 +22,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from shared.codebundle import build_bundle, code_version, has_node_code
 
@@ -34,6 +34,8 @@ from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES
                         LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
 from core import casa as casa_mod, habits, lotes, signals
 from core.casa import HAClient, HAError
+from core import camaras as cam_mod
+from core.camaras import CamError, Go2rtc
 from zoneinfo import ZoneInfo
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
@@ -50,6 +52,9 @@ APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", 
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
+CAMARA_MEDIOS = re.compile(r"/api/casa/camaras/[a-z0-9-]{1,32}/(foto\.jpg|hls/(stream\.m3u8|playlist\.m3u8|init\.mp4|segment\.m4s|segment\.ts))")
+VIDEO_SESION_S = 900
+VIDEO_SESIONES_MAX = 32
 INVENTORY_EVERY_S = float(os.environ.get("ASHUR_INVENTORY_EVERY_DAYS", "7")) * 86400
 GUEST_MESSAGES_PER_HOUR = 30
 GUEST_DEFAULT_CAP_USD = 1.0
@@ -167,12 +172,17 @@ def create_app(
     casa_nombre: str = "Bogotá",
     ha_token_env: str = "ASHUR_HA_TOKEN",
     ha_client_fn: Optional[Callable[[str, str], HAClient]] = None,
+    camaras_url: Optional[str] = None,
+    camaras_client_fn: Optional[Callable[[str], Go2rtc]] = None,
     env: Mapping[str, str] = os.environ,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
 
     db = DB(db_path, echo=echo_events)
+    if camaras_url and not cam_mod.url_valida(camaras_url):
+        db.log(clock(), None, "casa_camaras_url_invalida", {})       # never the value: it is not ours to echo
+        camaras_url = None
     if ha_url:
         db.casa_ensure(casa_nombre, ha_url, ha_token_env)
     db.cancel_orphan_llm_tasks(clock())         # their askers died with the previous process
@@ -259,7 +269,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.59.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.60.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -274,6 +284,23 @@ def create_app(
     def on_public_port(scope) -> bool:
         server = scope.get("server") or (None, None)
         return public_port is not None and server[1] == public_port
+
+    # --- video sessions (0.60.0): short tokens for camera media, in memory only (a restart ends them) ---
+    video_sesiones: list[dict] = []         # {"v", "vence", "puerta", "hls": {camera: [go2rtc ids]}}
+    video_lock = threading.Lock()
+
+    def video_sesion(v: str, public: bool) -> Optional[dict]:
+        """The current session for token v, compared in constant time; over Funnel only one made over Funnel (with TOTP)."""
+        if not v or len(v) > 128:
+            return None
+        now, found = clock(), None
+        with video_lock:
+            for s in video_sesiones:
+                if hmac.compare_digest(s["v"].encode(), v.encode()) and now < s["vence"]:
+                    found = s
+        if found and public and found["puerta"] != "funnel":
+            return None
+        return found
 
     slow_requests: list = []
 
@@ -308,11 +335,19 @@ def create_app(
                                     status_code=403)
             if path.startswith("/api/"):
                 now = clock()
-                if now < locked_until[0]:
+                if now < locked_until[0]:               # the lock stops everything, camera media included
                     return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta. Se desbloquea en "
                                          "15 minutos; por la tailnet sigue funcionando."}, status_code=429)
+                # cámaras (0.60.0): <img> and <video> cannot send X-Admin-Key, so a photo or HLS GET with a video
+                # session token and no key is judged by the token alone: valid and made over Funnel (admin key +
+                # TOTP) passes; expired or unknown is a 401 that does not count as a wrong key (a player still
+                # polling after its 15 min must not lock the door on its owner; guessing a 32-byte token is hopeless)
+                v = request.query_params.get("v", "")
                 k = request.headers.get("x-admin-key", "")
-                if not _same(k, admin_key) and not db.guest_by_key(k):
+                medio = request.method == "GET" and bool(v) and not k and CAMARA_MEDIOS.fullmatch(path) is not None
+                if medio and video_sesion(v, True) is None:
+                    return JSONResponse({"detail": "La sesión de video venció"}, status_code=401)
+                if not medio and not _same(k, admin_key) and not db.guest_by_key(k):
                     failures[:] = [t for t in failures if now - t < PUBLIC_FAIL_WINDOW_S] + [now]
                     if len(failures) >= PUBLIC_MAX_FAILURES:
                         locked_until[0] = now + PUBLIC_LOCK_S
@@ -2485,6 +2520,176 @@ def create_app(
                 "door": "public" if on_public_port(request.scope) else "tailnet"})
         return {"ok": True}
 
+    # --- cámaras (0.60.0): a thin proxy to the local go2rtc; only names, frames, SDP and rebuilt HLS ever leave it ---
+    # go2rtc's /api/streams carries every camera's user and password: nothing from it passes through as is.
+    cam_mem: dict = {"cli": None, "falla_t": None, "fotos": {}}
+    video_failures: list[float] = []        # the video's own TOTP lockout: never shared with /api/update's
+    video_locked = [0.0]
+    CAM_NO_RESPONDE = "El servicio de cámaras no responde"
+
+    def camaras_cli() -> Go2rtc:
+        """One client for the life of the core (its connection pool is reused)."""
+        if cam_mem["cli"] is None:
+            cam_mem["cli"] = camaras_client_fn(camaras_url) if camaras_client_fn else Go2rtc(camaras_url)
+        return cam_mem["cli"]
+
+    def cam_falla(causa: str) -> None:
+        if cam_mem["falla_t"] is None or clock() - cam_mem["falla_t"] >= 600:
+            cam_mem["falla_t"] = clock()
+            db.log(clock(), None, "casa_camaras_falla", {"causa": causa})
+
+    def cam_http(x: CamError) -> HTTPException:
+        if x.status == 404:
+            return HTTPException(404, "Esa cámara no está en el servicio de cámaras")
+        cam_falla(x.causa)
+        return HTTPException(502, f"{CAM_NO_RESPONDE} ({x.causa})" if x.causa else CAM_NO_RESPONDE)
+
+    def cam_acceso(nombre: str, request: Request, v: str) -> dict:
+        """Media routes: a valid name, cameras configured and a current video session (the admin key alone is not one)."""
+        if not cam_mod.nombre_valido(nombre):
+            raise HTTPException(400, "Nombre de cámara no válido")
+        if not camaras_url:
+            raise HTTPException(404, "Las cámaras no están configuradas")
+        s = video_sesion(v, on_public_port(request.scope))
+        if s is None:
+            raise HTTPException(401, "La sesión de video venció o no es válida")
+        return s
+
+    @app.get("/api/casa/camaras", dependencies=[Depends(require_admin)])
+    def camaras_lista():
+        if not camaras_url:
+            return {"camaras": [], "estado": "desactivado", "causa": None}
+        try:
+            cams = camaras_cli().nombres()
+        except CamError as x:
+            cam_falla(x.causa)
+            return {"camaras": [], "estado": "sin_respuesta", "causa": x.causa or None}
+        return {"camaras": cams, "estado": "ok", "causa": None}
+
+    class SesionVideoIn(BaseModel):
+        anterior: Optional[str] = Field(default=None, max_length=128)    # the token this panel is replacing: revoked
+
+    @app.post("/api/casa/camaras/sesion", dependencies=[Depends(require_admin)])
+    def camaras_sesion(request: Request, body: Optional[SesionVideoIn] = None, x_totp: str = Header(default="")):
+        if not camaras_url:
+            raise HTTPException(404, "Las cámaras no están configuradas")
+        public = on_public_port(request.scope)
+        now = clock()
+        if public:
+            if not totp.active:
+                raise HTTPException(403, "Configura el autenticador en Ajustes, estando en la tailnet")
+            if now < video_locked[0]:
+                raise HTTPException(429, "Demasiados códigos incorrectos. Inténtalo en 15 minutos o usa la tailnet.")
+            if not x_totp.strip():
+                raise HTTPException(401, "Escribe el código del autenticador")
+            if not totp.check(x_totp, now):
+                video_failures[:] = [t for t in video_failures if now - t < 900] + [now]
+                bloqueo = len(video_failures) >= 5
+                if bloqueo:
+                    video_locked[0] = now + 900
+                    video_failures.clear()
+                db.log(now, None, "casa_video_totp_mal", {"bloqueo": True} if bloqueo else {})
+                raise HTTPException(401, "Código del autenticador incorrecto o ya usado.")
+        s = {"v": secrets.token_urlsafe(32), "vence": now + VIDEO_SESION_S, "puerta": "funnel" if public else "tailnet", "hls": {}}
+        viejo = (body.anterior or "").encode() if body else b""
+        with video_lock:                    # the previous token goes only if it is of this same door (a tailnet one can't end a Funnel one)
+            vivas = [x for x in video_sesiones if now < x["vence"]
+                     and not (viejo and x["puerta"] == s["puerta"] and hmac.compare_digest(x["v"].encode(), viejo))]
+            video_sesiones[:] = vivas[-(VIDEO_SESIONES_MAX - 1):] + [s]
+        db.log(now, None, "casa_video_sesion", {"puerta": s["puerta"]})
+        return {"v": s["v"], "vence": s["vence"]}
+
+    @app.get("/api/casa/camaras/{nombre}/foto.jpg")
+    def camara_foto(nombre: str, request: Request, v: str = Query(default="")):
+        cam_acceso(nombre, request, v)
+        fotos = cam_mem["fotos"]
+        hit = fotos.get(nombre)
+        if hit and clock() - hit[0] < 2:
+            data = hit[1]
+        else:
+            try:
+                data = camaras_cli().foto(nombre)
+            except CamError as x:
+                raise cam_http(x) from None
+            if len(fotos) >= 32:
+                fotos.clear()
+            fotos[nombre] = (clock(), data)
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/casa/camaras/{nombre}/webrtc")
+    async def camara_webrtc(nombre: str, request: Request, v: str = Query(default="")):
+        if on_public_port(request.scope):
+            raise HTTPException(403, "El video en vivo por WebRTC solo funciona en la tailnet; por fuera se usa HLS.")
+        cam_acceso(nombre, request, v)
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > cam_mod.SDP_MAX:
+                raise HTTPException(413, "La oferta SDP es demasiado grande")
+        offer = body.decode("utf-8", "replace")
+        if not offer.startswith("v=0"):
+            raise HTTPException(400, "La oferta SDP no es válida")
+        try:
+            answer = await asyncio.to_thread(camaras_cli().sdp, nombre, offer)
+        except CamError as x:
+            raise cam_http(x) from None
+        return Response(answer, media_type="application/sdp", headers={"Cache-Control": "no-store"})
+
+    HLS_TIPOS = {"init.mp4": "video/mp4", "segment.m4s": "video/iso.segment", "segment.ts": "video/mp2t"}
+
+    @app.get("/api/casa/camaras/{nombre}/hls/{ruta:path}")
+    def camara_hls(nombre: str, ruta: str, request: Request, v: str = Query(default="")):
+        s = cam_acceso(nombre, request, v)
+        if ruta not in cam_mod.HLS_RUTAS:
+            raise HTTPException(404, "Not Found")
+        public = on_public_port(request.scope)
+        q = cam_mod.hls_query(request.query_params)
+        if ruta != "stream.m3u8":
+            with video_lock:
+                ids = s["hls"].get(nombre)
+                if ids is None:                 # never opened, or over Funnel another camera replaced it
+                    raise HTTPException(409, "Esta cámara ya no está abierta en la sesión de video")
+                if q.get("id") not in ids:
+                    raise HTTPException(404, "Not Found")
+        cli = camaras_cli()
+        try:
+            r = cli.hls(nombre, ruta, q)
+        except CamError as x:
+            raise cam_http(x) from None
+        if ruta.endswith(".m3u8"):
+            try:
+                buf = bytearray()
+                for chunk in r.iter_bytes():
+                    buf += chunk
+                    if len(buf) > cam_mod.PLAYLIST_MAX:
+                        raise cam_http(CamError("playlist demasiado grande"))
+            except (httpx.HTTPError, httpx.StreamError) as x:
+                raise cam_http(CamError(cli.causa(x))) from None
+            finally:
+                r.close()
+            # relative URIs (RFC 8216 §4.1: resolved against the playlist's own URL), so a path prefix in front of the core survives
+            out = cam_mod.reescribir_playlist(buf.decode("utf-8", "replace"), "", v)
+            if ruta == "stream.m3u8":
+                nuevos = sorted(cam_mod.hls_ids(out))
+                with video_lock:
+                    if public:
+                        s["hls"] = {nombre: nuevos}             # over Funnel, one camera at a time per session
+                    else:
+                        s["hls"][nombre] = (s["hls"].get(nombre, []) + nuevos)[-8:]
+                        while len(s["hls"]) > 16:
+                            s["hls"].pop(next(iter(s["hls"])))
+            return Response(out, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-store"})
+
+        def chorro():
+            try:
+                for chunk in r.iter_bytes():
+                    yield chunk
+            except (httpx.HTTPError, httpx.StreamError):
+                return                                       # go2rtc dropped the segment: the player asks for the next one
+            finally:
+                r.close()
+        return StreamingResponse(chorro(), media_type=HLS_TIPOS[ruta], headers={"Cache-Control": "no-store"})
+
     # --- diary and notifications (Sergio's own devices only: admin key or a "para mí" key) ----------
     push_keys = PushKeys(data_dir / "vapid.json")
     send_push = push_fn or make_sender(push_keys)
@@ -4382,7 +4587,7 @@ def newest_published(image: str) -> Optional[str]:
     return max(versions, key=vtuple) if versions else None
 
 
-def from_env(ha_url: Optional[str] = None, casa_nombre: Optional[str] = None) -> FastAPI:
+def from_env(ha_url: Optional[str] = None, casa_nombre: Optional[str] = None, camaras_url: Optional[str] = None) -> FastAPI:
     """Entry point: `uvicorn --factory core.app:from_env`.
 
     Keys come from ASHUR_ENROLL_KEY / ASHUR_ADMIN_KEY when set; otherwise from
@@ -4403,4 +4608,10 @@ def from_env(ha_url: Optional[str] = None, casa_nombre: Optional[str] = None) ->
                       public_port=int(public) if public else None, echo_events=True,
                       inventory_in_background=True,
                       ha_url=(os.environ.get("ASHUR_HA_URL", "").strip() or None) if ha_url is None else (ha_url or None),
-                      casa_nombre=(os.environ.get("ASHUR_CASA_NOMBRE", "").strip() or "Bogotá") if casa_nombre is None else casa_nombre)
+                      casa_nombre=(os.environ.get("ASHUR_CASA_NOMBRE", "").strip() or "Bogotá") if casa_nombre is None else casa_nombre,
+                      camaras_url=(camaras_url_env() if camaras_url is None else camaras_url) or None)
+
+
+def camaras_url_env() -> Optional[str]:
+    """ASHUR_CAMARAS_URL (http://127.0.0.1:1984 with the cameras compose); unset or empty → cameras off."""
+    return os.environ.get("ASHUR_CAMARAS_URL", "").strip() or None

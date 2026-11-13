@@ -4,6 +4,7 @@
 
 ASHUR_PORT (default 8000) is the tailnet door. ASHUR_PUBLIC_PORT (default 8001) is the
 door Tailscale Funnel publishes; set it empty to turn the public door off.
+ASHUR_CAMARAS_URL is the local go2rtc (http://127.0.0.1:1984 with the cameras compose); unset or empty, no cameras.
 
 The log is meant to be read by a person: one line when the core is ready (or exactly
 why it is not), then one line per event. HTTP requests are not logged.
@@ -78,7 +79,10 @@ def main() -> None:
     try:
         ha_url = os.environ.get("ASHUR_HA_URL", "").strip() or None
         casa_nombre = os.environ.get("ASHUR_CASA_NOMBRE", "").strip() or "Bogotá"
-        app = from_env(ha_url=ha_url, casa_nombre=casa_nombre)
+        from core.app import camaras_url_env
+        from core.camaras import url_valida as cam_url_valida
+        camaras_url = camaras_url_env()
+        app = from_env(ha_url=ha_url, casa_nombre=casa_nombre, camaras_url=camaras_url or "")
     except Exception as e:
         sys.exit(f"[ashur] NO ARRANCA: {type(e).__name__}: {e}")
     port = int(os.environ.get("ASHUR_PORT", "8000"))
@@ -93,6 +97,14 @@ def main() -> None:
                                                      lifespan="off", proxy_headers=False, **quiet)))
     ports_free([("0.0.0.0", port)] + ([(public_bind, int(public))] if public else []))
     say(f"casa: {casa_nombre} → {ha_url}" if ha_url else "casa: sin Home Assistant")     # never the token
+    if camaras_url and cam_url_valida(camaras_url):
+        from urllib.parse import urlsplit
+        u = urlsplit(camaras_url)                                   # host:port only
+        say(f"cámaras: go2rtc en {u.hostname}:{u.port or 80}")
+    elif camaras_url:
+        say("cámaras: desactivadas (ASHUR_CAMARAS_URL no es una URL válida)")
+    else:
+        say("cámaras: desactivadas (sin ASHUR_CAMARAS_URL)")
     n = len(app.state.db.nodes())
     brain = os.environ.get("ASHUR_BRAIN", "auto")
     ready = (f"núcleo {app.version} listo · puerta tailnet :{port} · "

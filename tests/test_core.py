@@ -184,6 +184,14 @@ def test_panel_serves_the_casa_energy_view(env):
     assert 'id="casa-energia"' in c.get("/").text
 
 
+def test_panel_serves_the_casa_cameras_section(env):
+    c, _ = env
+    html = c.get("/").text
+    assert 'id="casa-camaras"' in html
+    assert 'autocomplete="one-time-code"' in html and 'inputmode="numeric"' in html
+    assert "anterior: camPrevV" in html                      # a renewal names the token it replaces, so the server revokes it
+
+
 def test_overview_needs_admin_and_shows_live_progress(env):
     c, clock = env
     h = register(c)

@@ -1,0 +1,37 @@
+# Ashur cameras (go2rtc) for ZimaOS: App Store -> "+" -> Install a customized app -> Import.
+# Before importing, create /DATA/AppData/ashur/camaras/go2rtc.yaml from
+# deploy/camaras/go2rtc.example.yaml (use the ZimaOS Files app). The camera user/password
+# live ONLY in that file on the server; never commit it.
+# go2rtc turns each camera into one connection that Ashur (video) and Home Assistant (optional) share.
+name: ashur-camaras
+services:
+  ashur-camaras:
+    # Pinned on purpose (go2rtc v1.9.14, 2026-01-19). The command below relies on three behaviours checked in
+    # that tag's internal/app/README.md and config.go: repeated -config, inline JSON config, and every later
+    # config overriding the earlier ones for the keys it defines. Upgrading the tag is a deliberate change:
+    # re-check those three, or the API may end up listening on every interface.
+    image: alexxit/go2rtc:1.9.14
+    container_name: ashur-camaras
+    restart: unless-stopped
+    # host network: WebRTC needs UDP/TCP 8555 reachable on the tailnet and must see the
+    # cameras' LAN.
+    network_mode: host
+    # The image's default command is `go2rtc -config /config/go2rtc.yaml` (entrypoint: tini),
+    # so we repeat it in full. Each later -config overrides the earlier ones for the keys it
+    # defines, so the inline last one pins the API (1984), RTSP (8554) and SRTP (8443) listeners
+    # even if go2rtc.yaml is missing or edited. Without it go2rtc listens on ALL interfaces
+    # (:1984 default) with an unauthenticated web UI that shows and edits camera credentials.
+    # If go2rtc.yaml does not exist go2rtc still starts (it skips a missing file) with no streams.
+    command:
+      - go2rtc
+      - -config
+      - /config/go2rtc.yaml
+      - -config
+      - '{"api":{"listen":"127.0.0.1:1984"},"rtsp":{"listen":"127.0.0.1:8554"},"srtp":{"listen":""}}'
+    volumes:
+      # go2rtc reads /config/go2rtc.yaml
+      - /DATA/AppData/ashur/camaras:/config
+    deploy:
+      resources:
+        limits:
+          memory: 256M

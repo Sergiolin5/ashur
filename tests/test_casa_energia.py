@@ -80,3 +80,133 @@ def test_energia_upsert_is_atomic(tmp_path):
         db.energia_upsert(c, [_fila("sensor.a", 0.0, 1, 1.0), _fila("sensor.a", 1.0, 9, 1.0)])
     db.casa_nivel_set(c, 2)  # a later commit must not persist the half batch
     assert db.energia_serie(c, ["sensor.a"], 1, 0, 10) == {}
+
+
+# ---- Task 2: statistics, devices, conversion ----
+import json as _json
+from datetime import datetime, timezone
+
+import httpx
+
+from core import casa as C
+
+
+def _ha(handler):
+    return C.HAClient("http://ha.local:8123", "TOK", http=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def _st(eid, state="0", **attrs):
+    return {"entity_id": eid, "state": state, "attributes": attrs}
+
+
+def test_statistics_posts_return_response():
+    seen = {}
+
+    def h(req):
+        seen["url"] = str(req.url)
+        seen["body"] = _json.loads(req.content)
+        return httpx.Response(200, json={"changed_states": [], "service_response": {"statistics": {
+            "sensor.a": [{"start": "2026-11-13T00:00:00+00:00", "end": "x", "change": 1.0}]}}})
+
+    out = _ha(h).statistics(["sensor.a"], 0, 86400, "day", ["change"])
+    assert seen["url"].endswith("/api/services/recorder/get_statistics?return_response")
+    assert seen["body"]["period"] == "day" and seen["body"]["types"] == ["change"]
+    assert seen["body"]["start_time"] == "1970-01-01T00:00:00Z" and seen["body"]["end_time"] == "1970-01-02T00:00:00Z"
+    assert out["sensor.a"][0]["change"] == 1.0
+
+
+def test_statistics_accepts_map_without_statistics_key():
+    h = lambda r: httpx.Response(200, json={"service_response": {"sensor.a": [{"start": 1, "mean": 2}]}})
+    assert _ha(h).statistics(["sensor.a"], 0, 1, "hour", ["mean"])["sensor.a"][0]["mean"] == 2
+
+
+@pytest.mark.parametrize("code", [400, 404])
+def test_statistics_400_is_sin_estadisticas(code):
+    with pytest.raises(C.HAError) as e:
+        _ha(lambda r: httpx.Response(code)).statistics(["sensor.a"], 0, 1, "day", ["change"])
+    assert e.value.motivo == "sin_estadisticas"
+
+
+def test_statistics_other_errors_unchanged():
+    with pytest.raises(C.HAError) as e:
+        _ha(lambda r: httpx.Response(401)).statistics(["a"], 0, 1, "day", ["change"])
+    assert e.value.motivo == "token_invalido"
+    with pytest.raises(C.HAError) as e:
+        _ha(lambda r: httpx.Response(500)).statistics(["a"], 0, 1, "day", ["change"])
+    assert e.value.motivo == "error"
+
+
+def test_devices_cleans_trailing_comma():
+    h = lambda r: httpx.Response(200, text='[["switch.a", "d1"],["sensor.a_w", "d1"],]')
+    assert _ha(h).devices() == {"switch.a": "d1", "sensor.a_w": "d1"}
+
+
+NEVERA = [
+    _st("switch.nevera", "on"),
+    _st("sensor.nevera_kwh", "12", unit_of_measurement="kWh", device_class="energy"),
+    _st("sensor.nevera_w", "86", unit_of_measurement="W"),
+]
+NEVERA_DEV = {"switch.nevera": "d1", "sensor.nevera_kwh": "d1", "sensor.nevera_w": "d1"}
+
+
+def test_fuentes_prefers_kwh_over_w():
+    assert C.fuentes(NEVERA, NEVERA_DEV) == {
+        "sensor.nevera_kwh": {"tipo": "kwh", "potencia": "sensor.nevera_w", "dueno": "switch.nevera"}}
+
+
+def test_fuentes_w_only_and_standalone():
+    sts = [_st("switch.a"), _st("sensor.a_w", "5", unit_of_measurement="kW"),
+           _st("sensor.solo", "1", unit_of_measurement="Wh"), _st("sensor.temp", "20", unit_of_measurement="C")]
+    assert C.fuentes(sts, {"switch.a": "d", "sensor.a_w": "d"}) == {
+        "sensor.a_w": {"tipo": "w", "potencia": None, "dueno": "switch.a"},
+        "sensor.solo": {"tipo": "kwh", "potencia": None, "dueno": None}}
+
+
+def test_tipo_energia():
+    assert C.tipo_energia(_st("sensor.x", unit_of_measurement="Wh")) == "kwh"
+    assert C.tipo_energia(_st("sensor.x", device_class="energy")) == "kwh"
+    assert C.tipo_energia(_st("sensor.x", unit_of_measurement="kW")) == "w"
+    assert C.tipo_energia(_st("sensor.x", unit_of_measurement="C")) is None
+
+
+def test_filas_wh_and_kw_conversion():
+    t = datetime(2026, 11, 13, 5, tzinfo=timezone.utc).timestamp()
+    stats = {"sensor.e": [{"start": t * 1000, "change": 1500}],
+             "sensor.p": [{"start": "2026-11-13T05:00:00+00:00", "mean": 0.5, "max": 1.2}]}
+    fu = {"sensor.e": {"tipo": "kwh", "potencia": None, "dueno": None},
+          "sensor.p": {"tipo": "w", "potencia": None, "dueno": None}}
+    un = {"sensor.e": "Wh", "sensor.p": "kW"}
+    f = {r["entity_id"]: r for r in C.filas_desde_stats(stats, fu, 2, un)}
+    assert f["sensor.e"]["kwh"] == pytest.approx(1.5) and f["sensor.e"]["fuente"] == "medido"
+    assert f["sensor.e"]["inicio"] == t and f["sensor.e"]["resolucion"] == 2
+    assert f["sensor.p"]["kwh"] == pytest.approx(0.5) and f["sensor.p"]["fuente"] == "calculado"
+    assert f["sensor.p"]["w_max"] == pytest.approx(1200)
+    day = C.filas_desde_stats({"sensor.p": [{"start": t, "mean": 100}]}, fu, 1, {})[0]
+    assert day["kwh"] == pytest.approx(2.4)
+    five = C.filas_desde_stats({"sensor.p": [{"start": t, "mean": 1200}]}, fu, 3, {})[0]
+    assert five["kwh"] == pytest.approx(0.1)
+
+
+def test_filas_w_max_from_power_sensor_of_kwh_source():
+    fu = {"sensor.e": {"tipo": "kwh", "potencia": "sensor.p", "dueno": None}}
+    stats = {"sensor.e": [{"start": 100, "change": 0.2}, {"start": 200, "change": 0.3}],
+             "sensor.p": [{"start": 100, "max": 450}]}
+    r = C.filas_desde_stats(stats, fu, 2, {})
+    assert [x["w_max"] for x in r] == [450, None] and all(x["entity_id"] == "sensor.e" for x in r)
+
+
+def test_filas_skip_missing_values():
+    fu = {"sensor.e": {"tipo": "kwh", "potencia": None, "dueno": None},
+          "sensor.p": {"tipo": "w", "potencia": None, "dueno": None}}
+    stats = {"sensor.e": [{"start": 1, "change": None}, {"start": 2}, {"start": "basura", "change": 1}],
+             "sensor.p": [{"start": 1, "max": 5}, {"start": 2, "mean": None}]}
+    assert C.filas_desde_stats(stats, fu, 1, {}) == []
+
+
+def test_vista_merges_power_into_owner():
+    v = C.vista(NEVERA, {}, {}, devices=NEVERA_DEV)
+    filas = [d for a in v["areas"] for d in a["dispositivos"]]
+    assert [d["entity_id"] for d in filas] == ["switch.nevera"]
+    assert filas[0]["potencia_w"] == 86 and filas[0]["fuente_energia"] == "sensor.nevera_kwh"
+    sin = C.vista(NEVERA, {}, {})
+    assert "sensor.nevera_w" in [d["entity_id"] for a in sin["areas"] for d in a["dispositivos"]]

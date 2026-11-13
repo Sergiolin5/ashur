@@ -142,6 +142,23 @@ CREATE TABLE IF NOT EXISTS sha_servidor (  -- what /DATA/Consolidado already hol
     size        INTEGER NOT NULL,
     ts          REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS casas (            -- casa (0.57.0): one per Home Assistant; the token lives in ZimaOS, never here
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre            TEXT NOT NULL,
+    ha_url            TEXT NOT NULL UNIQUE,
+    ha_token_env      TEXT NOT NULL,
+    tz                TEXT NOT NULL DEFAULT 'America/Bogota',
+    nivel_energia_def INTEGER NOT NULL DEFAULT 1 CHECK (nivel_energia_def IN (1, 2, 3))
+);
+CREATE TABLE IF NOT EXISTS casa_dispositivos ( -- only what Ashur adds on top of Home Assistant
+    casa_id       INTEGER NOT NULL REFERENCES casas(id),
+    entity_id     TEXT NOT NULL,
+    orden         INTEGER NOT NULL DEFAULT 0,
+    favorito      INTEGER NOT NULL DEFAULT 0,
+    oculto        INTEGER NOT NULL DEFAULT 0,
+    nivel_energia INTEGER CHECK (nivel_energia IN (1, 2, 3)),   -- null: the house's level (stage 2)
+    PRIMARY KEY (casa_id, entity_id)
+);
 CREATE TABLE IF NOT EXISTS memory (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created     REAL NOT NULL,
@@ -1136,6 +1153,50 @@ class DB:
             self.conn.execute("UPDATE mudanzas SET estado = ?, error = ?, finished = ? WHERE id = ? AND estado IN ('aprobada', 'en_curso')",
                               (estado, error, ts, mid))
             self.conn.commit()
+
+    # --- casa (0.57.0): the houses (one per Home Assistant) and what Ashur adds to their devices ------------------------
+    CASA_DISP_FIELDS = ("orden", "favorito", "oculto")
+
+    def casa_ensure(self, nombre: str, ha_url: str, ha_token_env: str) -> int:
+        with self.lock:
+            r = self.conn.execute("SELECT id FROM casas WHERE ha_url = ?", (ha_url,)).fetchone()
+            if r:
+                self.conn.execute("UPDATE casas SET nombre = ? WHERE id = ?", (nombre, r[0]))
+                cid = r[0]
+            else:
+                cid = self.conn.execute("INSERT INTO casas (nombre, ha_url, ha_token_env) VALUES (?, ?, ?)",
+                                        (nombre, ha_url, ha_token_env)).lastrowid
+            self.conn.commit()
+            return cid
+
+    def casas(self) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT id, nombre, ha_url, ha_token_env, tz, nivel_energia_def FROM casas ORDER BY id").fetchall()]
+
+    def casa_get(self, cid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT id, nombre, ha_url, ha_token_env, tz, nivel_energia_def FROM casas WHERE id = ?", (cid,)).fetchone()
+            return dict(r) if r else None
+
+    def casa_disp_set(self, casa_id: int, entity_id: str, **cambios) -> None:
+        bad = [k for k in cambios if k not in self.CASA_DISP_FIELDS]
+        if bad:
+            raise ValueError(f"unknown field(s): {', '.join(bad)}")
+        with self.lock:
+            self.conn.execute("INSERT OR IGNORE INTO casa_dispositivos (casa_id, entity_id) VALUES (?, ?)", (casa_id, entity_id))
+            if cambios:
+                sets = ", ".join(f"{k} = ?" for k in cambios)
+                self.conn.execute(f"UPDATE casa_dispositivos SET {sets} WHERE casa_id = ? AND entity_id = ?",
+                                  (*cambios.values(), casa_id, entity_id))
+            self.conn.commit()
+
+    def casa_disps(self, casa_id: int) -> dict[str, dict]:
+        with self.lock:
+            return {r["entity_id"]: {"orden": r["orden"], "favorito": r["favorito"], "oculto": r["oculto"],
+                                     "nivel_energia": r["nivel_energia"]}
+                    for r in self.conn.execute("SELECT * FROM casa_dispositivos WHERE casa_id = ?", (casa_id,)).fetchall()}
 
     MAP_WRITE_ROWS = 2000                 # ~0.5 s of lock here per chunk; the server's USB disk is slower
 

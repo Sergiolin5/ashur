@@ -168,15 +168,30 @@ def _potencia(state: dict) -> Optional[float]:
 def tipo_energia(state: dict) -> Optional[str]:
     attrs = state.get("attributes") or {}
     unit = attrs.get("unit_of_measurement")
-    if unit in ("kWh", "Wh") or attrs.get("device_class") == "energy":
+    if unit in ("kWh", "Wh", "MWh"):
         return "kwh"
     if unit in ("W", "kW"):
         return "w"
+    if unit is None and attrs.get("device_class") == "energy":
+        return "kwh"
+    return None
+
+
+_CLASE = {"kwh": ("total", "total_increasing"), "w": ("measurement",)}
+
+
+def _elegible(state: dict) -> Optional[str]:
+    """Energy type only if the sensor can have HA statistics (state_class), else None."""
+    if _dominio(state) != "sensor":
+        return None
+    t = tipo_energia(state)
+    if t and (state.get("attributes") or {}).get("state_class") in _CLASE[t]:
+        return t
     return None
 
 
 def _por_dispositivo(states: list, devices: dict) -> dict:
-    """device_id -> {"duenos": [...], "kwh": [...], "w": [...]} (sorted entity_ids)."""
+    """device_id -> {"duenos": [...], "kwh": [...], "w": [...]} (sorted entity_ids; sensors eligible only)."""
     por = {}
     for st in states:
         eid = st["entity_id"]
@@ -186,8 +201,8 @@ def _por_dispositivo(states: list, devices: dict) -> dict:
         g = por.setdefault(dev, {"duenos": [], "kwh": [], "w": []})
         if controlable(st):
             g["duenos"].append(eid)
-        elif _dominio(st) == "sensor":
-            t = tipo_energia(st)
+        else:
+            t = _elegible(st)
             if t:
                 g[t].append(eid)
     for g in por.values():
@@ -198,23 +213,26 @@ def _por_dispositivo(states: list, devices: dict) -> dict:
 
 def fuentes(states: list, devices: dict) -> dict:
     out = {}
-    por = _por_dispositivo(states, devices)
-    for g in por.values():
-        dueno = g["duenos"][0] if g["duenos"] else None
+    for g in _por_dispositivo(states, devices).values():
+        dueno = g["duenos"][0] if len(g["duenos"]) == 1 else None
         if g["kwh"]:
-            out[g["kwh"][0]] = {"tipo": "kwh", "potencia": g["w"][0] if g["w"] else None, "dueno": dueno}
-        elif g["w"]:
-            out[g["w"][0]] = {"tipo": "w", "potencia": None, "dueno": dueno}
+            pot = g["w"][0] if len(g["kwh"]) == 1 and len(g["w"]) == 1 else None
+            for k in g["kwh"]:
+                out[k] = {"tipo": "kwh", "potencia": pot, "dueno": dueno}
+        else:
+            for w in g["w"]:
+                out[w] = {"tipo": "w", "potencia": None, "dueno": dueno}
     for st in states:
         eid = st["entity_id"]
-        if devices.get(eid) or _dominio(st) != "sensor":
+        if devices.get(eid):
             continue
-        t = tipo_energia(st)
+        t = _elegible(st)
         if t:
             out[eid] = {"tipo": t, "potencia": None, "dueno": None}
     return out
 
 
+_FACTOR_KWH = {"Wh": 1 / 1000, "MWh": 1000.0}
 _HORAS = {1: 24.0, 2: 1.0, 3: 5 / 60}
 
 
@@ -246,8 +264,7 @@ def _num(v) -> Optional[float]:
     return v if v == v and v not in (float("inf"), float("-inf")) else None
 
 
-def filas_desde_stats(stats: dict, fuentes: dict, resolucion: int, unidades: dict) -> list:
-    horas = _HORAS[resolucion]
+def filas_desde_stats(stats: dict, fuentes: dict, resolucion: int, unidades: dict, *, ahora: float) -> list:
     filas = []
     for eid, f in fuentes.items():
         pot = eid if f["tipo"] == "w" else f.get("potencia")
@@ -266,12 +283,18 @@ def filas_desde_stats(stats: dict, fuentes: dict, resolucion: int, unidades: dic
                 v = _num(p.get("change"))
                 if v is None:
                     continue
-                kwh, fuente = (v / 1000 if unidades.get(eid) == "Wh" else v), "medido"
+                kwh, fuente = v * _FACTOR_KWH.get(unidades.get(eid), 1.0), "medido"
             else:
                 m = _num(p.get("mean"))
                 if m is None:
                     continue
                 w = m * 1000 if unidades.get(eid) == "kW" else m
+                fin = _ts(p.get("end"))
+                full = (fin - t) / 3600 if fin is not None and fin > t else _HORAS[resolucion]
+                horas = min(full, (ahora - t) / 3600)
+                horas = int(horas * 12 + 1e-9) / 12 if resolucion == 3 else float(int(horas + 1e-9))
+                if horas <= 0:
+                    continue
                 kwh, fuente = w * horas / 1000, "calculado"
             filas.append({"entity_id": eid, "inicio": t, "resolucion": resolucion,
                           "kwh": round(kwh, 6), "w_max": maximos.get(t), "fuente": fuente})
@@ -282,17 +305,18 @@ def vista(states: list, areas: dict, prefs: dict, devices: Optional[dict] = None
     favoritos, ocultos, por_area = [], [], {}
     ocultos_dev, extra = set(), {}
     if devices:
-        by = {s["entity_id"]: s for s in states}
+        by = {x["entity_id"]: x for x in states}
         fu = fuentes(states, devices)
-        for g in _por_dispositivo(states, devices).values():
-            if not g["duenos"]:
+        propias = {}
+        for src, f in fu.items():
+            if f["dueno"]:
+                propias.setdefault(f["dueno"], []).append(src)
+        for dueno, srcs in propias.items():
+            if len(srcs) != 1:
                 continue
-            dueno = g["duenos"][0]
-            ocultos_dev.update(g["kwh"] + g["w"])
-            src = g["kwh"][0] if g["kwh"] else (g["w"][0] if g["w"] else None)
-            if src is None:
-                continue
+            src = srcs[0]
             pot = fu[src]["potencia"] or (src if fu[src]["tipo"] == "w" else None)
+            ocultos_dev.update({src, fu[src]["potencia"]} - {None})
             extra[dueno] = {"potencia_w": _potencia(by[pot]) if pot else None, "fuente_energia": src}
     for st in states:
         if st["entity_id"] in ocultos_dev:
@@ -317,6 +341,8 @@ def vista(states: list, areas: dict, prefs: dict, devices: Optional[dict] = None
             "favorito": bool(p.get("favorito")),
             "orden": p.get("orden") or 0,
         }
+        if devices is not None:
+            disp["fuente_energia"] = None
         if eid in extra:
             disp.update(extra[eid])
         if p.get("oculto"):

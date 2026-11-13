@@ -143,8 +143,8 @@ def test_devices_cleans_trailing_comma():
 
 NEVERA = [
     _st("switch.nevera", "on"),
-    _st("sensor.nevera_kwh", "12", unit_of_measurement="kWh", device_class="energy"),
-    _st("sensor.nevera_w", "86", unit_of_measurement="W"),
+    _st("sensor.nevera_kwh", "12", unit_of_measurement="kWh", device_class="energy", state_class="total_increasing"),
+    _st("sensor.nevera_w", "86", unit_of_measurement="W", state_class="measurement"),
 ]
 NEVERA_DEV = {"switch.nevera": "d1", "sensor.nevera_kwh": "d1", "sensor.nevera_w": "d1"}
 
@@ -155,8 +155,8 @@ def test_fuentes_prefers_kwh_over_w():
 
 
 def test_fuentes_w_only_and_standalone():
-    sts = [_st("switch.a"), _st("sensor.a_w", "5", unit_of_measurement="kW"),
-           _st("sensor.solo", "1", unit_of_measurement="Wh"), _st("sensor.temp", "20", unit_of_measurement="C")]
+    sts = [_st("switch.a"), _st("sensor.a_w", "5", unit_of_measurement="kW", state_class="measurement"),
+           _st("sensor.solo", "1", unit_of_measurement="Wh", state_class="total"), _st("sensor.temp", "20", unit_of_measurement="C")]
     assert C.fuentes(sts, {"switch.a": "d", "sensor.a_w": "d"}) == {
         "sensor.a_w": {"tipo": "w", "potencia": None, "dueno": "switch.a"},
         "sensor.solo": {"tipo": "kwh", "potencia": None, "dueno": None}}
@@ -165,6 +165,8 @@ def test_fuentes_w_only_and_standalone():
 def test_tipo_energia():
     assert C.tipo_energia(_st("sensor.x", unit_of_measurement="Wh")) == "kwh"
     assert C.tipo_energia(_st("sensor.x", device_class="energy")) == "kwh"
+    assert C.tipo_energia(_st("sensor.x", unit_of_measurement="MWh")) == "kwh"
+    assert C.tipo_energia(_st("sensor.x", unit_of_measurement="J", device_class="energy")) is None
     assert C.tipo_energia(_st("sensor.x", unit_of_measurement="kW")) == "w"
     assert C.tipo_energia(_st("sensor.x", unit_of_measurement="C")) is None
 
@@ -176,14 +178,14 @@ def test_filas_wh_and_kw_conversion():
     fu = {"sensor.e": {"tipo": "kwh", "potencia": None, "dueno": None},
           "sensor.p": {"tipo": "w", "potencia": None, "dueno": None}}
     un = {"sensor.e": "Wh", "sensor.p": "kW"}
-    f = {r["entity_id"]: r for r in C.filas_desde_stats(stats, fu, 2, un)}
+    f = {r["entity_id"]: r for r in C.filas_desde_stats(stats, fu, 2, un, ahora=t + 7200)}
     assert f["sensor.e"]["kwh"] == pytest.approx(1.5) and f["sensor.e"]["fuente"] == "medido"
     assert f["sensor.e"]["inicio"] == t and f["sensor.e"]["resolucion"] == 2
     assert f["sensor.p"]["kwh"] == pytest.approx(0.5) and f["sensor.p"]["fuente"] == "calculado"
     assert f["sensor.p"]["w_max"] == pytest.approx(1200)
-    day = C.filas_desde_stats({"sensor.p": [{"start": t, "mean": 100}]}, fu, 1, {})[0]
+    day = C.filas_desde_stats({"sensor.p": [{"start": t, "mean": 100}]}, fu, 1, {}, ahora=t + 2 * 86400)[0]
     assert day["kwh"] == pytest.approx(2.4)
-    five = C.filas_desde_stats({"sensor.p": [{"start": t, "mean": 1200}]}, fu, 3, {})[0]
+    five = C.filas_desde_stats({"sensor.p": [{"start": t, "mean": 1200}]}, fu, 3, {}, ahora=t + 3600)[0]
     assert five["kwh"] == pytest.approx(0.1)
 
 
@@ -191,7 +193,7 @@ def test_filas_w_max_from_power_sensor_of_kwh_source():
     fu = {"sensor.e": {"tipo": "kwh", "potencia": "sensor.p", "dueno": None}}
     stats = {"sensor.e": [{"start": 100, "change": 0.2}, {"start": 200, "change": 0.3}],
              "sensor.p": [{"start": 100, "max": 450}]}
-    r = C.filas_desde_stats(stats, fu, 2, {})
+    r = C.filas_desde_stats(stats, fu, 2, {}, ahora=1e6)
     assert [x["w_max"] for x in r] == [450, None] and all(x["entity_id"] == "sensor.e" for x in r)
 
 
@@ -200,7 +202,7 @@ def test_filas_skip_missing_values():
           "sensor.p": {"tipo": "w", "potencia": None, "dueno": None}}
     stats = {"sensor.e": [{"start": 1, "change": None}, {"start": 2}, {"start": "basura", "change": 1}],
              "sensor.p": [{"start": 1, "max": 5}, {"start": 2, "mean": None}]}
-    assert C.filas_desde_stats(stats, fu, 1, {}) == []
+    assert C.filas_desde_stats(stats, fu, 1, {}, ahora=1e6) == []
 
 
 def test_vista_merges_power_into_owner():
@@ -210,3 +212,38 @@ def test_vista_merges_power_into_owner():
     assert filas[0]["potencia_w"] == 86 and filas[0]["fuente_energia"] == "sensor.nevera_kwh"
     sin = C.vista(NEVERA, {}, {})
     assert "sensor.nevera_w" in [d["entity_id"] for a in sin["areas"] for d in a["dispositivos"]]
+
+
+def test_fuentes_two_channel_plug_keeps_all_channels():
+    sts = [_st("switch.c1"), _st("switch.c2")]
+    dev = {"switch.c1": "d", "switch.c2": "d"}
+    for i in (1, 2):
+        sts += [_st(f"sensor.k{i}", "1", unit_of_measurement="kWh", state_class="total_increasing"),
+                _st(f"sensor.w{i}", "5", unit_of_measurement="W", state_class="measurement")]
+        dev.update({f"sensor.k{i}": "d", f"sensor.w{i}": "d"})
+    assert C.fuentes(sts, dev) == {k: {"tipo": "kwh", "potencia": None, "dueno": None} for k in ("sensor.k1", "sensor.k2")}
+    v = C.vista(sts, {}, {}, devices=dev)
+    ids = {d["entity_id"] for a in v["areas"] for d in a["dispositivos"]}
+    assert {"sensor.w1", "sensor.w2", "switch.c1", "switch.c2"} <= ids
+    assert all("fuente_energia" in d and d["fuente_energia"] is None for a in v["areas"] for d in a["dispositivos"])
+
+
+def test_kwh_without_state_class_is_not_source():
+    sts = [_st("sensor.x", "1", unit_of_measurement="kWh"), _st("sensor.y", "1", unit_of_measurement="W")]
+    assert C.fuentes(sts, {}) == {}
+
+
+def test_filas_partial_period_uses_completed_hours():
+    fu = {"sensor.p": {"tipo": "w", "potencia": None, "dueno": None}}
+    t = datetime(2026, 11, 13, 5, tzinfo=timezone.utc).timestamp()
+    st = {"sensor.p": [{"start": t, "end": t + 86400, "mean": 100}]}
+    r = C.filas_desde_stats(st, fu, 1, {}, ahora=t + 5400)
+    assert r[0]["kwh"] == pytest.approx(0.1)
+    assert C.filas_desde_stats(st, fu, 1, {}, ahora=t + 3599) == []
+    assert C.filas_desde_stats(st, fu, 1, {}, ahora=t + 86400 * 3)[0]["kwh"] == pytest.approx(2.4)
+
+
+def test_filas_mwh():
+    fu = {"sensor.e": {"tipo": "kwh", "potencia": None, "dueno": None}}
+    r = C.filas_desde_stats({"sensor.e": [{"start": 1, "change": 0.002}]}, fu, 1, {"sensor.e": "MWh"}, ahora=1e6)
+    assert r[0]["kwh"] == pytest.approx(2.0)

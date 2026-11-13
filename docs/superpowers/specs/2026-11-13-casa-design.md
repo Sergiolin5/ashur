@@ -201,3 +201,13 @@ Orden: Sergio sugirió dispositivos → cámaras → eventos → energía. Claud
 - Marca y modelo de las cámaras, y si exponen RTSP/ONVIF.
 - Si existe un medidor de tablero en Bogotá.
 - Crear el token de larga duración en Home Assistant.
+
+## 10. Adenda (2026-11-13, tras la etapa 2)
+
+- **Cámaras reales:** todas son VTA+ (Primus), integradas en Home Assistant por **ONVIF**, así que hay RTSP local. **No publican eventos de movimiento** a Home Assistant (no hay sensor binario).
+- **Detección de movimiento (decisión de Sergio, reemplaza «detectar movimiento en el servidor queda fuera» de §5.1):** **A con tope y B de respaldo.**
+  - **A:** el servidor detecta en el momento comparando cuadros del stream de baja resolución, a unos 2 cuadros por segundo.
+  - **Medición previa:** la etapa 4 mide RAM y CPU antes de activarla en todas las cámaras.
+  - **B:** las cámaras que no quepan pasan al Ryzen 9, que detecta después sobre el anillo 24/7 cuando está prendido.
+- **Claves de las cámaras (decisión de Sergio):** van en un archivo del servidor que él edita con Archivos de ZimaOS, `/DATA/AppData/ashur/camaras/go2rtc.yaml`. **Nunca** van en la base de Ashur ni en una respuesta de la API.
+- **Niveles de energía acumulativos** (etapa 2): 2 = día + hora; 3 = día + hora + 5 min.

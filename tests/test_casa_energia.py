@@ -818,3 +818,24 @@ def test_energia_upsert_chunks(tmp_path):
         db.energia_upsert(c, [_fila("sensor.c", 0.0, 1, 1.0), _fila("sensor.c", 1.0, 9, 1.0)])
     db.casa_nivel_set(c, 2)                                                 # the failed chunk is not committed later
     assert db.energia_serie(c, ["sensor.c"], 1, 0, 10) == {}
+
+
+def test_ahora_skips_a_w_channel_hidden_on_its_own():
+    sts = [_st("sensor.k1", "1", unit_of_measurement="kWh", state_class="total_increasing"),
+           _st("sensor.w1", "100", unit_of_measurement="W", state_class="measurement"),
+           _st("sensor.w2", "200", unit_of_measurement="W", state_class="measurement")]
+    fu = C.fuentes(sts, {"sensor.k1": "d", "sensor.w1": "d", "sensor.w2": "d"})
+    oc = frozenset({"sensor.w1"})
+    assert C.ahora_w(sts, fu, None, set()) == 300.0
+    assert C.ahora_w(sts, fu, None, set(), oc) == 200.0                   # the hidden W leaves «Ahora»
+    assert C.ahora_w(sts, fu, "sensor.k1", set(), oc) == 200.0            # tablero mode: one of its W hidden
+    assert C.ahora_w(sts, fu, "sensor.k1", set(), frozenset({"sensor.w1", "sensor.w2"})) is None
+
+
+def test_ahora_endpoint_hides_a_w_channel(en):
+    c, clock, fake, app = en
+    _enchufe_doble(fake)
+    assert c.get("/api/casa", headers=A).json()["energia"]["ahora_w"] == 86 + 40 + 300.0
+    app.state.db.casa_disp_set(1, "sensor.p_w1", oculto=1)
+    clock.now += 4
+    assert c.get("/api/casa", headers=A).json()["energia"]["ahora_w"] == 86 + 40 + 200.0

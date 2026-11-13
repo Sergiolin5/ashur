@@ -1867,7 +1867,7 @@ def create_app(
         fu = casa_fuentes(e, states, devices)
         fuera = casa_mod.ocultas(fu, disps)
         dia = db.energia_dia(cid, sorted(set(fu) | ({tab} if tab else set())), casa_mod.inicio_dia(clock(), casa_tz(row)))
-        return {"ahora_w": casa_mod.ahora_w(states, fu, tab, fuera), "hoy_kwh": casa_mod.hoy_kwh(dia, fu, tab, fuera),
+        return {"ahora_w": casa_mod.ahora_w(states, fu, tab, fuera, frozenset(k for k, d in disps.items() if (d or {}).get("oculto"))), "hoy_kwh": casa_mod.hoy_kwh(dia, fu, tab, fuera),
                 "total": "tablero" if tab else "suma", "estadisticas": e["en_estado"]}
 
     def energia_client(row: dict, e: dict) -> HAClient:

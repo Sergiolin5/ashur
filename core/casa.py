@@ -418,17 +418,21 @@ def ocultas(fu: dict, disps: dict) -> set:
     return {eid for eid, f in fu.items() if oc(eid) or (f.get("dueno") and oc(f["dueno"]))}
 
 
-def _ws(fu: dict, src: str) -> list:
-    """The power sensors behind a source: itself (W), its paired W, or its device's unpaired W channels."""
+def _ws(fu: dict, src: str, w_ocultos: frozenset = frozenset()) -> list:
+    """The power sensors behind a source: itself (W), its paired W, or its device's unpaired W channels
+    (minus any W channel Sergio hid on its own)."""
     f = fu[src]
     if f["tipo"] == "w":
-        return [src]
-    return [f["potencia"]] if f.get("potencia") else list(f.get("w_sueltos") or [])
+        ws = [src]
+    else:
+        ws = [f["potencia"]] if f.get("potencia") else list(f.get("w_sueltos") or [])
+    return [w for w in ws if w not in w_ocultos]
 
 
-def ahora_w(states: list, fu: dict, tablero: Optional[str], fuera: set) -> Optional[float]:
+def ahora_w(states: list, fu: dict, tablero: Optional[str], fuera: set, w_ocultos: frozenset = frozenset()) -> Optional[float]:
     """The panel meter's power now (a kWh meter: the W sensors of its own device), or the sum of every power
-    sensor behind a counted source, each once (W sources, paired W, and the unpaired W of multi-channel devices)."""
+    sensor behind a counted source, each once (W sources, paired W, and the unpaired W of multi-channel devices).
+    A W entity hidden on its own (w_ocultos) never counts."""
     by = {s["entity_id"]: s for s in states}
 
     def suma(ids):
@@ -436,11 +440,11 @@ def ahora_w(states: list, fu: dict, tablero: Optional[str], fuera: set) -> Optio
         return round(sum(vals), 3) if vals else None
 
     if tablero:
-        return suma(_ws(fu, tablero)) if tablero in fu else None
+        return suma(_ws(fu, tablero, w_ocultos)) if tablero in fu else None
     ids = []
     for s in fu:
         if s not in fuera:
-            ids += [w for w in _ws(fu, s) if w not in ids]
+            ids += [w for w in _ws(fu, s, w_ocultos) if w not in ids]
     return suma(ids)
 
 

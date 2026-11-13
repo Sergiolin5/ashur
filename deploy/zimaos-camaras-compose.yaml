@@ -1,0 +1,22 @@
+# Ashur cameras (go2rtc) for ZimaOS: App Store -> "+" -> Install a customized app -> Import.
+# Before importing, create /DATA/AppData/ashur/camaras/go2rtc.yaml from
+# deploy/camaras/go2rtc.example.yaml (use the ZimaOS Files app). The camera user/password
+# live ONLY in that file on the server; never commit it.
+# go2rtc turns each camera into one connection that Ashur (video) and Home Assistant (optional) share.
+name: ashur-camaras
+services:
+  ashur-camaras:
+    image: alexxit/go2rtc:latest
+    container_name: ashur-camaras
+    restart: unless-stopped
+    # host network: WebRTC needs UDP/TCP 8555 reachable on the tailnet and must see the
+    # cameras' LAN. The API (1984) and RTSP (8554) are bound to 127.0.0.1 by the config file,
+    # so only the core on this same server can reach them.
+    network_mode: host
+    volumes:
+      # go2rtc reads /config/go2rtc.yaml
+      - /DATA/AppData/ashur/camaras:/config
+    deploy:
+      resources:
+        limits:
+          memory: 256M

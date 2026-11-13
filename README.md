@@ -100,6 +100,27 @@ to 127.0.0.1 and only opens the panel and its /api: no node enrollment, no tasks
 docs. Ten wrong admin keys in ten minutes lock it for fifteen. Publish it with
 Tailscale Funnel on the server: `tailscale funnel --bg 8712`.
 
+## Cámaras
+
+`deploy/zimaos-camaras-compose.yaml` levanta `ashur-camaras`, un contenedor
+[go2rtc](https://github.com/AlexxIT/go2rtc) que se conecta una sola vez a cada cámara
+(VTA+ Primus, por ONVIF) y la reparte: el core de Ashur le pide fotos, HLS y WebRTC por
+`127.0.0.1:1984`, y Home Assistant puede leer de su relay RTSP. La clave de las cámaras vive
+solo en `/DATA/AppData/ashur/camaras/go2rtc.yaml` en el servidor; nada con claves se sube a git.
+
+1. Crear `/DATA/AppData/ashur/camaras/go2rtc.yaml` desde `deploy/camaras/go2rtc.example.yaml`, con el usuario, la clave, la IP y el puerto ONVIF de cada cámara (los mismos de Home Assistant) y la IP de la tailnet del servidor en `webrtc.candidates`.
+2. Importar `deploy/zimaos-camaras-compose.yaml` en ZimaOS como app personalizada.
+3. «Actualizar» Ashur y, desde la tailnet, abrir Casa y ver las miniaturas; tocar una para ver el video en vivo.
+4. Desde fuera de la tailnet, comprobar que pide el código TOTP.
+5. Opcional, para no pasar el límite de conexiones de las cámaras: en Home Assistant, cambiar cada cámara para que lea `rtsp://127.0.0.1:8554/<nombre>` del relay.
+
+Sintaxis verificada en la documentación oficial de go2rtc:
+
+- `onvif://usuario:clave@ip[:puerto]` ([internal/onvif](https://github.com/AlexxIT/go2rtc/blob/master/internal/onvif/README.md)). El README solo muestra esa forma. Que `?subtype=N` elige el perfil (0 = primero, 1 = segundo) y que la URL RTSP se pide a la cámara salen del código ([pkg/onvif/client.go](https://github.com/AlexxIT/go2rtc/blob/master/pkg/onvif/client.go)), no de la documentación. Con VTA+ Primus no está probado cuál perfil es el secundario.
+- `webrtc.candidates: [IP:8555]` ([internal/webrtc](https://github.com/AlexxIT/go2rtc/blob/master/internal/webrtc/README.md)); no existe una opción «announce» aparte, se anuncia listando la IP como candidato.
+- API ([openapi](https://github.com/AlexxIT/go2rtc/blob/master/website/api/openapi.yaml)): `GET /api/frame.jpeg?src=<nombre>` (opcionales `width`/`w`, `height`/`h`, `rotate`); `GET /api/stream.m3u8?src=<nombre>` (HLS/TS; `&mp4` para fMP4, ver [HLS](https://github.com/AlexxIT/go2rtc/blob/master/internal/hls/README.md)); `POST /api/webrtc?src=<nombre>` con la oferta SDP (`Content-Type: application/sdp` o JSON `{type, sdp}`) y responde la respuesta SDP.
+- No verificado: que las cámaras VTA+ Primus anuncien un perfil ONVIF utilizable por go2rtc, y la compatibilidad con `alexxit/go2rtc:latest` de lo anterior (la documentación consultada corresponde a go2rtc 1.9.x, la rama master).
+
 ## Debugging on ZimaOS
 
 The app log shows one line when the core is ready, or `NO ARRANCA:` with the reason

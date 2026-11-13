@@ -1,0 +1,18 @@
+# Copy to /DATA/AppData/ashur/camaras/go2rtc.yaml on the server and fill in the placeholders.
+# Real credentials go ONLY in that copy, never in this file or in git.
+api:
+  listen: "127.0.0.1:1984"      # solo el core lo ve
+rtsp:
+  listen: "127.0.0.1:8554"      # Home Assistant puede leer de aquí en vez de la cámara
+webrtc:
+  listen: ":8555"               # la tailnet llega aquí para el video en vivo
+  candidates:
+    # IP de la tailnet del servidor (la de `tailscale ip -4`), para que el navegador
+    # remoto sepa a dónde mandar el video. Sin esto go2rtc solo anuncia IPs de la LAN.
+    - IP_TAILNET_DEL_SERVIDOR:8555
+streams:
+  # nombre: una línea por cámara. Usa letras minúsculas, números y guiones.
+  # onvif:// pregunta a la cámara por su perfil RTSP. Por defecto toma el primero (subtype=0,
+  # normalmente la calidad alta); si va pesado, prueba ?subtype=1 (suele ser el secundario).
+  sala: onvif://USUARIO:CLAVE@192.168.1.50:PUERTO_ONVIF
+  # sala-baja: onvif://USUARIO:CLAVE@192.168.1.50:PUERTO_ONVIF?subtype=1

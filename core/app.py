@@ -3358,7 +3358,8 @@ def create_app(
     def health(request: Request):
         """Proves the core is up and says which door the request came through."""
         door = "public" if on_public_port(request.scope) else "tailnet"
-        return {"ok": True, "service": "ashur-core", "version": app.version, "door": door}
+        return {"ok": True, "service": "ashur-core", "version": app.version, "door": door,
+                "channel": os.environ.get("ASHUR_CHANNEL", "")}       # "experimental" on branch images
 
     @app.get("/status", dependencies=[Depends(require_admin)])
     def status():

@@ -14,6 +14,9 @@ COPY requirements-node.txt requirements-voice.txt ./
 # installers the core serves on the tailnet (the repo can be private)
 COPY deploy/install_windows.ps1 deploy/install_mac.sh ./deploy/
 ENV ASHUR_DB=/data/ashur.db
+# "experimental" on images built from experimento/* branches; empty on main. The panel shows a badge for it.
+ARG ASHUR_CHANNEL=
+ENV ASHUR_CHANNEL=$ASHUR_CHANNEL
 VOLUME /data
 # 8000: tailnet door (nodes, admin). 8001: public door for Tailscale Funnel (panel only).
 EXPOSE 8000 8001

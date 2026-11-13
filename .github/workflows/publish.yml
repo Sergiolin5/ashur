@@ -34,6 +34,7 @@ jobs:
           context: .
           file: deploy/core.Dockerfile
           platforms: linux/amd64
+          build-args: ASHUR_CHANNEL=${{ github.ref != 'refs/heads/main' && 'experimental' || '' }}
           push: true
           tags: |
             ${{ github.ref == 'refs/heads/main' && 'ghcr.io/sergiolin5/ashur-core:latest' || 'ghcr.io/sergiolin5/ashur-core:experimental' }}

@@ -1629,3 +1629,10 @@ def test_panel_has_casa_tab(env):
     c, _ = env
     html = c.get("/").text
     assert 'id="tab-casa"' in html and 'id="casa"' in html
+
+
+def test_health_names_the_build_channel(env, monkeypatch):
+    c, _ = env
+    assert c.get("/health").json()["channel"] == ""
+    monkeypatch.setenv("ASHUR_CHANNEL", "experimental")
+    assert c.get("/health").json()["channel"] == "experimental"

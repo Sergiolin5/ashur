@@ -1,4 +1,4 @@
-"""Cámaras (0.59.0): a thin client of the local go2rtc and the pure functions behind the core's camera proxy.
+"""Cámaras (0.60.0): a thin client of the local go2rtc and the pure functions behind the core's camera proxy.
 
 go2rtc's own API has no key and its /api/streams lists every source URL with the camera's user and password,
 so nothing from go2rtc reaches a caller as is: the list keeps only names and whether a stream is live, errors

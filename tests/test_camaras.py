@@ -1,4 +1,4 @@
-"""Cámaras (0.59.0): the core's proxy to go2rtc and its short video sessions, against a fake go2rtc."""
+"""Cámaras (0.60.0): the core's proxy to go2rtc and its short video sessions, against a fake go2rtc."""
 import json
 
 import httpx
@@ -331,7 +331,7 @@ def test_go2rtc_caido(tmp_path):
 
 def test_version(tmp_path):
     app, tail, pub, clock, fake = _app(tmp_path)
-    assert app.version == "0.59.0"
+    assert app.version == "0.60.0"
 
 
 # ---- fixes after security review ----

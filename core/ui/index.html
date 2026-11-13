@@ -7,43 +7,46 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ashur">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="theme-color" content="#F6F7F9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0B0C0E" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F3F3FB" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#12113A" media="(prefers-color-scheme: dark)">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <title>Ashur</title>
 <style>
   /* ---- tokens: the only place colour, type, space, radius and motion are set ----
-     G «consola»: graphite and signal orange in the dark, paper and terracotta in the light, monospaced figures.
+     «Nocturno»: ink indigo at night, cool paper by day; the app icon's indigo (#5856D6) is the brand.
+     SF Pro Rounded for words, monospaced only for figures you compare and commands you copy.
      Old names (--bg, --row, --label, --secondary, --tint, --field, --separator, --green…) are kept:
      the script and a few inline styles read them. */
   :root {
     color-scheme: light dark;
-    --bg: #F4EFE6;          /* ground */
-    --row: #FBF8F2;         /* surface */
-    --field: #EDE6DA;       /* inputs, quiet buttons, tracks */
-    --border: #E2D9CA;      /* surface edges */
-    --separator: #E2D9CA;   /* row rules */
-    --control: #C9BEAC;     /* control outlines */
-    --label: #1F1B16;       /* text */
-    --secondary: #645B50;   /* muted text */
-    --tint: #8A3A1E;        /* the one accent: data, selection, send, links */
-    --tint-soft: #F1E2D8;
+    --brand: #5856D6;
+    --bg: #F3F3FB;          /* ground */
+    --row: #FFFFFF;         /* surface */
+    --field: #E9E9F6;       /* inputs, quiet buttons, tracks */
+    --border: #DCDCEE;      /* surface edges */
+    --separator: #E6E6F3;   /* row rules */
+    --control: #B9B8DA;     /* control outlines */
+    --label: #16154A;       /* text */
+    --secondary: #5D5C8A;   /* muted text */
+    --tint: #4F4DC8;        /* the accent: data, selection, send, links */
+    --tint-soft: #E6E5FB;
     --on-tint: #FFFFFF;
-    --primary: #1F1B16;     /* filled buttons */
-    --on-primary: #FBF8F2;
-    --green: #4F6B3A; --amber: #7A5300; --red: #A0342E; --gray: #8B8378;
-    --bar: #1F1B16;         /* neutral gauge fill */
-    --seg-on: #FBF8F2;
-    --shadow-float: 0 8px 24px rgba(31, 27, 22, .14), 0 1px 3px rgba(31, 27, 22, .08);
+    --primary: #5856D6;     /* filled buttons */
+    --on-primary: #FFFFFF;
+    --green: #1E8E5A; --amber: #9A6400; --red: #D12C4C; --gray: #8E8DB0;
+    --bar: #5856D6;         /* gauge fill */
+    --seg-on: #FFFFFF;
+    --glow: rgba(88, 86, 214, .22);
+    --shadow-float: 0 10px 30px rgba(22, 21, 74, .16), 0 1px 3px rgba(22, 21, 74, .08);
 
-    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    --font: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-    --fs-meta: 13px; --fs-small: 14px; --fs-body: 16px; --fs-lead: 17px; --fs-title: 22px; --fs-h1: 17px;
+    --fs-meta: 13px; --fs-small: 14px; --fs-body: 16px; --fs-lead: 17px; --fs-title: 22px; --fs-h1: 22px;
 
     --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px;
     --pad: 14px; --gap: 24px;
-    --r-card: 10px; --r-control: 8px; --r-bubble: 14px; --r-pill: 999px;
+    --r-card: 16px; --r-control: 12px; --r-bubble: 18px; --r-pill: 999px;
     --tabbar: 56px;
 
     --ease: cubic-bezier(.2, .7, .3, 1); --dur: .15s;
@@ -51,14 +54,15 @@
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #141210; --row: #1D1A17; --field: #26221E; --border: #332E28; --separator: #2B2723; --control: #4A433B;
-      --label: #E9E4D8; --secondary: #A39C92;
-      --tint: #FF8A3D; --tint-soft: #3A2416; --on-tint: #141210;
-      --primary: #E9E4D8; --on-primary: #141210;
-      --green: #7BD389; --amber: #F0B74A; --red: #FF6B5E; --gray: #6F685F;
-      --bar: #E9E4D8;
-      --seg-on: #26221E;
-      --shadow-float: 0 8px 24px rgba(0, 0, 0, .5);
+      --bg: #12113A; --row: #1B1A4C; --field: #25245E; --border: #2E2C6C; --separator: #2A2864; --control: #4A48A0;
+      --label: #EEEDFF; --secondary: #A9A7DA;
+      --tint: #9C9AFF; --tint-soft: #2C2A72; --on-tint: #12113A;
+      --primary: #5856D6; --on-primary: #FFFFFF;
+      --green: #5FE3A1; --amber: #FFC860; --red: #FF5C7A; --gray: #6E6CA8;
+      --bar: #9C9AFF;
+      --seg-on: #2E2C6C;
+      --glow: rgba(124, 122, 255, .38);
+      --shadow-float: 0 12px 32px rgba(5, 4, 30, .6);
     }
   }
   @media (min-width: 600px) { :root { --pad: 18px; } }
@@ -71,16 +75,19 @@
          padding: max(var(--s2), env(safe-area-inset-top)) var(--pad) calc(var(--tabbar) + 40px + env(safe-area-inset-bottom)); }
   /* header: the wordmark, the core's line, the note button */
   header { position: relative; padding: var(--s3) 56px var(--s3) 0; border-bottom: 1px solid var(--border); }
-  h1 { margin: 0; font: 600 var(--fs-h1)/1.3 var(--mono); letter-spacing: 0; }
-  h1::after { content: "_"; color: var(--tint); }
+  h1 { margin: 0; font: 800 var(--fs-h1)/1.2 var(--font); letter-spacing: -.01em; }
+  /* an image built from an experimento/* branch says so everywhere: stripe on top, badge by the name */
+  body.exp { border-top: 5px solid var(--red); }
+  .chan { display: inline-block; vertical-align: middle; margin-left: 10px; padding: 4px 8px; border-radius: var(--r-pill);
+    background: var(--red); color: var(--row); font: 700 11px/1 var(--font); letter-spacing: .08em; }
   .greet { margin-top: 2px; color: var(--secondary); font-size: var(--fs-small); }
-  .subtitle { margin-top: 2px; color: var(--secondary); font: var(--fs-meta)/1.4 var(--mono); }
+  .subtitle { margin-top: 2px; color: var(--secondary); font: var(--fs-meta)/1.4 var(--font); font-variant-numeric: tabular-nums; }
   .subtitle .live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 0; }
   .subtitle.stale .live { background: var(--amber); }      /* a lost connection is not an emergency */
   .subtitle.locked .live { background: var(--gray); }
 
   section { margin-top: var(--s8); }
-  h2 { margin: 0 0 10px; font: 600 var(--fs-meta)/1.3 var(--mono); color: var(--secondary); letter-spacing: 0; }
+  h2 { margin: 0 0 10px; font: 700 var(--fs-small)/1.3 var(--font); color: var(--secondary); letter-spacing: 0; }
   :focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
   [hidden] { display: none !important; }
 
@@ -91,7 +98,7 @@
   .row .main { flex: 1; min-width: 0; }
   .row .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row .detail { color: var(--secondary); font-size: var(--fs-small); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .row .value { color: var(--secondary); font: var(--fs-meta) var(--mono); white-space: nowrap; }
+  .row .value { color: var(--secondary); font: 500 var(--fs-small) var(--font); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--gray); }
   .dot.full { background: var(--green); }
   .dot.light { background: var(--amber); }
@@ -103,6 +110,7 @@
 
   /* ---- controls ---- */
   input, textarea, select { font: inherit; font-size: var(--fs-body); color: var(--label); }
+  ::placeholder { color: var(--secondary); opacity: .75; }
   input { width: 100%; background: var(--field); border: 1px solid transparent; border-radius: var(--r-control); padding: 11px 12px;
           transition: border-color var(--dur) var(--ease); }
   input:focus, textarea:focus, select:focus { border-color: var(--tint); }
@@ -120,10 +128,66 @@
   .link:hover { opacity: 1; background: var(--field); }
   .forget { flex: none; width: auto; margin: 0; padding: 6px 10px; border-radius: 6px; font-size: var(--fs-small); font-weight: 500; background: var(--field); color: var(--red); }
   .signin { padding: var(--pad); }
+  /* demo: what a visitor sees before the key; every number on it is invented and says so */
+  .demo { margin-top: var(--s4); }
+  .demo .tag { display: inline-block; font: 600 var(--fs-meta)/1 var(--font); color: var(--tint);
+    background: var(--tint-soft); border-radius: var(--r-pill); padding: 5px 9px; }
+  .demo h2.lead { margin: 14px 0 6px; font: 700 28px/1.12 var(--font); letter-spacing: -.02em; color: var(--label); text-transform: none; }
+  .demo .proof .detail { white-space: normal; }
+  .demo p.sub { margin: 0 0 var(--s4); color: var(--secondary); font-size: var(--fs-lead); line-height: 1.4; }
+  .demo .proof { margin-top: var(--s3); }
+  .demo .cta { margin-top: var(--s4); }
+  .demo .fine { margin-top: var(--s2); text-align: center; }
+  /* presence: one ring per device, lit while it adds its power; the only thing on the page that moves by itself */
+  .presence { display: flex; align-items: center; gap: var(--s5); margin: var(--s5) 0 var(--s6); }
+  .orb { flex: none; width: 112px; height: 112px; border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, var(--glow) 0%, transparent 68%); }
+  .orb svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .orb .core { fill: var(--brand); }
+  .orb circle.ring { fill: none; stroke: var(--control); stroke-width: 2; stroke-dasharray: 3 5; opacity: .8; transition: stroke var(--dur) var(--ease), opacity .6s var(--ease); }
+  .orb circle.ring.on { stroke: var(--tint); stroke-dasharray: none; opacity: 1; animation: breathe 6s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .orb circle.ring.on { animation: none; } }
+  .pres-g { font: 800 26px/1.15 var(--font); letter-spacing: -.015em; color: var(--label); }
+  .pres-d { margin-top: 6px; color: var(--secondary); font-size: var(--fs-small); line-height: 1.4; }
+  @media (max-width: 380px) { .orb { width: 88px; height: 88px; } .pres-g { font-size: 22px; } }
+  /* the hook: how much of what you own exists only once */
+  .hook { display: block; width: 100%; margin: 0 0 var(--s4); padding: var(--s4) var(--pad); text-align: left; border-radius: var(--r-card);
+    background: var(--row); border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border)); color: var(--label); font-weight: 400; }
+  .hook:hover { opacity: 1; background: var(--field); }
+  .hook .hk { color: var(--secondary); font-size: var(--fs-meta); }
+  .hook .hv { margin: 4px 0; font: 800 40px/1.05 var(--font); color: var(--red); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .hook .hd { font-size: var(--fs-small); color: var(--label); }
+  .hook .hgo { margin-top: var(--s2); color: var(--tint); font-weight: 600; font-size: var(--fs-small); }
+  .hook.demo-hook { margin: 0; }
+  /* one inbox: everything waiting for your approval */
+  .inbox-pill { width: auto; margin: 6px 0 0; padding: 6px 12px; min-height: 0; border-radius: var(--r-pill); background: var(--tint); color: var(--on-tint);
+    font-size: var(--fs-meta); font-weight: 600; }
+  /* chat: what you can ask, when the thread is empty */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: var(--s3) 0; }
+  .chips button { width: auto; margin: 0; padding: 9px 13px; border-radius: var(--r-pill); background: var(--row); color: var(--label);
+    border: 1px solid var(--border); font-weight: 500; font-size: var(--fs-small); text-align: left; }
+  .chips button:hover { opacity: 1; border-color: var(--tint); color: var(--tint); }
+  /* Ajustes in groups */
+  .menu-h { margin: var(--s5) 2px 6px; }
+  .menus .menu { margin-top: 0; }
+  /* connect a device, step by step */
+  .steps { counter-reset: st; }
+  .step { display: flex; gap: var(--s3); padding: var(--s3) var(--pad); }
+  .step + .step { border-top: 1px solid var(--separator); }
+  .step::before { counter-increment: st; content: counter(st); flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--tint-soft); color: var(--tint); font: 600 13px/1 var(--mono); }
+  .step.ok::before { content: "✓"; background: var(--green); color: var(--row); }
+  .step .sb { flex: 1; min-width: 0; }
+  .step .st { font-weight: 600; }
+  .step .sd { color: var(--secondary); font-size: var(--fs-small); margin-top: 2px; }
+  .ospick { display: flex; gap: 8px; margin-top: var(--s2); }
+  .ospick button { margin: 0; }
+  .ospick button[aria-pressed="false"] { background: var(--field); color: var(--label); }
   .signin p { margin: 0 0 var(--s3); color: var(--secondary); font-size: var(--fs-small); }
   .signin form > input + input, .signin form > input + datalist + input { margin-top: var(--s2); }
   .codebox { display: block; margin: var(--s3) var(--pad) 0; width: calc(100% - 2 * var(--pad)); text-align: center; letter-spacing: .4em;
-             font: var(--fs-title) var(--mono); }
+             font: var(--fs-title) var(--font); }
   input[type=file] { font-size: var(--fs-small); color: var(--secondary); background: none; padding: 0; }
   input[type=file]::file-selector-button { font: inherit; font-weight: 600; color: var(--label); border: 1px solid var(--border); border-radius: var(--r-control);
                                            padding: 8px 14px; margin-right: 10px; background: var(--field); }
@@ -150,7 +214,7 @@
          padding: 0 0 env(safe-area-inset-bottom); background: var(--row); border-top: 1px solid var(--border); }
   .seg button { flex: 1; max-width: 140px; margin: 0; height: var(--tabbar); padding: 0; border-radius: 0; background: none; color: var(--secondary);
                 display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-                font: 500 12px var(--mono); border-top: 2px solid transparent; }
+                font: 500 12px var(--font); border-top: 2px solid transparent; }
   .seg button:hover { opacity: 1; color: var(--label); }
   .seg button[aria-selected="true"] { color: var(--label); border-top-color: var(--tint); }
   .seg button[aria-selected="true"] .ti { color: var(--tint); }
@@ -186,9 +250,9 @@
   #devices .dev + .dev { border-top: 1px solid var(--separator); }
   .dev-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 12px; padding: 14px var(--pad); }
   .c-name { grid-column: 1 / 4; min-width: 0; }
-  .dev-name { font: 600 var(--fs-body) var(--mono); }
+  .dev-name { font: 600 var(--fs-body) var(--font); }
   .dev-sub { display: block; margin-top: 1px; color: var(--secondary); font-size: var(--fs-meta); overflow: hidden; text-overflow: ellipsis; }
-  .c-seen { grid-column: 4; grid-row: 1; text-align: right; color: var(--secondary); font: var(--fs-meta) var(--mono); white-space: nowrap; }
+  .c-seen { grid-column: 4; grid-row: 1; text-align: right; color: var(--secondary); font: var(--fs-meta) var(--font); white-space: nowrap; }
   .c-state { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; font-size: var(--fs-small); font-weight: 600; color: var(--secondary); }
   .c-state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--gray); flex: none; }
   .c-state.full { color: var(--green); } .c-state.full::before { background: var(--green); }
@@ -203,7 +267,7 @@
   .c-m.hot i::after { background: var(--red); opacity: 1; }
   .c-m.na .mv { color: var(--secondary); }
   .dev.offline .c-m { display: none; }
-  .c-inv { grid-column: 1 / -1; color: var(--secondary); font: var(--fs-meta) var(--mono); }
+  .c-inv { grid-column: 1 / -1; color: var(--secondary); font: var(--fs-meta) var(--font); }
   .c-inv::before { content: "Inventario  "; }
   .c-inv small { font: inherit; }
   .c-inv small::before { content: " · "; }
@@ -242,7 +306,7 @@
   .page-head { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s5); }
   .page-head .back { width: auto; margin: 0; padding: 6px 12px; min-height: 36px; border-radius: var(--r-control); color: var(--tint); background: var(--row);
                      border: 1px solid var(--border); font-size: var(--fs-small); font-weight: 500; }
-  .page-title { font: 600 var(--fs-lead) var(--mono); }
+  .page-title { font: 600 var(--fs-lead) var(--font); }
   .page section:first-of-type { margin-top: var(--s5); }
   .signout { margin-top: var(--s8); }
   #signout-row { margin-top: 48px; }
@@ -298,21 +362,21 @@
   #diary { padding-top: var(--s4); }
   .qcard { margin: 6px 0 var(--s3); padding: var(--s4) var(--pad); border-radius: var(--r-card); background: var(--row); border: 1px solid var(--border);
            font-size: var(--fs-lead); line-height: 1.4; }
-  .qcard small { display: block; color: var(--secondary); font: var(--fs-meta) var(--mono); margin-bottom: var(--s1); }
+  .qcard small { display: block; color: var(--secondary); font: var(--fs-meta) var(--font); margin-bottom: var(--s1); }
   #diary textarea#d-text { width: 100%; min-height: 150px; resize: vertical; border-radius: var(--r-card); padding: 14px var(--pad);
                            background: var(--row); border: 1px solid var(--border); color: inherit; line-height: 1.45; }
   .dbar { display: flex; align-items: center; gap: var(--s3); margin: 10px 2px var(--s1); }
-  .dbar .grow { flex: 1; color: var(--secondary); font: var(--fs-meta) var(--mono); }
+  .dbar .grow { flex: 1; color: var(--secondary); font: var(--fs-meta) var(--font); }
   #diary .row button, #diary .dbar button { width: auto; flex: none; margin: 0; padding: 9px 18px; }
   #diary .row select { flex: none; }
   #diary .row .detail, #diary .row .title { white-space: normal; }
   .entry { padding: var(--s3) var(--pad); }
-  .entry .when { color: var(--secondary); font: var(--fs-meta) var(--mono); margin-bottom: 3px; }
+  .entry .when { color: var(--secondary); font: var(--fs-meta) var(--font); margin-bottom: 3px; }
   .entry .txt { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
   .entry .del { float: right; font-size: var(--fs-meta); padding: 0 0 0 var(--s3); }
   .entry .del.sure { color: var(--red); }
   .entry + .entry { border-top: 1px solid var(--separator); }
-  .dayhead { margin: 14px 2px 6px; color: var(--secondary); font: var(--fs-meta) var(--mono); }
+  .dayhead { margin: 14px 2px 6px; color: var(--secondary); font: var(--fs-meta) var(--font); }
 
   /* ---- chat ---- */
   #chat { padding-bottom: calc(var(--composer-h, 120px) + 28px); }      /* the writing area is measured, not guessed */
@@ -322,7 +386,7 @@
   .bubble.ashur { align-self: flex-start; background: var(--row); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
   .bubble.note { align-self: center; background: none; border: 0; color: var(--secondary); font-size: var(--fs-meta); text-align: center; padding: var(--s1) var(--s2); }
   .bubble.note.bad { color: var(--red); }
-  .day { align-self: center; color: var(--secondary); font: 12px var(--mono); margin: 10px 0 2px; }
+  .day { align-self: center; color: var(--secondary); font: 12px var(--font); margin: 10px 0 2px; }
   .typing { display: inline-flex; gap: 4px; }
   .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--secondary); opacity: .35; animation: blink 1.2s infinite; }
   .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
@@ -343,7 +407,7 @@
   .composer .send svg, .composer .mic svg { width: 18px; height: 18px; }
   .rec { animation: recpulse 1.4s ease-out infinite; background: var(--red) !important; color: #fff !important; }
   @keyframes recpulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 10px transparent; } }
-  .spend { margin: 6px 2px 0; color: var(--secondary); font: 12px var(--mono); text-align: center; }
+  .spend { margin: 6px 2px 0; color: var(--secondary); font: 12px var(--font); text-align: center; }
 
   /* ---- floating: note button and note sheet ---- */
   .notefab { position: fixed; z-index: 40; top: 12px; right: 10px; width: 44px; height: 44px; margin: 0; padding: 0; border-radius: var(--r-card);
@@ -358,7 +422,7 @@
   #note-sheet[hidden], #casa-sheet[hidden], #cam-sheet[hidden] { display: none; }
   #note-sheet .sheet, #casa-sheet .sheet, #cam-sheet .sheet { width: min(560px, 100%); background: var(--row); border-radius: var(--r-card) var(--r-card) 0 0; border: 1px solid var(--border);
                        padding: var(--s4) var(--s4) max(var(--s4), env(safe-area-inset-bottom)); box-shadow: var(--shadow-float); }
-  #note-sheet h3, #casa-sheet h3, #cam-sheet h3 { margin: 0 0 var(--s1); font: 600 var(--fs-lead) var(--mono); }
+  #note-sheet h3, #casa-sheet h3, #cam-sheet h3 { margin: 0 0 var(--s1); font: 600 var(--fs-lead) var(--font); }
   #note-sheet textarea { width: 100%; min-height: 110px; margin: var(--s2) 0; border-radius: var(--r-control); border: 1px solid transparent; padding: var(--s3);
                          background: var(--field); color: var(--label); resize: vertical; }
   .thumbs { display: flex; gap: var(--s2); flex-wrap: wrap; margin: 6px 0; }
@@ -505,15 +569,38 @@
 <body>
 <main>
   <header>
-    <h1>Ashur</h1>
+    <h1>Ashur<span class="chan" id="chan" hidden>EXPERIMENTAL</span></h1>
     <div class="greet" id="greet" hidden></div>
     <button type="button" class="notefab" id="note-fab" aria-label="Anotar un problema o una idea" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg><span class="badge" id="note-badge" hidden></span></button>
     <div class="subtitle" id="subtitle"><span class="live"></span><span id="subtitle-text">Conectando…</span></div>
+    <button type="button" class="inbox-pill" id="inbox-pill" hidden></button>
   </header>
+
+  <section id="demo" class="demo" hidden>
+    <span class="tag">Demo con datos de ejemplo</span>
+    <h2 class="lead">Todos tus equipos, un solo asistente. Nada sale de tu casa sin tu permiso.</h2>
+    <p class="sub">Ashur corre en tu servidor y suma la potencia de tu PC, tu portátil y tu teléfono. Lee tus archivos en local y te avisa de lo que nadie más ve.</p>
+    <div class="presence">
+      <div class="orb"><svg viewBox="0 0 120 120" id="demo-orb" aria-hidden="true"></svg></div>
+      <div><div class="pres-g">3 de 4 equipos sumando.</div><div class="pres-d">Servidor, PC y teléfono encendidos; el portátil duerme.</div></div>
+    </div>
+    <div class="hook demo-hook" aria-label="Ejemplo">
+      <div class="hk">En una casa de ejemplo, el primer día</div>
+      <div class="hv">640 GB</div>
+      <div class="hd">de fotos, documentos y proyectos existen en una sola copia. Si ese disco falla, se pierden.</div>
+    </div>
+    <div class="group proof">
+      <div class="row"><div class="main"><div class="title">4 equipos, un solo cerebro</div><div class="detail">Servidor, PC, portátil y teléfono trabajan juntos</div></div><div class="value">ej.</div></div>
+      <div class="row"><div class="main"><div class="title">Miles de documentos leídos en local</div><div class="detail">Busca dentro de ellos sin subirlos a ninguna nube</div></div><div class="value">ej.</div></div>
+      <div class="row"><div class="main"><div class="title">0 acciones sin tu aprobación</div><div class="detail">Escribir, mover o gastar siempre pasa por tu teléfono</div></div><div class="value">ej.</div></div>
+    </div>
+    <button type="button" class="cta" id="demo-cta">Entrar con mi clave</button>
+    <div class="note fine">Todos los números de esta pantalla son de ejemplo. Los tuyos aparecen al entrar.</div>
+  </section>
 
   <section id="signin" hidden>
     <div class="group signin">
-      <p>Bienvenido. Escribe tu clave; se queda solo en este navegador.</p>
+      <p>Escribe tu clave; se queda solo en este navegador.</p>
       <form id="signin-form">
         <input id="key" type="password" autocomplete="current-password" placeholder="Clave" aria-label="Clave">
         <button type="submit">Conectar</button>
@@ -612,6 +699,16 @@
   </div>
 
   <div id="dashboard" hidden>
+    <div class="presence" aria-live="polite">
+      <div class="orb"><svg viewBox="0 0 120 120" id="orb" aria-hidden="true"></svg></div>
+      <div><div class="pres-g" id="pres-g"></div><div class="pres-d" id="pres-d"></div></div>
+    </div>
+    <button type="button" class="hook" id="hook" hidden>
+      <div class="hk">Sin respaldo</div>
+      <div class="hv" id="hook-v"></div>
+      <div class="hd" id="hook-d"></div>
+      <div class="hgo">Ver qué está en una sola copia ›</div>
+    </button>
     <div class="kpis" aria-label="Resumen">
       <div class="kpi"><div class="k">Trabajando ahora</div><div class="v"><span id="kpi-run">–</span><small>en curso</small></div></div>
       <div class="kpi"><div class="k">En la fila</div><div class="v"><span id="kpi-queue">–</span><small>esperando</small></div></div>
@@ -631,6 +728,7 @@
       <h2>Dispositivos</h2>
       <div class="dev-head" aria-hidden="true"><span>Equipo</span><span>Estado</span><span>CPU</span><span>RAM</span><span>GPU</span><span>Bat.</span><span>Inventario</span><span>Visto</span></div>
       <div class="group" id="devices"></div>
+      <div class="group" style="margin-top:12px"><button class="link" id="connect-open" type="button">Conectar otro equipo</button></div>
       <div class="note">El inventario se repasa solo cada semana, cuando cada equipo está libre y conectado. En los discos de cada equipo: <b>Incluido</b> recorre ese disco y anota el nombre y el tamaño de sus archivos (no cambia ni borra nada); <b>Fuera</b> lo salta (es lo que pasa por defecto: ningún disco se escanea hasta que lo enciendas). Un disco montado dentro de otro incluido se recorre junto con él. «Renombrar» cambia el nombre del equipo; toca el nombre de un disco para cambiar el suyo. Los externos que van y vienen se recuerdan aunque estén desconectados.</div>
     </section>
 
@@ -654,22 +752,53 @@
   </div>
 
   <div id="settings" hidden>
-    <nav class="menu" id="menu" aria-label="Ajustes">
-      <button type="button" class="menu-item" data-page="space"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="mi-text"><b>Archivos y espacio</b><small>Duplicados y los archivos más grandes</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="time"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M9.5 3h5"/></svg></span><span class="mi-text"><b>Mi tiempo</b><small id="time-sub">Empiezo, termino y en qué se va la semana</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="map"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6.5v13L9 17l6 2.5 6-2.5v-13L15 7z"/><path d="M9 4v13M15 7v12.5"/></svg></span><span class="mi-text"><b>Mapa de archivos</b><small>Dónde se va el espacio, carpeta por carpeta</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="docs"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span><span class="mi-text"><b>Documentos</b><small>Buscar y releer lo que Ashur ha leído</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="memory"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7 4 4 0 0 0 5 5 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 5"/></svg></span><span class="mi-text"><b>Memoria</b><small>Recuerdos, resúmenes e importar</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="update"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="mi-text"><b>Actualización y seguridad</b><small>Versiones y autenticador</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="voices"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mi-text"><b>Personas</b><small>Cómo te habla Ashur en cada dispositivo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="notes"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span><span class="mi-text"><b>Pendientes</b><small id="notes-sub">Problemas e ideas que anotaste</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="claude-requests"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8"/></svg></span><span class="mi-text"><b>Pedidos</b><small id="cr-sub">Lo que Claude o tus hábitos te piden hacer</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="habitos"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/></svg></span><span class="mi-text"><b>Hábitos</b><small>Lo que sueles hacer y lo que Ashur te sugiere</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="encargos"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="mi-text"><b>Encargos</b><small>Trabajo que Claude le encargó a tus equipos</small></span><span class="mi-go" aria-hidden="true">›</span></button>
-      <button type="button" class="menu-item" data-page="diag"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span><span class="mi-text"><b>Diagnóstico</b><small>Errores y por qué un equipo no está al día</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+    <nav class="menus" id="menu" aria-label="Ajustes">
+      <h2 class="menu-h">Para ti</h2>
+      <div class="menu">
+        <button type="button" class="menu-item" data-page="claude-requests"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 10h8"/></svg></span><span class="mi-text"><b>Por aprobar</b><small id="cr-sub">Todo lo que espera tu sí: pedidos de Claude, encargos, lotes y hábitos</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="encargos"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><span class="mi-text"><b>Trabajo en curso</b><small>Encargos y lotes que corren en tus equipos</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="habitos"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/></svg></span><span class="mi-text"><b>Hábitos</b><small>Lo que sueles hacer y lo que Ashur te sugiere</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      </div>
+      <h2 class="menu-h">Tus datos</h2>
+      <div class="menu">
+        <button type="button" class="menu-item" data-page="space"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="mi-text"><b>Archivos y espacio</b><small>Duplicados y los archivos más grandes</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="map"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6.5v13L9 17l6 2.5 6-2.5v-13L15 7z"/><path d="M9 4v13M15 7v12.5"/></svg></span><span class="mi-text"><b>Mapa de archivos</b><small>Dónde se va el espacio, carpeta por carpeta</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="docs"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span><span class="mi-text"><b>Documentos</b><small>Buscar y releer lo que Ashur ha leído</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="memory"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7 4 4 0 0 0 5 5 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 5"/></svg></span><span class="mi-text"><b>Memoria</b><small>Recuerdos, resúmenes e importar</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="time"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M9.5 3h5"/></svg></span><span class="mi-text"><b>Mi tiempo</b><small id="time-sub">Empiezo, termino y en qué se va la semana</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      </div>
+      <h2 class="menu-h">Ashur</h2>
+      <div class="menu">
+        <button type="button" class="menu-item" data-page="voices"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mi-text"><b>Personas</b><small>Cómo te habla Ashur en cada dispositivo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      </div>
+      <h2 class="menu-h">Equipos y sistema</h2>
+      <div class="menu">
+        <button type="button" class="menu-item" data-page="connect"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Conectar un equipo</b><small>Paso a paso, y ves cuando queda listo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="cmds"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span class="mi-text"><b>Comandos</b><small>Para pegar en cada equipo, con un toque</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="update"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="mi-text"><b>Actualización y seguridad</b><small>Versiones y autenticador</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="diag"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg></span><span class="mi-text"><b>Diagnóstico</b><small>Errores y por qué un equipo no está al día</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="notes"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span><span class="mi-text"><b>Notas del panel</b><small id="notes-sub">Problemas e ideas que anotaste</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+      </div>
     </nav>
+
+    <div class="page" data-page="connect" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Conectar un equipo</div></div>
+    <section>
+      <div class="group steps">
+        <div class="step"><div class="sb"><div class="st">Elige qué equipo vas a conectar</div>
+          <div class="ospick" id="cn-os"></div></div></div>
+        <div class="step"><div class="sb"><div class="st">Pega esto en el equipo</div><div class="sd" id="cn-where"></div>
+          <div class="cmd" style="padding:0;margin-top:8px"><div class="line"><code id="cn-cmd"></code><button type="button" id="cn-copy">Copiar</button></div></div>
+          <div class="sd">El equipo tiene que estar en tu red de Tailscale. Instala lo que falte y arranca solo.</div></div></div>
+        <div class="step" id="cn-wait"><div class="sb"><div class="st" id="cn-wait-t">Espera aquí: lo verás aparecer</div><div class="sd" id="cn-wait-d">Reviso cada 10 segundos.</div></div></div>
+        <div class="step"><div class="sb"><div class="st">Enciende sus discos</div><div class="sd">Ningún disco se escanea hasta que lo marques «Incluido» en Estado → Dispositivos. Tras el primer inventario verás cuánto de lo suyo existe en una sola copia.</div>
+          <button type="button" class="link" id="cn-status" style="text-align:left;padding:6px 0 0">Ir a Estado ›</button></div></div>
+      </div>
+      <h2 style="margin-top:24px">Conectados ahora</h2>
+      <div class="group" id="cn-nodes"></div>
+    </section>
+    </div>
 
     <div class="page" data-page="space" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Archivos y espacio</div></div>
@@ -921,6 +1050,17 @@
     <div class="page" data-page="access" hidden>
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Acceso</div></div>
     <section>
+      <h2>Tu nombre</h2>
+      <div class="group signin">
+        <p>Así te nombra Ashur ante tus invitados: «Ashur, el asistente de …».</p>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="owner-name" maxlength="40" placeholder="Tu nombre" aria-label="Tu nombre" autocomplete="off" style="flex:1">
+          <button type="button" id="owner-save" style="flex:none;margin:0">Guardar</button>
+        </div>
+        <div id="owner-result" class="note" hidden></div>
+      </div>
+    </section>
+    <section>
       <h2>Invitados</h2>
       <div class="group" id="guests"></div>
       <div class="group signin" style="margin-top:12px">
@@ -1031,7 +1171,7 @@
   const OS = { windows: "Windows", macos: "macOS", linux: "Linux" };
   const $ = (id) => document.getElementById(id);
 
-  let key = null, role = null, guestName = "";
+  let key = null, role = null, guestName = "", owner = "Sergio";
   try { key = localStorage.getItem(KEY); } catch (e) {}
   let timer = null;
 
@@ -1211,8 +1351,36 @@
 
   let lastOverviewMs = null;
   const queueArmed = {};          // a cancel waits for a second tap; kept across the panel's redraws
+  // draw rings without rebuilding them: a refresh must not restart the breathing (no flicker)
+  function drawOrb(svg, lit) {
+    const NS = "http://www.w3.org/2000/svg";
+    if (!svg.firstChild) { const c = document.createElementNS(NS, "circle"); c.setAttribute("class", "core"); c.setAttribute("cx", 60); c.setAttribute("cy", 60); c.setAttribute("r", 9); svg.append(c); }
+    const rings = [...svg.querySelectorAll("circle.ring")];
+    if (rings.length !== lit.length) {
+      rings.forEach((r) => r.remove());
+      lit.forEach((_, i) => {
+        const c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", 60); c.setAttribute("cy", 60); c.setAttribute("r", 20 + i * (38 / Math.max(1, lit.length - 1 || 1)));
+        c.style.animationDelay = (i * -1.5) + "s";
+        svg.append(c);
+      });
+    }
+    [...svg.querySelectorAll("circle:not(.core)")].forEach((c, i) => c.setAttribute("class", lit[i] ? "ring on" : "ring"));
+  }
+  function presence(nodes) {
+    const sorted = [...nodes].sort((a, b) => (a.mode === "offline") - (b.mode === "offline"));
+    const on = sorted.filter((n) => n.mode !== "offline");
+    drawOrb($("orb"), sorted.map((n) => n.mode !== "offline"));
+    $("pres-g").textContent = (nodes.length ? on.length + " de " + nodes.length + (nodes.length === 1 ? " equipo sumando." : " equipos sumando.") : "Aún no hay equipos.");
+    const names = on.map((n) => nm(n.device_id));
+    const off = sorted.filter((n) => n.mode === "offline").map((n) => nm(n.device_id));
+    $("pres-d").textContent = (names.length ? "Encendidos: " + names.join(", ") + "." : "Ninguno encendido.") + (off.length ? " Sin señal: " + off.join(", ") + "." : "");
+  }
+  drawOrb($("demo-orb"), [true, true, true, false]);
+  let lastNodes = null;
   function render(data) {
     const now = data.now;
+    lastNodes = data.status.nodes; connectTick(); presence(lastNodes);
     const nodes = [...data.status.nodes].sort((a, b) => (a.mode === "offline") - (b.mode === "offline") || a.device_id.localeCompare(b.device_id));
     const byId = Object.fromEntries(nodes.map((n) => [n.device_id, n]));
 
@@ -1351,17 +1519,17 @@
     }
     if (!r.ok) throw new Error("HTTP " + r.status);
     const me = await r.json();
-    role = me.role; guestName = me.name;
+    role = me.role; guestName = me.name; owner = me.owner || owner;
   }
   function unlockGuest() {
     if (unlocked) return;
     unlocked = true;
-    $("signin").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
+    $("signin").hidden = true; $("demo").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
     $("guest-signout").hidden = false;
     $("note-fab").hidden = false;                       // guests can leave an opinion
     $("subtitle").classList.remove("locked", "stale");
     greet();
-    $("subtitle-text").textContent = role === "self" ? "Aquí estoy" : "Ashur, el asistente de Sergio";
+    $("subtitle-text").textContent = role === "self" ? "Aquí estoy" : "Ashur, el asistente de " + owner;
     if (role === "self") {            // the home-screen app: chat and diary, nothing administrative
       $("tabs").hidden = false;
       if (tab !== "diary") tab = "chat";
@@ -1675,16 +1843,22 @@
     camReset();                                               // cameras: player, peer, timers and the video session end with it
     clearTimeout(epTimer); epOpen = false; epReq++; $("casa-energia").hidden = true; $("casa-main").hidden = false;   // energía too
     try { localStorage.removeItem(KEY); } catch (e) {}
-    for (const id of ["dashboard", "settings", "chat", "diary", "casa", "tabs", "composer", "guest-signout", "greet"]) $(id).hidden = true;
+    for (const id of ["dashboard", "settings", "chat", "diary", "casa", "tabs", "composer", "guest-signout", "greet", "inbox-pill"]) $(id).hidden = true;
     $("thread").replaceChildren(); lastDay = null;
-    $("signin").hidden = false;
+    $("signin").hidden = false; $("demo").hidden = !!error;   // a wrong key: straight to the field, no pitch
     historyLoaded = false;
     $("subtitle").classList.add("locked");
     $("subtitle-text").textContent = "Necesita tu clave";
     const er = $("signin-error");
     er.hidden = !error; er.textContent = error || "";
-    $("key").focus();
+    if (error) $("key").focus();
   }
+  // which build this is: open endpoint, so the badge shows even before the key
+  fetch("health").then((r) => r.json()).then((h) => {
+    if (h.channel !== "experimental") return;
+    $("chan").hidden = false; document.body.classList.add("exp"); document.title = "Ashur · EXP";
+  }).catch(() => {});
+  $("demo-cta").addEventListener("click", () => { $("signin").scrollIntoView({ behavior: "smooth", block: "center" }); $("key").focus(); });
   // a notification (or a link) says where it should land: a tab, or a page inside Ajustes
   const WHERE = { "#diario": ["diary"], "#estado": ["status"], "#memoria": ["settings", "memory"], "#diagnostico": ["settings", "diag"],
                   "#actualizacion": ["settings", "update"], "#pendientes": ["settings", "notes"],
@@ -1701,8 +1875,9 @@
   function unlock() {
     if (unlocked) return;                       // only the first successful load switches views
     unlocked = true;
-    $("signin").hidden = true; $("tabs").hidden = false;
+    $("signin").hidden = true; $("demo").hidden = true; $("tabs").hidden = false;
     showTab(tab);
+    loadInbox();
   }
   function showTab(t) {
     const changed = t !== tab;
@@ -1724,10 +1899,11 @@
     $("dashboard").hidden = t !== "status";
     $("settings").hidden = t !== "settings";
     if (t === "diary") loadDiary();
+    if (t === "status") loadHook();
     casaLoop(); epLoop();
     if (t === "settings") showPage(null);
     if (t === "chat" && !historyLoaded) loadHistory();
-    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadLotes(); loadLoteConfig(); loadUpdate(); loadTotp(); loadPersonas(); loadBase(); loadSpace(); loadDiag(); }
+    if (t === "settings") { renderCmds(); foldPages(); loadDocs(""); loadMemories(); loadProposals(); loadSummaries(); loadGuests(); loadOwner(); loadLimits(); loadMcpKey(); loadClaudeRequests(); loadEncargos(); loadLotes(); loadLoteConfig(); loadUpdate(); loadTotp(); loadPersonas(); loadBase(); loadSpace(); loadDiag(); }
     if (t === "chat") loadVoices();
   }
   // Ajustes is a menu; each entry opens its own page
@@ -2523,12 +2699,33 @@
       const r = await api("api/chat/history?limit=60");
       const data = await r.json();
       $("thread").replaceChildren(); lastDay = null;
-      if (!data.messages.length) bubble("note intro", role === "guest"
-        ? "Escríbele a Ashur, el asistente de Sergio. Te responderá con gusto."
-        : "Escríbele a Ashur. Recuerda lo importante entre conversaciones y puede consultar tus dispositivos.");
+      if (!data.messages.length) {
+        bubble("note intro", role === "guest"
+          ? "Escríbele a Ashur, el asistente de " + owner + ". Te responderá con gusto."
+          : "Escríbele a Ashur. Recuerda lo importante entre conversaciones y puede consultar tus dispositivos.");
+        suggest();
+      }
       for (const m of data.messages) bubble(m.role === "user" ? "me" : "ashur", m.content, m.ts);
       showBudget(data.budget);
     } catch (e) { historyLoaded = false; }
+  }
+  // an empty thread is a blank page: offer what Ashur can actually answer (each one maps to one of its tools)
+  const SUGGEST = {
+    guest: [["¿Quién eres?", true], ["¿Qué puedes hacer por mí?", true]],
+    own: [["¿Cómo están mis equipos ahora?", true], ["¿Qué ocupa más espacio en mis discos?", true],
+          ["¿Dónde está mi documento de ", false], ["¿Qué escribí en mi diario esta semana?", true]],
+  };
+  function suggest() {
+    const w = el("div", "chips sugg");                                  // removed on the first send, like the intro
+    for (const [t, go] of SUGGEST[role === "guest" ? "guest" : "own"]) {
+      const b = el("button", null, go ? t : t.trim() + "…"); b.type = "button";
+      b.addEventListener("click", () => {
+        msg.value = t; msg.dispatchEvent(new Event("input"));
+        if (go) $("chat-form").requestSubmit(); else { msg.focus(); msg.setSelectionRange(t.length, t.length); }
+      });
+      w.append(b);
+    }
+    $("thread").append(w);
   }
   const msg = $("msg");
   msg.addEventListener("input", () => {
@@ -2592,7 +2789,7 @@
     const text = msg.value.trim();
     if (!text || sending) return;
     sending = true; $("send").disabled = true;
-    document.querySelectorAll(".bubble.intro").forEach((n) => n.remove());
+    document.querySelectorAll(".bubble.intro, .chips.sugg").forEach((n) => n.remove());
     bubble("me", text, Date.now() / 1000);
     msg.value = ""; msg.style.height = "auto";
     try { await ask(text, false); }
@@ -2816,6 +3013,15 @@
     } catch (e) {}
   }
 
+  async function loadOwner() { $("owner-name").value = owner; }
+  $("owner-save").addEventListener("click", async () => {
+    const n = $("owner-result"); n.hidden = false;
+    try {
+      const r = await api("api/owner", { method: "PUT", body: JSON.stringify({ name: $("owner-name").value }) });
+      if (!r.ok) { n.textContent = await detailOf(r, "No pude guardarlo."); return; }
+      owner = (await r.json()).owner; n.textContent = "Listo: tus invitados verán «Ashur, el asistente de " + owner + "».";
+    } catch (e) { n.textContent = "No pude guardarlo."; }
+  });
   async function loadGuests() {
     try {
       const r = await api("api/guests");
@@ -2916,7 +3122,8 @@
     try {
       const list = await (await api("api/claude-requests")).json();
       const pending = list.filter((q) => q.status === "pending"), done = list.filter((q) => q.status !== "pending");
-      $("cr-sub").textContent = pending.length ? pending.length + (pending.length === 1 ? " pedido por decidir" : " pedidos por decidir") : "Lo que Claude o tus hábitos te piden hacer";
+      $("cr-sub").textContent = pending.length ? pending.length + (pending.length === 1 ? " cosa espera tu sí" : " cosas esperan tu sí") : "Todo lo que espera tu sí: pedidos de Claude, encargos, lotes y hábitos";
+      setInbox(pending.length);
       const draw = (q) => {
         const r = el("div", "row nrow"), m = el("div", "main");
         const label = cap(q.label) + (q.module ? " (" + q.module + ")" : "");
@@ -2944,6 +3151,18 @@
       put($("cr-done"), done.length ? done.map(draw) : [row({ title: "Claude aún no ha pedido nada." })]);
     } catch (e) {}
   }
+  function setInbox(n) {
+    const p = $("inbox-pill");
+    p.hidden = !n || role !== "admin";
+    p.textContent = n + (n === 1 ? " por aprobar ›" : " por aprobar ›");
+  }
+  let inboxAt = 0;
+  async function loadInbox() {                         // light: one list, at most every 30 s, from any tab
+    if (role !== "admin" || Date.now() - inboxAt < 30000) return;
+    inboxAt = Date.now();
+    try { const list = await (await api("api/claude-requests")).json(); setInbox(list.filter((q) => q.status === "pending").length); } catch (e) {}
+  }
+  $("inbox-pill").addEventListener("click", () => { showTab("settings"); showPage("claude-requests"); loadClaudeRequests(); });
   async function decideRequest(id, what, buttons) {
     for (const b of buttons) b.disabled = true;
     const note = $("cr-status");
@@ -3235,6 +3454,22 @@
       fill("backup", rows, "Aún no hay inventarios con discos.");
     } catch (e) { fill("backup", [], "No pude leer el informe."); }
   }
+  // the hook: how much exists in one copy only, summed over every disk the inventory knows
+  let hookAt = 0;
+  async function loadHook() {
+    if (Date.now() - hookAt < 300000) return;          // the report itself refreshes at most every 6 h
+    try {
+      const d = await (await api("api/backup")).json();
+      if (d.pending) return;
+      hookAt = Date.now();
+      const lone = d.disks.reduce((a, x) => a + Math.max(0, (x.bytes_fp || 0) - (x.copied_bytes || 0)), 0);
+      const disks = d.disks.filter((x) => (x.bytes_fp || 0) - (x.copied_bytes || 0) > 1e9).length;
+      $("hook").hidden = !lone;
+      $("hook-v").textContent = bytes(lone);
+      $("hook-d").textContent = "de tus archivos existen en una sola copia" + (disks > 1 ? ", repartidos en " + disks + " discos. Si uno falla, lo suyo se pierde." : ". Si ese disco falla, se pierden.");
+    } catch (e) {}
+  }
+  $("hook").addEventListener("click", () => { showTab("settings"); showPage("space"); loadBackup(); });
   $("backup-refresh").addEventListener("click", async () => {
     try { await api("api/backup/refresh", { method: "POST" }); } catch (e) {}
     fill("backup", [], "Calculando…");
@@ -3624,6 +3859,7 @@
     clearTimeout(timer);
     const visible = document.visibilityState === "visible";
     if (visible && (tab === "status" || tab === "settings" || !unlocked)) refresh();
+    if (visible && unlocked) loadInbox();
     if (visible && unlocked && tab === "settings" && !document.querySelector('.page[data-page="encargos"]').hidden) loadLotes();   // a lote moves by itself
     const base = visible ? 10000 : 60000;
     timer = setTimeout(loop, Math.min(60000, base * Math.pow(2, Math.min(failStreak, 3))));
@@ -3805,6 +4041,47 @@
     try { await navigator.clipboard.writeText(diagText); b.textContent = "Copiado"; } catch (e) { b.textContent = "No pude copiar"; showCopy(diagText); }
     setTimeout(() => { b.textContent = "Copiar todo para pegárselo a Claude"; }, 2000);
   });
+  // connect a device: pick the system, paste one line, watch it appear
+  const CONNECT = {
+    windows: ["Windows", "PowerShell normal, no como administrador", "irm http://zimaos:8711/install/windows.ps1 | iex"],
+    mac: ["Mac", "Terminal", "curl -fsSL http://zimaos:8711/install/mac.sh | bash"],
+  };
+  let connectOs = "windows", connectSeen = null;
+  function connectDraw() {
+    const [, where, cmd] = CONNECT[connectOs];
+    $("cn-where").textContent = where; $("cn-cmd").textContent = cmd;
+    for (const b of document.querySelectorAll(".ospick button")) b.setAttribute("aria-pressed", String(b.dataset.os === connectOs));
+  }
+  function connectOpen() {
+    connectSeen = new Set((lastNodes || []).map((n) => n.device_id));
+    $("cn-wait").classList.remove("ok"); $("cn-wait-t").textContent = "Espera aquí: lo verás aparecer"; $("cn-wait-d").textContent = "Reviso cada 10 segundos.";
+    connectDraw(); connectTick();
+  }
+  function connectTick() {
+    if (!lastNodes || document.querySelector('.page[data-page="connect"]').hidden) return;
+    const fresh = connectSeen ? lastNodes.filter((n) => !connectSeen.has(n.device_id)) : [];
+    if (fresh.length) {
+      $("cn-wait").classList.add("ok");
+      $("cn-wait-t").textContent = fresh.map((n) => nm(n.device_id)).join(", ") + " ya está conectado";
+      $("cn-wait-d").textContent = "Siguiente paso: enciende sus discos.";
+    }
+    const rows = [...lastNodes].sort((a, b) => (a.mode === "offline") - (b.mode === "offline"))
+      .map((n) => row({ title: nm(n.device_id), detail: (OS[n.os] || n.os || "") + (connectSeen && !connectSeen.has(n.device_id) ? " · nuevo" : ""), value: MODE[n.mode] || n.mode }));
+    fill("cn-nodes", rows, "Aún no hay equipos.");
+  }
+  for (const [os, [label]] of Object.entries(CONNECT)) {
+    const b = el("button", null, label); b.type = "button"; b.dataset.os = os;
+    b.addEventListener("click", () => { connectOs = os; connectDraw(); });
+    $("cn-os").append(b);
+  }
+  $("cn-copy").addEventListener("click", async () => {
+    const b = $("cn-copy"), cmd = CONNECT[connectOs][2];
+    try { await navigator.clipboard.writeText(cmd); b.textContent = "Copiado ✓"; } catch (e) { b.textContent = "No pude copiar"; showCopy(cmd); }
+    setTimeout(() => { b.textContent = "Copiar"; }, 1600);
+  });
+  document.querySelector('.menu-item[data-page="connect"]').addEventListener("click", connectOpen);
+  $("connect-open").addEventListener("click", () => { showTab("settings"); showPage("connect"); connectOpen(); });
+  $("cn-status").addEventListener("click", () => { showTab("status"); refresh(); });
   function renderCmds() {
     const root = $("cmds");
     if (root.childElementCount) return;

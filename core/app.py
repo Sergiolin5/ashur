@@ -269,7 +269,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.59.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.60.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -285,7 +285,7 @@ def create_app(
         server = scope.get("server") or (None, None)
         return public_port is not None and server[1] == public_port
 
-    # --- video sessions (0.59.0): short tokens for camera media, in memory only (a restart ends them) ---
+    # --- video sessions (0.60.0): short tokens for camera media, in memory only (a restart ends them) ---
     video_sesiones: list[dict] = []         # {"v", "vence", "puerta", "hls": {camera: [go2rtc ids]}}
     video_lock = threading.Lock()
 
@@ -338,7 +338,7 @@ def create_app(
                 if now < locked_until[0]:               # the lock stops everything, camera media included
                     return JSONResponse({"detail": "Demasiados intentos con una clave incorrecta. Se desbloquea en "
                                          "15 minutos; por la tailnet sigue funcionando."}, status_code=429)
-                # cámaras (0.59.0): <img> and <video> cannot send X-Admin-Key, so a photo or HLS GET with a video
+                # cámaras (0.60.0): <img> and <video> cannot send X-Admin-Key, so a photo or HLS GET with a video
                 # session token and no key is judged by the token alone: valid and made over Funnel (admin key +
                 # TOTP) passes; expired or unknown is a 401 that does not count as a wrong key (a player still
                 # polling after its 15 min must not lock the door on its owner; guessing a 32-byte token is hopeless)
@@ -2219,11 +2219,23 @@ def create_app(
 
     @app.get("/api/whoami")
     def whoami(x_admin_key: str = Header(default=""), guest: Optional[dict] = Depends(require_chat)):
+        owner = db.setting("owner_name") or "Sergio"          # what guests see: "Ashur, el asistente de <owner>"
         if guest:
-            return {"role": "guest", "name": guest["name"]}
+            return {"role": "guest", "name": guest["name"], "owner": owner}
         if _same(x_admin_key, admin_key):
-            return {"role": "admin", "name": "Sergio"}
-        return {"role": "self", "name": "Sergio"}          # his chat-only key: the chat view, as himself
+            return {"role": "admin", "name": owner, "owner": owner}
+        return {"role": "self", "name": owner, "owner": owner}    # his chat-only key: the chat view, as himself
+
+    class OwnerIn(BaseModel):
+        name: str
+
+    @app.put("/api/owner", dependencies=[Depends(require_admin)])
+    def owner_put(body: OwnerIn):
+        name = body.name.strip()[:40]
+        if not name:
+            raise HTTPException(400, "Escribe un nombre.")
+        db.set_setting("owner_name", name)
+        return {"owner": name}
 
     @app.post("/api/chat")
     def chat(body: ChatIn, guest: Optional[dict] = Depends(require_chat)):
@@ -2508,7 +2520,7 @@ def create_app(
                 "door": "public" if on_public_port(request.scope) else "tailnet"})
         return {"ok": True}
 
-    # --- cámaras (0.59.0): a thin proxy to the local go2rtc; only names, frames, SDP and rebuilt HLS ever leave it ---
+    # --- cámaras (0.60.0): a thin proxy to the local go2rtc; only names, frames, SDP and rebuilt HLS ever leave it ---
     # go2rtc's /api/streams carries every camera's user and password: nothing from it passes through as is.
     cam_mem: dict = {"cli": None, "falla_t": None, "fotos": {}}
     video_failures: list[float] = []        # the video's own TOTP lockout: never shared with /api/update's
@@ -3551,7 +3563,8 @@ def create_app(
     def health(request: Request):
         """Proves the core is up and says which door the request came through."""
         door = "public" if on_public_port(request.scope) else "tailnet"
-        return {"ok": True, "service": "ashur-core", "version": app.version, "door": door}
+        return {"ok": True, "service": "ashur-core", "version": app.version, "door": door,
+                "channel": os.environ.get("ASHUR_CHANNEL", "")}       # "experimental" on branch images
 
     @app.get("/status", dependencies=[Depends(require_admin)])
     def status():

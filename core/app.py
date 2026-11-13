@@ -1645,7 +1645,7 @@ def create_app(
     def casa_entry(cid: int) -> dict:
         with casa_mem_lock:
             return casa_mem.setdefault(cid, {"lock": threading.Lock(), "states": None, "states_t": 0.0, "areas": {}, "areas_t": None,
-                                             "visto": None, "fail_t": None, "client": None, "fail": None})
+                                             "visto": None, "fail_t": None, "client": None, "fail_s": None, "fail_a": None})
 
     def casa_client(row: dict, e: dict) -> HAClient:
         token = env.get(row["ha_token_env"], "")
@@ -1658,21 +1658,31 @@ def create_app(
         return e["client"][1]
 
     def casa_refresh(row: dict, with_areas: bool) -> dict:
-        """Fresh enough states (3 s) and areas (300 s) from Home Assistant; raises HAError. Call with the entry's lock held."""
+        """Fresh enough states (3 s) and areas (300 s) from Home Assistant; raises HAError. Call with the entry's lock held.
+        Each kind backs off 3 s after its own failure, so a broken areas call never blocks states (or a control)."""
         e, now = casa_entry(row["id"]), clock()
-        if e["fail"] and now < e["fail"][0]:                    # backoff: within 3 s of a failure, do not ask Home Assistant again
-            raise HAError(e["fail"][1])
-        try:
-            cli = casa_client(row, e)
-            if e["states"] is None or now - e["states_t"] >= 3:
-                e["states"], e["states_t"], e["visto"] = cli.states(), now, now
-            if with_areas and (e["areas_t"] is None or now - e["areas_t"] >= 300):
-                e["areas"], e["areas_t"] = cli.areas(), now
-        except Exception as x:
-            motivo = x.motivo if isinstance(x, HAError) else "error"
-            e["fail"] = (now + 3, motivo)
-            raise HAError(motivo) from None
-        e["fail"] = None
+
+        def step(key: str, fetch: Callable[[HAClient], None]) -> None:
+            if e[key] and now < e[key][0]:
+                raise HAError(e[key][1])
+            try:
+                fetch(casa_client(row, e))
+            except Exception as x:
+                motivo = x.motivo if isinstance(x, HAError) else "error"
+                e[key] = (now + 3, motivo)
+                raise HAError(motivo) from None
+            e[key] = None
+
+        def get_states(cli: HAClient) -> None:
+            e["states"], e["states_t"], e["visto"] = cli.states(), now, now
+
+        def get_areas(cli: HAClient) -> None:
+            e["areas"], e["areas_t"] = cli.areas(), now
+
+        if e["states"] is None or now - e["states_t"] >= 3:
+            step("fail_s", get_states)
+        if with_areas and (e["areas_t"] is None or now - e["areas_t"] >= 300):
+            step("fail_a", get_areas)
         return e
 
     @app.get("/api/casa", dependencies=[Depends(require_admin)])

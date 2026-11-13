@@ -406,3 +406,16 @@ def test_casa_areas_failure_is_not_retried_every_get(casa_env):
     c.get("/api/casa", headers=A)
     c.get("/api/casa", headers=A)
     assert calls["n"] == 1
+
+
+def test_areas_failure_does_not_block_control(casa_env):
+    c, _, fake, _ = casa_env
+
+    def areas():
+        raise C.HAError("error")
+    fake.areas = areas
+    assert c.get("/api/casa", headers=A).json()["ha"] == "error"      # arms the areas window only
+    r = c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "off"})
+    assert r.status_code == 200 and fake.calls == [("light", "turn_off", "light.sala")]
+    j = c.get("/api/casa", headers=A).json()                           # states keep refreshing; areas keep their old value
+    assert j["ha"] == "error" and any(d["entity_id"] == "light.sala" for d in j["areas"][0]["dispositivos"])

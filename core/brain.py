@@ -721,18 +721,24 @@ class Brain:
         if self.local is None or self.s.brain == "claude":
             raise LocalUnavailable("Este modo de Ashur no usa modelos locales.")
         cv = self.db.conv_get(cid)
-        msgs = self.db.conv_messages(cid, after_ts=cv["extracted"])
-        total = {"normales": 0, "sensibles": 0}
-        title = cv["title"]
-        for piece in conv.chunks(msgs):
-            text, _device = self.local(conv.EXTRACTOR, [{"role": "user", "content": piece}])
-            got = self.learn_lines(text, f"conv:{cid}")
-            total["normales"] += got["normales"]
-            total["sensibles"] += got["sensibles"]
-            title = title or got["titulo"]
-        self.db.conv_set(cid, extracted=self.clock(), title=title or "")
-        self.db.log(self.clock(), None, "memories_extracted", {"conv": cid, **total})
-        return total
+        cursor = int(self.db.setting(f"conv_cursor:{cid}", "0"))
+        # only Sergio's own lines: Ashur's replies may restate «solo local» memories or the diary
+        rest = [m for m in self.db.conv_messages(cid) if m["id"] > cursor and m["role"] == "user"]
+        if not rest:
+            self.db.conv_set(cid, extracted=self.clock())
+            return {"normales": 0, "sensibles": 0, "terminado": True}
+        piece, last, n = conv.first_chunk(rest)          # one piece per pass: the sweep never waits long
+        text, _device = self.local(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+        got = self.learn_lines(text, f"conv:{cid}")
+        self.db.set_setting(f"conv_cursor:{cid}", str(last))
+        done = n == len(rest)
+        fields = {"title": cv["title"] or got["titulo"]}
+        if done:
+            fields["extracted"] = self.clock()
+        self.db.conv_set(cid, **fields)
+        self.db.log(self.clock(), None, "memories_extracted",
+                    {"conv": cid, "normales": got["normales"], "sensibles": got["sensibles"]})
+        return {"normales": got["normales"], "sensibles": got["sensibles"], "terminado": done}
 
     def propose_memories(self) -> int:
         """Read what Sergio wrote since last time (diary and chat) with a LOCAL model only, and put lasting facts

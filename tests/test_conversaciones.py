@@ -301,7 +301,7 @@ def test_reopening_own_closed_conversation(tmp_path):
     c, fake = claude_app(tmp_path)
     cid = c.post("/api/chat", headers=A, json={"message": "uno"}).json()["conversation_id"]
     c.post("/api/conversations", headers=A)
-    r = c.post("/api/chat", headers=A, json={"message": "sigo", "conversation_id": cid}).json()
+    r = c.post("/api/chat", headers=A, json={"message": "sigo", "conversation_id": cid, "reopen": True}).json()
     assert r["conversation_id"] == cid and c.app.state.db.conv_get(cid)["closed"] is None
     assert [m["content"] for m in fake.calls[-1]["messages"]] == ["uno", "ok", "sigo"]
 
@@ -446,3 +446,89 @@ def test_correcting_a_memory_drops_its_old_vector(tmp_path):
     assert db.memories()[0]["text"] == "sus cámaras son VTA+" and db.vectors("bge-m3") == {}
     assert c.put("/api/memory/999", headers=A, json={"text": "x" * 10}).status_code == 404
     assert c.put(f"/api/memory/{mid}", headers=A, json={"text": ""}).status_code == 422
+
+
+# --- Final review fixes ----------------------------------------------------------------------
+def test_panel_id_of_an_idle_closed_conversation_opens_a_new_one(tmp_path):
+    c, fake = claude_app(tmp_path)
+    cid = c.post("/api/chat", headers=A, json={"message": "uno"}).json()["conversation_id"]
+    c.clock.now += 31 * 60
+    c.app.state.conversations_close_idle()
+    r = c.post("/api/chat", headers=A, json={"message": "dos", "conversation_id": cid}).json()
+    assert r["conversation_id"] != cid and c.app.state.db.conv_get(cid)["closed"] is not None
+
+
+def test_reopen_only_when_asked(tmp_path):
+    c, fake = claude_app(tmp_path)
+    cid = c.post("/api/chat", headers=A, json={"message": "uno"}).json()["conversation_id"]
+    c.post("/api/conversations", headers=A)
+    r = c.post("/api/chat", headers=A, json={"message": "sigo", "conversation_id": cid, "reopen": True}).json()
+    assert r["conversation_id"] == cid
+
+
+def test_stale_open_conversation_is_not_reused_without_id(tmp_path):
+    c, fake = claude_app(tmp_path)
+    cid = c.post("/api/chat", headers=A, json={"message": "uno"}).json()["conversation_id"]
+    c.clock.now += 31 * 60                                   # the sweep has not run yet
+    assert c.post("/api/chat", headers=A, json={"message": "dos"}).json()["conversation_id"] != cid
+
+
+def test_reopened_extracted_conversation_learns_again(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("sergio", c.clock())
+    db.add_message(c.clock(), "app", "user", "vivo en Bogotá desde hace años", "sergio", cid)
+    db.conv_close(cid, c.clock())
+    th, _ = node(c, answer=chat_answer("NORMAL: vive en Bogotá"))
+    assert c.app.state.conversations_due() == 1
+    th.join(5)
+    c.clock.now += 100
+    db.conv_set(cid, closed=None)
+    db.add_message(c.clock(), "app", "user", "me mudé a Medellín este mes", "sergio", cid)
+    db.conv_close(cid, c.clock())
+    th, seen = node(c, answer=chat_answer("NORMAL: se mudó a Medellín"))
+    assert c.app.state.conversations_due() == 1
+    th.join(5)
+    assert "Bogotá" not in seen[0]["messages"][0]["content"]          # only what is new
+    assert "se mudó a Medellín" in [m["text"] for m in db.memories()]
+
+
+def test_extractor_sees_only_sergios_lines(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("sergio", c.clock())
+    db.add_message(c.clock(), "app", "user", "¿qué sabes del proyecto?", "sergio", cid)
+    db.add_message(c.clock(), "app", "assistant", "El proyecto confidencial X arranca en marzo.", "sergio", cid)
+    db.conv_close(cid, c.clock())
+    th, seen = node(c, answer=chat_answer("nada"))
+    c.app.state.conversations_due()
+    th.join(5)
+    assert "confidencial" not in seen[0]["messages"][0]["content"]
+
+
+def test_long_conversation_is_learned_one_piece_per_pass(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("sergio", c.clock())
+    for i in range(3):
+        db.add_message(c.clock(), "app", "user", f"dato {i} " + "x" * 4000, "sergio", cid)
+    db.conv_close(cid, c.clock())
+    th, seen = node(c, answer=chat_answer("nada"), rounds=1)
+    assert c.app.state.conversations_due() == 1
+    th.join(5)
+    assert len(seen) == 1 and db.conv_get(cid)["extracted"] is None
+    th, seen = node(c, answer=chat_answer("nada"), rounds=5)
+    while c.app.state.conversations_due():
+        pass
+    th.join(5)
+    assert db.conv_get(cid)["extracted"] is not None
+
+
+def test_conversation_view_shows_the_newest_messages(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("sergio", c.clock())
+    for i in range(510):
+        db.add_message(c.clock(), "app", "user", f"m{i}", "sergio", cid)
+    got = c.get(f"/api/conversations/{cid}", headers=A).json()["messages"]
+    assert len(got) == 500 and got[-1]["content"] == "m509" and got[0]["content"] == "m10"

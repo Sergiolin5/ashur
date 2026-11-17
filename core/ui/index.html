@@ -2717,7 +2717,7 @@
   document.addEventListener("visibilitychange", epLoop);
 
   // 0.62.0: opening the chat is a new conversation; Ashur remembers through its memories, not the old thread
-  let convId = null;
+  let convId = null, reopenNext = false;
   function freshThread() {
     $("thread").replaceChildren(); lastDay = null;
     bubble("note intro", role === "guest"
@@ -2735,7 +2735,7 @@
     try {
       const list = await (await api("api/conversations")).json();
       let last = null;
-      if (role !== "guest") {
+      if (role !== "guest" && role !== "self") {          // admin only: a 401 here would sign the home-screen app out
         const a = await (await api("api/conversations/archivo")).json();
         if (a.total && !a.terminado && a.aprobado)
           box.append(el("div", "when", "Aprendiendo del archivo: " + a.done + " de " + a.total + " mensajes"));
@@ -2756,8 +2756,12 @@
     const r = await api("api/conversations/" + id);
     if (!r.ok) return;
     const d = await r.json();
-    convId = id; $("thread").replaceChildren(); lastDay = null;
+    $("thread").replaceChildren(); lastDay = null;
     for (const m of d.messages) bubble(m.role === "user" ? "me" : "ashur", m.content, m.ts);
+    if (d.conversation.archived) {                     // read only: writing here starts a new conversation
+      convId = null; reopenNext = false;
+      bubble("note", "Esto es el archivo de antes de 0.62: solo se lee. Lo que escribas empieza una conversación nueva.");
+    } else { convId = id; reopenNext = true; }
     convShow(false);
   }
   function convShow(on) {
@@ -2765,7 +2769,7 @@
     if (on) loadConvList();
   }
   $("conv-toggle").addEventListener("click", () => convShow($("conv-list").hidden));
-  $("conv-new").addEventListener("click", () => { convId = null; convShow(false); freshThread(); msg.focus(); });
+  $("conv-new").addEventListener("click", () => { convId = null; reopenNext = false; convShow(false); freshThread(); msg.focus(); });
 
   async function loadHistory() {
     historyLoaded = true;
@@ -2816,6 +2820,8 @@
       }
       const body = { message: text };
       if (convId !== null) body.conversation_id = convId;
+      if (reopenNext) body.reopen = true;
+      const sentId = convId;
       if (v) body.persona = v;
       if (allowClaude) body.allow_claude = true;
       const sd = !$("docs-row").hidden && $("share-docs").checked, sy = !$("diary-row").hidden && $("share-diary").checked;
@@ -2841,7 +2847,11 @@
         showBudget(data);
       } else {
         bubble("ashur", data.reply);
-        if (data.conversation_id) convId = data.conversation_id;
+        if (data.conversation_id) {
+          if (sentId !== null && data.conversation_id !== sentId)
+            bubble("note", "Pasaron más de 30 minutos: esto ya es una conversación nueva.");
+          convId = data.conversation_id; reopenNext = false;
+        }
         const used = data.memories_used || [];
         if (used.length && role !== "guest") {
           const d = el("details", "mem-used"), sm = el("summary", null, "⟡ " + used.length + (used.length === 1 ? " recuerdo usado ▾" : " recuerdos usados ▾"));

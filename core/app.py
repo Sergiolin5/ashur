@@ -2251,6 +2251,7 @@ def create_app(
         imagen: Optional[str] = Field(default=None, max_length=7_200_000)   # a photo from the phone, base64; never stored
         imagen_tipo: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|png|webp|gif)$")
         conversation_id: Optional[int] = None    # 0.62.0: none = the open conversation, or a new one
+        reopen: bool = False                     # continue a closed conversation he opened from the list
 
     # --- device personas (Sergio only; guests never see them) ---------------
     @app.get("/api/personas")
@@ -2378,7 +2379,7 @@ def create_app(
             if not raw or len(raw) > IMAGE_MAX_BYTES:
                 raise HTTPException(413, "La foto pesa más de 5 MB; mándala más pequeña.")
             image = {"media_type": body.imagen_tipo, "data": body.imagen}
-        cid = conversation_for(chat_user(guest), body.conversation_id)
+        cid = conversation_for(chat_user(guest), body.conversation_id, body.reopen)
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
                              allow_claude=body.allow_claude and guest is None,
@@ -2402,13 +2403,17 @@ def create_app(
     def chat_user(guest: Optional[dict]) -> str:
         return f"g{guest['id']}" if guest else "sergio"
 
-    def conversation_for(user: str, cid: Optional[int]) -> int:
-        """The conversation a message goes to. A closed one of his own is reopened; anyone else's is a 404."""
+    def conversation_for(user: str, cid: Optional[int], reopen: bool = False) -> int:
+        """The conversation a message goes to; anyone else's is a 404. A closed one (or one quiet for 30 min) is
+        continued only when he reopened it from the list; otherwise the message starts a new one."""
         if cid is None:
-            return db.conv_open(user, clock())
+            return db.conv_open(user, clock(), conv.CONV_IDLE_S)
         cv = db.conv_get(cid)
         if not cv or cv["user"] != user or cv["archived"]:
             raise HTTPException(404, "No existe esa conversación.")
+        stale = cv["closed"] is not None or cv["last_msg"] < clock() - conv.CONV_IDLE_S
+        if stale and not reopen:
+            return db.conv_open(user, clock(), conv.CONV_IDLE_S)
         if cv["closed"] is not None:
             db.conv_set(cid, closed=None)
         return cid
@@ -2431,7 +2436,7 @@ def create_app(
         cv = db.conv_get(cid)
         if not cv or cv["user"] != chat_user(guest):
             raise HTTPException(404, "No existe esa conversación.")
-        return {"conversation": cv, "messages": db.conv_messages(cid, limit=500)}
+        return {"conversation": cv, "messages": db.conv_messages(cid)[-500:]}      # the newest 500
 
     def conversations_close_idle() -> int:
         idle = db.conv_idle(clock() - conv.CONV_IDLE_S)
@@ -2446,7 +2451,8 @@ def create_app(
         """Close idle conversations, then learn from one closed conversation of Sergio's per pass (local model)."""
         conversations_close_idle()
         for cv in db.conv_list("sergio", limit=200):
-            if cv["closed"] is not None and not cv["archived"] and cv["extracted"] is None and cv["n"]:
+            if cv["closed"] is not None and not cv["archived"] and cv["n"] and (
+                    cv["extracted"] is None or cv["last_msg"] > cv["extracted"]):     # new, or reopened since
                 try:
                     brain.extract_conversation(cv["id"])
                 except LocalUnavailable:
@@ -2493,7 +2499,11 @@ def create_app(
             db.conv_set(cv["id"], extracted=clock())
             db.log(clock(), None, "archive_learned", {"conv": cv["id"]})
             return 0
-        piece, last, n = conv.first_chunk(rest)
+        piece, last, n = conv.first_chunk([m for m in rest if m["role"] == "user"] or rest[:0])
+        if not n:                                   # only Ashur's lines left: nothing of his to learn
+            db.conv_set(cv["id"], extracted=clock())
+            return 0
+        n = sum(1 for m in rest if m["id"] <= last)
         try:
             text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": piece}])
         except LocalUnavailable:

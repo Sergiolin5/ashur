@@ -2078,13 +2078,16 @@ class DB:
     # --- conversations (0.62.0) ------------------------------------------------
     CONV_COLS = "id, user, started, last_msg, closed, title, extracted, archived"
 
-    def conv_open(self, user: str, now: float) -> int:
-        """The open conversation of `user`, or a new one."""
+    def conv_open(self, user: str, now: float, idle_s: Optional[float] = None) -> int:
+        """The open conversation of `user`, or a new one. With idle_s, an open one quiet for longer is closed
+        first (the sweep may not have run yet)."""
         with self.lock:
-            r = self.conn.execute("SELECT id FROM conversations WHERE user = ? AND closed IS NULL AND archived = 0 "
+            r = self.conn.execute("SELECT id, last_msg FROM conversations WHERE user = ? AND closed IS NULL AND archived = 0 "
                                   "ORDER BY id DESC LIMIT 1", (user,)).fetchone()
-            if r:
+            if r and (idle_s is None or r["last_msg"] >= now - idle_s):
                 return r["id"]
+            if r:
+                self.conn.execute("UPDATE conversations SET closed = ? WHERE id = ?", (now, r["id"]))
             cid = self.conn.execute("INSERT INTO conversations (user, started, last_msg) VALUES (?, ?, ?)",
                                     (user, now, now)).lastrowid
             self.conn.commit()

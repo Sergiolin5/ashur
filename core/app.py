@@ -3761,11 +3761,22 @@ def create_app(
 
     # --- encargos (0.46.0): text work Claude orders over the indexed documents, one unit at a time on local models ---
     # OpenJarvis (0.61.0): with any ASHUR_OJ_* flag on, its agents join as one more operation whose units are its model calls
-    oj_tools = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)), db=db, clock=clock)
+    def oj_status() -> list[str]:
+        """Ashur's state for the morning digest: the same device lines as the status view, the queue, the night's
+        failures (counted, never their text)."""
+        since = clock() - 12 * 3600
+        failed = sum(1 for r in db.log_rows(500) if r["ts"] >= since and r["event"] in
+                     ("task_failed", "encargo_failed", "lote_failed"))
+        return ([d["estado"] for d in network_for_brain()["dispositivos"]]
+                + ["Cola: " + ("pausada" if queue_paused() else "activa"),
+                   f"Fallas en las últimas 12 h: {failed}"])
+
+    oj_tools = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)), db=db, clock=clock,
+                                  status=oj_status)
     app.state.openjarvis = oj_adapter.any_enabled()
     app.state.openjarvis_due = lambda: oj_adapter.due(                # a routine's own steps: the panel's own functions
         db, clock, run_action=lambda accion: run_request({"action": accion, "args": {}}),
-        notify=lambda body: _push_all({"title": "Ashur", "body": body, "url": "/#chat", "tag": "rutina"}))
+        notify=lambda body: _push_all({"title": "Ashur", "body": body, "url": "/#chat", "tag": "openjarvis"}))
     if oj_tools:
         from core.integrations.openjarvis.chat import offered as oj_offered
         brain.extra_tools = lambda: oj_offered(oj_tools)          # each tool only while its capability flag is on

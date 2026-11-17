@@ -70,7 +70,7 @@ def doc_text_from(db):
     return doc_text
 
 
-def install(operations: dict, data_dir: str, db=None, clock=None) -> dict:
+def install(operations: dict, data_dir: str, db=None, clock=None, status=None) -> dict:
     """Called once by create_app. With every flag off: nothing, and openjarvis is never imported. Otherwise the
     bridge's operation joins Ashur's encargo operations, and the chat's tools are returned (name → schema, handler,
     capability); each one is offered only while its flag is on."""
@@ -78,7 +78,7 @@ def install(operations: dict, data_dir: str, db=None, clock=None) -> dict:
         return {}
     home = bootstrap(data_dir)
     from core.integrations.openjarvis.bridge import AGENT_OP, OjAgent
-    from core.integrations.openjarvis import chat, google, research, skills, traces
+    from core.integrations.openjarvis import chat, digest, google, research, skills, traces
     operations.setdefault(AGENT_OP, OjAgent())
     if db is None:
         return {}
@@ -87,6 +87,7 @@ def install(operations: dict, data_dir: str, db=None, clock=None) -> dict:
                      lambda: [m["text"] for m in db.memories() if m.get("tier", "claude") == "claude"])
     traces.configure(home)
     google.configure(home)
+    digest.configure(status, clock)
     research.configure(lambda q: db.docs_search(Brain.file_words(q.lower()), limit=6, with_text=True, any_word=True))
     return chat.tools(db, clock)
 
@@ -95,11 +96,14 @@ def due(db, clock, run_action=None, notify=None) -> None:
     """From Ashur's maintenance tick: the scheduled OpenJarvis runs whose time has come, the traces of Sergio's last
     sessions, and the routines whose usual hour has come (run_action(accion) -> (status, text); notify(text))."""
     if any_enabled():
-        from core.integrations.openjarvis import schedule, traces
+        from core.integrations.openjarvis import digest, schedule, traces
+        digest.ensure_scheduled(db)             # the 06:30 digest, once, while ASHUR_OJ_DIGEST is on
         schedule.due(db, clock)
         traces.sync_usage(db, clock)            # nothing when ASHUR_OJ_TRACES is off
         if run_action and notify:
             traces.due_routines(db, clock, run_action, notify)   # nothing unless ASHUR_OJ_RUTINAS_AUTO is on too
+        if notify:
+            digest.notify_finished(db, notify)
 
 
 GOOGLE_ACTIONS = {"oj_correo": "gmail", "oj_tarea": "tasks", "oj_evento": "calendar"}

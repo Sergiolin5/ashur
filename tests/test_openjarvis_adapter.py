@@ -75,8 +75,14 @@ def test_agent_model_calls_are_encargo_units_sent_by_ashurs_scheduler(oj_env, tm
     c = runner_app(tmp_path)
     assert c.app.state.openjarvis is True and "oj_agent" in OPERATIONS
 
-    def no_network(*a, **k):
-        raise AssertionError("OpenJarvis opened a connection on its own")
+    real_connect = socket.socket.connect
+
+    def no_network(sock, addr, *a, **k):
+        """Ollama (11434) or anything off this machine is refused; asyncio's own loopback socketpair (Windows) is not."""
+        host, port = (addr[0], addr[1]) if isinstance(addr, tuple) else (addr, None)
+        if port == 11434 or host not in ("127.0.0.1", "::1", "localhost"):
+            raise AssertionError("OpenJarvis opened a connection on its own")
+        return real_connect(sock, addr, *a, **k)
     monkeypatch.setattr(socket.socket, "connect", no_network)
 
     eid = oj_env.queue_run(c.db, c.clock, "prueba", "Prueba", pregunta="¿qué es Ashur?")

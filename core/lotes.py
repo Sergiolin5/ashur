@@ -183,7 +183,7 @@ def summary_voz(rows, scope: dict) -> str:
 
 def scope_label(scope: dict) -> str:
     where = f"{scope['equipo']}: {scope['carpeta']}" if scope.get("equipo") else "todos los documentos leídos"
-    return where + (" (rehacer)" if scope.get("rehacer") else "")
+    return where + (" (solo dudas)" if scope.get("dudas") else " (rehacer)" if scope.get("rehacer") else "")
 
 
 def unit_tipo(path: str, chunks: list[str], system: str) -> dict:

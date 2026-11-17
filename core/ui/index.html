@@ -3335,19 +3335,41 @@
         if (L.salud && L.salud.length) m.append(el("div", "detail wrap", "No va a Claude (salud), " + L.salud.length + (L.salud.length === 1 ? " línea" : " líneas") + "."));
         const a = el("div", "acts");
         if (!open && L.done) {                                   // what the model really said for the «otro / duda» ones
-          const see = el("button", null, "Ver respuestas en duda"), box = el("div", "detail wrap");
+          const see = el("button", null, "Ver las dudas"), box = el("div", "detail wrap");
           see.type = "button";
           see.onclick = async () => {
             see.disabled = true;
             try {
-              const r = await api("api/lotes/" + L.id + "/muestra");
+              const r = await api("api/lotes/" + L.id + "/muestra?tipo=&n=30");
               const d = await r.json();
               const text = d.muestra.map((x) => x.equipo + ": " + x.ruta + "\n  → " + (x.crudo || "(sin respuesta guardada)")).join("\n");
-              box.replaceChildren(el("div", null, d.total + " documentos «otro / duda»; " + d.muestra.length + " de muestra:"), el("pre", "note", text));
-              box.querySelector("pre").style.cssText = "white-space:pre-wrap;font-size:12px;user-select:all";
+              const items = d.muestra.map((x) => {                // Sergio says whose it is: his word is never redone
+                const it = el("div", "row nrow"), mm = el("div", "main"), acts = el("div", "acts");
+                mm.append(el("div", "title wrap", x.ruta.split(/[\\/]/).pop()), el("div", "detail wrap", x.equipo + ": " + x.ruta),
+                          el("div", "detail wrap", "Tipo: " + (x.tipo || "otro") + " · el modelo dijo: " + (x.crudo || "(nada guardado)")));
+                for (const [who, label] of [["sergio", "Mía"], ["otro", "De otro"]]) {
+                  const b = el("button", null, label); b.type = "button";
+                  b.onclick = async () => {
+                    for (const x2 of acts.querySelectorAll("button")) x2.disabled = true;
+                    const res = await api("api/lotes/autor", { method: "PUT", body: JSON.stringify({ equipo: x.equipo, ruta: x.ruta, autor: who }) });
+                    if (res.ok) acts.replaceChildren(el("div", "detail", who === "sergio" ? "Marcado como tuyo." : "Marcado como de otro."));
+                    else { acts.append(el("div", "detail", await detailOf(res, "No pude guardarlo."))); for (const x2 of acts.querySelectorAll("button")) x2.disabled = false; }
+                  };
+                  acts.append(b);
+                }
+                mm.append(acts); it.append(mm); return it;
+              });
+              const redo = el("button", null, "Reclasificar las " + nf.format(d.total) + " dudas"); redo.type = "button";
+              redo.onclick = async () => {
+                redo.disabled = true;
+                const res = await api("api/lotes/" + L.id + "/dudas", { method: "POST" });
+                if (res.ok) { const j = await res.json(); redo.textContent = "Lote #" + j.lote + " (" + nf.format(j.documentos) + " documentos): apruébalo en Pedidos"; loadInbox(); loadLotes(); }
+                else { redo.textContent = await detailOf(res, "No pude crear el lote."); }
+              };
               const cp = el("button", "link", "Copiar para Claude"); cp.type = "button";
               cp.onclick = async () => { try { await navigator.clipboard.writeText(text); cp.textContent = "Copiado"; } catch (e) { showCopy(text); } };
-              box.append(cp);
+              box.replaceChildren(el("div", null, nf.format(d.total) + " documentos en duda" + (d.total > d.muestra.length ? "; " + d.muestra.length + " de muestra" : "") + ". Di de quién es cada uno o reclasifícalos todos con el modelo más fuerte:"),
+                                  ...(d.total ? [redo] : []), ...items, cp);
             } catch (e) { box.textContent = "No pude traer la muestra."; }
             see.disabled = false;
           };

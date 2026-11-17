@@ -1777,12 +1777,14 @@ class DB:
         return self._lote_row(r) if r else None
 
     def lote_pending(self, pase: str, redo: Optional[int] = None, mine_only: bool = False,
-                     also_done: tuple = ()) -> list[tuple]:
+                     also_done: tuple = (), dudas_only: bool = False) -> list[tuple]:
         """(node_id, path, chunks, first_rowid) of every indexed document with no signal for this pass yet, in order.
         redo (a lote that does documents again): also those whose signal came from another lote, so after a restart
         it goes on with what it has not redone itself. also_done: with redo, lotes whose signals count as redone too
         (a retry of a «rehacer» lote takes only what that lote failed). mine_only: only documents the «tipo» pass
-        says Sergio wrote. Own read-only connection: it reads all of docs, which must never hold the shared lock."""
+        says Sergio wrote. dudas_only (with redo): only documents whose signal says «duda» as author. A signal Sergio
+        corrected by hand («corregido») is never redone. Own read-only connection: it reads all of docs, which must
+        never hold the shared lock."""
         mine = ("JOIN doc_signals m ON m.node_id = d.node_id AND m.path = d.path AND m.pase = 'tipo' "
                 "AND json_extract(m.value, '$.autor') = 'sergio' " if mine_only else "")
         c = sqlite3.connect(self.path, timeout=30)
@@ -1790,7 +1792,9 @@ class DB:
             return c.execute(
                 "SELECT d.node_id, d.path, d.chunks, d.first_rowid FROM docs d " + mine + "LEFT JOIN doc_signals s "
                 "ON s.node_id = d.node_id AND s.path = d.path AND s.pase = ? "
-                "WHERE s.path IS NULL OR (? IS NOT NULL AND s.lote NOT IN (" + ", ".join("?" * (1 + len(also_done))) + ")) "
+                "WHERE " + ("" if dudas_only else "s.path IS NULL OR ") + "(? IS NOT NULL AND s.lote NOT IN ("
+                + ", ".join("?" * (1 + len(also_done))) + ") AND COALESCE(json_extract(s.value, '$.corregido'), 0) = 0"
+                + (" AND json_extract(s.value, '$.autor') = 'duda'" if dudas_only else "") + ") "
                 "ORDER BY d.node_id, d.path",
                 (pase, redo, redo, *also_done)).fetchall()
         finally:
@@ -1811,6 +1815,12 @@ class DB:
                 "INSERT OR REPLACE INTO doc_signals (node_id, path, pase, value, lote, device, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [(n, p, ps, json.dumps(v, ensure_ascii=False), l, d, ts) for n, p, ps, v, l, d, ts in rows])
             self.conn.commit()
+
+    def signal_get(self, node_id: str, path: str, pase: str) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT value, lote, device FROM doc_signals WHERE node_id = ? AND path = ? AND pase = ?",
+                                  (node_id, path, pase)).fetchone()
+        return {"value": json.loads(r[0]), "lote": r[1], "device": r[2]} if r else None
 
     def lote_signals(self, lote: int) -> list[tuple]:
         """(node_id, path, value json) a given lote wrote, on its own read-only connection."""

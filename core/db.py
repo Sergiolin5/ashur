@@ -370,6 +370,13 @@ class DB:
         mem = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory)")}
         if "tier" not in mem:                          # 'claude' = may travel to Claude; 'local' = local models only
             self.conn.execute("ALTER TABLE memory ADD COLUMN tier TEXT NOT NULL DEFAULT 'claude'")
+        if "owner" not in mem:                         # 0.63.0: 'sergio' or a guest's profile, 'g<id>'
+            self.conn.execute("ALTER TABLE memory ADD COLUMN owner TEXT NOT NULL DEFAULT 'sergio'")
+        if "tema" not in mem:                          # 0.63.0: trabajo, gustos, ashur, privado; NULL = not yet classified
+            self.conn.execute("ALTER TABLE memory ADD COLUMN tema TEXT")
+        pcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory_proposals)")}
+        if "owner" not in pcols:
+            self.conn.execute("ALTER TABLE memory_proposals ADD COLUMN owner TEXT NOT NULL DEFAULT 'sergio'")
         # who said it: 'sergio' or 'g<guest id>'; older rows are all Sergio's
         mcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(messages)")}
         if "user" not in mcols:
@@ -385,6 +392,8 @@ class DB:
         gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
+        if "temas" not in gcols:                       # 0.63.0: which of Sergio's topics Ashur may share with this guest
+            self.conn.execute("ALTER TABLE guests ADD COLUMN temas TEXT NOT NULL DEFAULT '[]'")
         ncols2 = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
         if "done_ts" not in ncols2:
             self.conn.execute("ALTER TABLE notes ADD COLUMN done_ts REAL")
@@ -2242,17 +2251,59 @@ class DB:
             self.conn.commit()
         return cur.rowcount > 0
 
-    def add_memory(self, ts: float, text: str, source: str = "ashur", tier: str = "claude") -> int:
+    def add_memory(self, ts: float, text: str, source: str = "ashur", tier: str = "claude", owner: str = "sergio") -> int:
         with self.lock:
-            cur = self.conn.execute("INSERT INTO memory (created, kind, text, source, tier) VALUES (?, 'note', ?, ?, ?)",
-                                    (ts, text, source, tier))
+            cur = self.conn.execute("INSERT INTO memory (created, kind, text, source, tier, owner) VALUES (?, 'note', ?, ?, ?, ?)",
+                                    (ts, text, source, tier, owner))
             self.conn.commit()
             return cur.lastrowid
 
     def memories(self) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.conn.execute(
-                "SELECT id, created, text, source, tier FROM memory ORDER BY id").fetchall()]
+                "SELECT id, created, text, source, tier, tema FROM memory WHERE owner = 'sergio' ORDER BY id").fetchall()]
+
+    MEM_COLS = "id, created, text, source, tier, tema, owner"
+
+    def memories_of(self, owner: str) -> list[dict]:
+        """A guest's profile (0.63.0)."""
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                f"SELECT {self.MEM_COLS} FROM memory WHERE owner = ? ORDER BY id", (owner,)).fetchall()]
+
+    def memories_shared(self, temas: list) -> list[dict]:
+        """Sergio's memories a guest may hear: an allowed topic, and never «solo local»."""
+        temas = [t for t in temas if t in ("trabajo", "gustos", "ashur")]
+        if not temas:
+            return []
+        marks = ",".join("?" * len(temas))
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                f"SELECT {self.MEM_COLS} FROM memory WHERE owner = 'sergio' AND tier = 'claude' AND tema IN ({marks}) "
+                "ORDER BY id", temas).fetchall()]
+
+    def memories_without_tema(self, limit: int) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                f"SELECT {self.MEM_COLS} FROM memory WHERE owner = 'sergio' AND tema IS NULL ORDER BY id LIMIT ?",
+                (limit,)).fetchall()]
+
+    def set_memory_tema(self, memory_id: int, tema: Optional[str]) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE memory SET tema = ? WHERE id = ? AND owner = 'sergio'", (tema, memory_id))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def guest_temas(self, gid: int) -> list:
+        with self.lock:
+            r = self.conn.execute("SELECT temas FROM guests WHERE id = ?", (gid,)).fetchone()
+        return json.loads(r["temas"]) if r else []
+
+    def set_guest_temas(self, gid: int, temas: list) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE guests SET temas = ? WHERE id = ?", (json.dumps(list(temas)), gid))
+            self.conn.commit()
+        return cur.rowcount > 0
 
     def set_memory_tier(self, memory_id: int, tier: str) -> bool:
         with self.lock:
@@ -2299,16 +2350,17 @@ class DB:
         return cur.rowcount > 0
 
     # --- proposals: what Ashur thinks is worth remembering, until Sergio decides ---
-    def proposal_add(self, ts: float, text: str, source: str) -> int:
+    def proposal_add(self, ts: float, text: str, source: str, owner: str = "sergio") -> int:
         with self.lock:
-            cur = self.conn.execute("INSERT INTO memory_proposals (ts, text, source) VALUES (?, ?, ?)", (ts, text, source))
+            cur = self.conn.execute("INSERT INTO memory_proposals (ts, text, source, owner) VALUES (?, ?, ?, ?)",
+                                    (ts, text, source, owner))
             self.conn.commit()
             return cur.lastrowid
 
     def proposals(self, status: str = "pending") -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.conn.execute(
-                "SELECT id, ts, text, source, status FROM memory_proposals WHERE status = ? ORDER BY id", (status,)).fetchall()]
+                "SELECT id, ts, text, source, status, owner FROM memory_proposals WHERE status = ? ORDER BY id", (status,)).fetchall()]
 
     def proposal_texts(self) -> set[str]:
         with self.lock:
@@ -2316,7 +2368,7 @@ class DB:
 
     def proposal_get(self, pid: int) -> Optional[dict]:
         with self.lock:
-            r = self.conn.execute("SELECT id, ts, text, source, status FROM memory_proposals WHERE id = ?", (pid,)).fetchone()
+            r = self.conn.execute("SELECT id, ts, text, source, status, owner FROM memory_proposals WHERE id = ?", (pid,)).fetchone()
         return dict(r) if r else None
 
     def proposal_set(self, pid: int, status: str) -> None:
@@ -2463,14 +2515,20 @@ class DB:
     def update_memory(self, memory_id: int, text: str) -> bool:
         """Sergio corrects a memory (0.62.0); its old vector goes, so the new text is embedded again."""
         with self.lock:
-            cur = self.conn.execute("UPDATE memory SET text = ? WHERE id = ?", (text, memory_id))
+            cur = self.conn.execute("UPDATE memory SET text = ?, tema = NULL WHERE id = ?", (text, memory_id))
             self.conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
             self.conn.commit()
         return cur.rowcount > 0
 
-    def delete_memory(self, memory_id: int) -> bool:
+    def delete_memory(self, memory_id: int, owner: Optional[str] = None) -> bool:
+        """owner: only if the memory is that person's (Ashur's own «forget» tool passes 'sergio')."""
         with self.lock:
-            cur = self.conn.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
+            if owner is None:
+                cur = self.conn.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
+            else:
+                cur = self.conn.execute("DELETE FROM memory WHERE id = ? AND owner = ?", (memory_id, owner))
+            if not cur.rowcount:
+                return False
             self.conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
             self.conn.commit()
         return cur.rowcount > 0

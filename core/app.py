@@ -2661,8 +2661,11 @@ def create_app(
         if not p or p["status"] != "pending":
             raise HTTPException(404, "No existe esa propuesta.")
         # diary and a conversation's sensitive lines (0.62.0) stay with the local models unless he says otherwise
+        owner = p.get("owner") or "sergio"
         tier = body.tier or ("local" if p["source"] == "diary" or p["source"].startswith("conv:") else "claude")
-        mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier)
+        if owner != "sergio":                            # 0.63.0: a guest's sensitive line stays with the local models
+            tier = "local"
+        mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier, owner=owner)
         db.proposal_set(pid, "accepted")
         db.log(clock(), None, "memory_accepted", {"memory_id": mid, "tier": tier})
         return {"memory_id": mid, "tier": tier}

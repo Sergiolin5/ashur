@@ -402,7 +402,7 @@ class Brain:
             self.db.log(now, None, "memory_saved", {"memory_id": mid, "chars": len(text)})
             return f"Guardado como recuerdo {mid}."
         if name == "forget":
-            ok = self.db.delete_memory(int(args.get("memory_id", -1)))
+            ok = self.db.delete_memory(int(args.get("memory_id", -1)), owner="sergio")
             if ok:
                 self.db.log(now, None, "memory_deleted", {"memory_id": args.get("memory_id")})
             return "Borrado." if ok else "No existe ese recuerdo."

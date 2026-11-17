@@ -265,6 +265,14 @@ CREATE TABLE IF NOT EXISTS usage (
     output_tokens INTEGER NOT NULL,
     cost_usd      REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS conversations (  -- 0.62.0: every chat starts a new one; Ashur remembers through `memory`
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, started REAL NOT NULL, last_msg REAL NOT NULL,
+    closed REAL, title TEXT NOT NULL DEFAULT '', extracted REAL, archived INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS conversations_user ON conversations (user, closed);
+CREATE TABLE IF NOT EXISTS memory_vectors (  -- 0.62.0: a memory's meaning (float32, normalized), from a node's Ollama
+    memory_id INTEGER PRIMARY KEY, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS session_log (
     ts          REAL NOT NULL,
     node_id     TEXT,
@@ -366,6 +374,14 @@ class DB:
         mcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(messages)")}
         if "user" not in mcols:
             self.conn.execute("ALTER TABLE messages ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
+        if "conversation_id" not in mcols:            # 0.62.0: each person's endless thread becomes one archived conversation
+            self.conn.execute("ALTER TABLE messages ADD COLUMN conversation_id INTEGER")
+            for r in self.conn.execute("SELECT user, MIN(ts) a, MAX(ts) b FROM messages GROUP BY user").fetchall():
+                cid = self.conn.execute(
+                    "INSERT INTO conversations (user, started, last_msg, closed, title, archived) VALUES (?, ?, ?, ?, ?, 1)",
+                    (r["user"], r["a"], r["b"], r["b"], "Archivo · antes de 0.62")).lastrowid
+                self.conn.execute("UPDATE messages SET conversation_id = ? WHERE user = ?", (cid, r["user"]))
+        self.conn.execute("CREATE INDEX IF NOT EXISTS messages_conv ON messages (conversation_id, id)")
         gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
@@ -2038,18 +2054,117 @@ class DB:
         return [dict(r) for r in rows]
 
     # --- conversation, memory, usage (the brain) -------------------------------
-    def add_message(self, ts: float, channel: str, role: str, content: str, user: str = "sergio") -> None:
+    def add_message(self, ts: float, channel: str, role: str, content: str, user: str = "sergio",
+                    conversation_id: Optional[int] = None) -> None:
         with self.lock:
-            self.conn.execute("INSERT INTO messages (ts, channel, role, content, user) VALUES (?, ?, ?, ?, ?)",
-                              (ts, channel, role, content, user))
+            self.conn.execute("INSERT INTO messages (ts, channel, role, content, user, conversation_id) VALUES (?, ?, ?, ?, ?, ?)",
+                              (ts, channel, role, content, user, conversation_id))
+            if conversation_id is not None:
+                self.conn.execute("UPDATE conversations SET last_msg = ? WHERE id = ?", (ts, conversation_id))
             self.conn.commit()
 
-    def recent_messages(self, limit: int, user: str = "sergio") -> list[dict]:
+    def recent_messages(self, limit: int, user: str = "sergio", conversation_id: Optional[int] = None) -> list[dict]:
+        with self.lock:
+            if conversation_id is None:
+                rows = self.conn.execute(
+                    "SELECT ts, channel, role, content FROM messages WHERE user = ? ORDER BY id DESC LIMIT ?",
+                    (user, limit)).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT ts, channel, role, content FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                    (conversation_id, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    # --- conversations (0.62.0) ------------------------------------------------
+    CONV_COLS = "id, user, started, last_msg, closed, title, extracted, archived"
+
+    def conv_open(self, user: str, now: float) -> int:
+        """The open conversation of `user`, or a new one."""
+        with self.lock:
+            r = self.conn.execute("SELECT id FROM conversations WHERE user = ? AND closed IS NULL AND archived = 0 "
+                                  "ORDER BY id DESC LIMIT 1", (user,)).fetchone()
+            if r:
+                return r["id"]
+            cid = self.conn.execute("INSERT INTO conversations (user, started, last_msg) VALUES (?, ?, ?)",
+                                    (user, now, now)).lastrowid
+            self.conn.commit()
+            return cid
+
+    def conv_new(self, user: str, now: float) -> int:
+        with self.lock:
+            self.conn.execute("UPDATE conversations SET closed = ? WHERE user = ? AND closed IS NULL", (now, user))
+            cid = self.conn.execute("INSERT INTO conversations (user, started, last_msg) VALUES (?, ?, ?)",
+                                    (user, now, now)).lastrowid
+            self.conn.commit()
+            return cid
+
+    def conv_get(self, cid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(f"SELECT {self.CONV_COLS} FROM conversations WHERE id = ?", (cid,)).fetchone()
+        return dict(r) if r else None
+
+    def conv_list(self, user: str, limit: int = 50) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(f"SELECT {self.CONV_COLS} FROM conversations WHERE user = ? "
+                                     "ORDER BY last_msg DESC, id DESC LIMIT ?", (user, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def conv_idle(self, before: float) -> list[int]:
+        with self.lock:
+            rows = self.conn.execute("SELECT id FROM conversations WHERE closed IS NULL AND last_msg < ? ORDER BY id",
+                                     (before,)).fetchall()
+        return [r["id"] for r in rows]
+
+    def conv_close(self, cid: int, now: float) -> None:
+        self.conv_set(cid, closed=now)
+
+    def conv_set(self, cid: int, **fields) -> None:
+        allowed = {"closed", "title", "extracted"}
+        if not fields or set(fields) - allowed:
+            raise ValueError(f"campos no permitidos: {set(fields) - allowed}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self.lock:
+            self.conn.execute(f"UPDATE conversations SET {sets} WHERE id = ?", (*fields.values(), cid))
+            self.conn.commit()
+
+    def conv_messages(self, cid: int, limit: Optional[int] = None, after_ts: Optional[float] = None) -> list[dict]:
+        q = "SELECT id, ts, role, content FROM messages WHERE conversation_id = ?"
+        args: list = [cid]
+        if after_ts is not None:
+            q += " AND ts > ?"
+            args.append(after_ts)
+        q += " ORDER BY id"
+        if limit is not None:
+            q += " LIMIT ?"
+            args.append(limit)
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(q, args).fetchall()]
+
+    # --- memory vectors (0.62.0) -----------------------------------------------
+    def vector_put(self, memory_id: int, model: str, vec: bytes, dim: int) -> None:
+        with self.lock:
+            self.conn.execute("INSERT OR REPLACE INTO memory_vectors (memory_id, model, dim, vec) VALUES (?, ?, ?, ?)",
+                              (memory_id, model, dim, vec))
+            self.conn.commit()
+
+    def vectors(self, model: str) -> dict:
+        with self.lock:
+            rows = self.conn.execute("SELECT memory_id, vec FROM memory_vectors WHERE model = ?", (model,)).fetchall()
+        return {r["memory_id"]: r["vec"] for r in rows}
+
+    def memories_without_vector(self, model: str, limit: int) -> list[dict]:
         with self.lock:
             rows = self.conn.execute(
-                "SELECT ts, channel, role, content FROM messages WHERE user = ? ORDER BY id DESC LIMIT ?",
-                (user, limit)).fetchall()
-        return [dict(r) for r in reversed(rows)]
+                "SELECT m.id, m.text FROM memory m LEFT JOIN memory_vectors v ON v.memory_id = m.id AND v.model = ? "
+                "WHERE v.memory_id IS NULL ORDER BY m.id LIMIT ?", (model, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def vector_count(self, model: str) -> tuple[int, int]:
+        with self.lock:
+            done = self.conn.execute("SELECT COUNT(*) FROM memory_vectors v JOIN memory m ON m.id = v.memory_id "
+                                     "WHERE v.model = ?", (model,)).fetchone()[0]
+            total = self.conn.execute("SELECT COUNT(*) FROM memory").fetchone()[0]
+        return int(done), int(total)
 
     def user_messages_after(self, after_id: int, limit: int = 40) -> list[dict]:
         with self.lock:
@@ -2344,6 +2459,7 @@ class DB:
     def delete_memory(self, memory_id: int) -> bool:
         with self.lock:
             cur = self.conn.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
+            self.conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
             self.conn.commit()
         return cur.rowcount > 0
 

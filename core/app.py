@@ -272,7 +272,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.61.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.61.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -4060,7 +4060,7 @@ def create_app(
                 return False
             if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
                 pending = [d for d in db.lote_pending(L["pase"], lid if L["scope"].get("rehacer") else None,
-                                                      mine_only=L["pase"] == "voz")
+                                                      mine_only=L["pase"] == "voz", also_done=tuple(L["scope"].get("sigue", ())))
                            if lotes.in_scope(d[0], d[1], L["scope"])]
                 kinds = lote_kinds()
                 lote_queue.update(system=lotes.prompt_tipo(lote_names(), kinds), kinds=kinds)
@@ -4173,6 +4173,47 @@ def create_app(
     def lote_cancel(lid: int):
         return lote_move(lid, ("pending_approval", "queued", "running", "paused"), "cancelled", "El lote ya terminó.")
 
+    def retry_open(key: str, get) -> None:
+        """One retry at a time per job: the last one made for it must have finished (or been rejected) first."""
+        prev = db.setting(key)
+        p = get(int(prev)) if prev else None
+        if p and p["status"] in ("pending_approval", "queued", "running", "paused"):
+            raise HTTPException(409, f"Ya hay un reintento sin terminar (#{p['id']}).")
+
+    @app.post("/api/lotes/{lid}/retry", dependencies=[Depends(require_admin)])
+    def lote_retry(lid: int):
+        """A new lote, same pass and folder, over what this one did not finish: its failed documents (they are left
+        without a signal) and, for a failed lote, what it never reached. Lands in Pedidos like Claude's: nothing runs
+        until Sergio approves it there."""
+        L = db.lote_get(lid)
+        if not L:
+            raise HTTPException(404, "No existe ese lote.")
+        if not (L["status"] == "failed" or (L["status"] in ("done", "kept", "released") and L["failed"])):
+            raise HTTPException(409, "Solo se reintenta un lote que falló o que dejó documentos fallidos.")
+        scope = dict(L["scope"])
+        if scope.get("rehacer"):
+            scope["sigue"] = list(scope.get("sigue", ())) + [lid]
+        todo = [d for d in db.lote_pending(L["pase"], 0 if scope.get("rehacer") else None, mine_only=L["pase"] == "voz",
+                                           also_done=tuple(scope.get("sigue", ())))
+                if lotes.in_scope(d[0], d[1], scope)]
+        if not todo:
+            raise HTTPException(409, "No queda nada por hacer de ese lote.")
+        model = sum(1 for d in todo if L["pase"] == "voz" or not lotes.rule(d[1]))
+        reason = f"Reintento del lote #{lid}: {len(todo)} documentos ({model} por el modelo)."
+        with request_lock:
+            retry_open(f"lote_retry:{lid}", db.lote_get)
+            if db.lote_unfinished_count():
+                raise HTTPException(409, "Ya hay un lote sin terminar; va uno a la vez.")
+            if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                raise HTTPException(409, "Ya hay 5 pedidos esperando; decide alguno primero.")
+            new = db.lote_add(clock(), L["pase"], scope, reason)
+            db.lote_set(new, total=len(todo))
+            db.set_setting(f"lote_model:{new}", str(model))
+            rid = db.claude_request_add(clock(), "lote", {"lote": new}, reason)
+            db.set_setting(f"lote_retry:{lid}", str(new))
+        db.log(clock(), None, "claude_request", {"id": rid, "action": "lote", "label": action_label("lote", {"lote": new})})
+        return {"lote": new, "pedido": rid, "documentos": len(todo)}
+
     def encargos_due() -> None:
         """From the maintenance loop: one worker thread while there is an encargo to run."""
         th = encargo_worker[0]
@@ -4223,6 +4264,31 @@ def create_app(
     def encargo_cancel(eid: int):
         cancel_encargo(eid)
         return {"ok": True}
+
+    @app.post("/api/encargos/{eid}/retry", dependencies=[Depends(require_admin)])
+    def encargo_retry(eid: int):
+        """The same work over the same documents as a new encargo, waiting in Pedidos: nothing runs until approved."""
+        e = db.encargo_get(eid, light=True)
+        if not e:
+            raise HTTPException(404, "No existe ese encargo.")
+        if e["status"] != "failed":
+            raise HTTPException(409, "Solo se reintenta un encargo que falló.")
+        reason = f"Reintento del encargo #{eid}."
+        with request_lock:
+            retry_open(f"encargo_retry:{eid}", lambda i: db.encargo_get(i, light=True))
+            if db.encargos_unfinished_count() >= MAX_UNFINISHED:
+                raise HTTPException(409, f"Ya hay {MAX_UNFINISHED} encargos sin terminar; espera o cancela uno.")
+            if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                raise HTTPException(409, "Ya hay 5 pedidos esperando; decide alguno primero.")
+            new = db.encargo_add(clock(), e["op"], e["params"], e["to_claude"], reason, e["docs"])
+            try:
+                rid = db.claude_request_add(clock(), "encargo", {"encargo": new}, reason)
+            except Exception:
+                db.encargo_set(new, expect="pending_approval", status="cancelled")
+                raise
+            db.set_setting(f"encargo_retry:{eid}", str(new))
+        db.log(clock(), None, "claude_request", {"id": rid, "action": "encargo", "label": action_label("encargo", {"encargo": new})})
+        return {"encargo": new, "pedido": rid}
 
     def run_request(req: dict) -> tuple[str, str]:
         """Do an approved request with the panel's own functions. Checked again now: requests never expire, so what was

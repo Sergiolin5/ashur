@@ -282,6 +282,39 @@ class Brain:
     def guest_persona(self, name: str) -> str:
         return (SEEDS / "guest.md").read_text(encoding="utf-8").strip().format(name=name)
 
+    def persona_section(self, title: str) -> str:
+        """One «## <title>» section of the persona, without its source lines (empty if there is none)."""
+        out, inside = [], False
+        for ln in self.persona_file().splitlines():
+            if HEADING.match(ln):
+                inside = ln.lstrip("#").strip().lower() == title.lower()
+                continue
+            if inside and not SOURCE_LINE.match(ln) and ln.strip():
+                out.append(ln)
+        return "\n".join(out)
+
+    def guest_system(self, guest: dict, local: bool = False) -> str:
+        """0.63.0: what a guest's prompt carries. The guest's seed, the «Trato» section (never the whole persona),
+        what Ashur knows of this guest and what Sergio allowed it to tell this guest, both chosen by meaning."""
+        name = guest["name"]
+        parts = [self.guest_persona(name)]
+        trato = self.persona_section("Trato")
+        if trato:
+            parts.append("Cómo tratas a la gente:\n" + trato)
+        r = self._recall
+        query, vec = getattr(r, "query", None) or "", getattr(r, "vec", None)
+        vectors = self.db.vectors(conv.EMBED_MODEL)
+        profile = [m for m in self.db.memories_of(f"g{guest['id']}") if local or m["tier"] == "claude"]
+        shared = self.db.memories_shared(self.db.guest_temas(guest["id"]))
+        p1, _ = conv.pick_memories(profile, vectors, vec, query, MAX_MEMORY_CHARS // 2 if shared else MAX_MEMORY_CHARS)
+        room = MAX_MEMORY_CHARS - sum(len(m["text"]) + 8 for m in p1)
+        p2, _ = conv.pick_memories(shared, vectors, vec, query, room)
+        parts.append(f"Lo que sabes de {name}:\n" + ("\n".join("- " + m["text"] for m in sorted(p1, key=lambda m: m["id"]))
+                                                   or "(todavía nada)"))
+        parts.append("Lo que puedes contar de Sergio:\n" + ("\n".join("- " + m["text"] for m in sorted(p2, key=lambda m: m["id"]))
+                                                           or "(nada: no compartes nada de él)"))
+        return "\n\n".join(parts)
+
     def save_persona(self, text: str) -> None:
         """The text it replaces is kept first, so a crash or a bad edit never loses a persona."""
         old = self.persona_file()
@@ -463,7 +496,7 @@ class Brain:
                      share_diary: bool = False) -> tuple[str, float, list[str]]:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
-        system = self.guest_persona(guest["name"]) if guest else self._system(voice)
+        system = self.guest_system(guest) if guest else self._system(voice)
         extra = {} if guest else {"tools": TOOLS + [t[0] for t in self.extra_tools().values()]}
         cost_total, reply_parts, tools_used = 0.0, [], []
         for _ in range(MAX_TOOL_ROUNDS + 1):
@@ -574,7 +607,7 @@ class Brain:
     def _local_system(self, guest: Optional[dict] = None, voice: Optional[str] = None,
                       docs_block: str = "", diary_block: str = "") -> str:
         if guest:
-            return self.guest_persona(guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
+            return self.guest_system(guest, local=True) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
         return (f"{self._system(voice, local=True)}\n\n"
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
@@ -799,13 +832,11 @@ class Brain:
     def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None, voice: Optional[str] = None,
              **kw) -> dict:
         kw["voice"] = voice
-        if guest is not None:                          # a guest gets no memories at all (stage 2 changes that)
-            return self._chat(text, channel, guest, **kw)
-        self._prepare_recall(text.strip())
         try:
+            self._prepare_recall(text.strip())
             out = self._chat(text, channel, guest, **kw)
             r = self._recall
-            if r.mode and out.get("provider") not in (None, "none"):
+            if guest is None and r.mode and out.get("provider") not in (None, "none"):   # a guest never sees them
                 out["memories_used"] = [{"id": i, "text": t} for i, t in r.used.items()]
                 if r.mode == "palabras" and r.used:
                     out["note"] = ((out.get("note") or "") + " Busqué recuerdos por palabras.").strip()

@@ -123,3 +123,114 @@ def test_put_tema_validates(tmp_path):
     assert c.put(f"/api/memory/{mid}/tema", headers=A, json={"tema": "gustos"}).status_code == 200
     assert c.app.state.db.memories()[0]["tema"] == "gustos"
     assert c.put(f"/api/memory/{mid}/tema", headers=A, json={"tema": "salud"}).status_code == 422
+
+
+# --- Task 3: the guest's prompt -------------------------------------------------------------------
+from types import SimpleNamespace as NS
+
+
+class FakeClaude:
+    def __init__(self, n=5):
+        self.calls, self.messages = [], self
+        self.n = n
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return NS(content=[NS(type="text", text="ok")], stop_reason="end_turn", usage=NS(input_tokens=1, output_tokens=1))
+
+
+def claude_app(tmp_path):
+    fake = FakeClaude()
+    app = create_app(str(tmp_path / "c.db"), "e", "a", clock=VirtualClock(), sweep_every_s=None,
+                     brain_settings=BrainSettings(monthly_budget_usd=10, brain="auto"), brain_client=fake)
+    return TestClient(app), fake
+
+
+def guest(c, name="Ana", temas=()):
+    g = c.post("/api/guests", headers=A, json={"name": name}).json()
+    c.app.state.db.set_guest_temas(g["id"], list(temas))
+    return g["id"], {"X-Admin-Key": g["key"]}
+
+
+PERSONA = """# Ashur
+Soy sereno y preciso.
+> fuente: diario 2026-10-01
+## Trato
+- Con alguien nuevo, pregunta antes de bromear.
+> fuente: Ana, conversación 3
+## Secretos
+- Sergio guarda su clave en un cuaderno azul.
+"""
+
+
+def seed(c):
+    db = c.app.state.db
+    ids = {}
+    for t, tema in (("trabaja en Beazley", "trabajo"), ("le gusta el jazz", "gustos"),
+                    ("tiene una cita médica el lunes", "privado"), ("vive en Bogotá", None)):
+        ids[t] = db.add_memory(1.0, t)
+        if tema:
+            db.set_memory_tema(ids[t], tema)
+    c.app.state.brain.save_persona(PERSONA)
+    return ids
+
+
+def test_guest_prompt_has_allowed_topics_only(tmp_path):
+    c, fake = claude_app(tmp_path)
+    seed(c)
+    _, G = guest(c, temas=["gustos"])
+    c.post("/api/chat", headers=G, json={"message": "¿qué música le gusta a Sergio?"})
+    sysp = fake.calls[-1]["system"]
+    assert "jazz" in sysp
+    for no in ("Beazley", "cita médica", "Bogotá"):
+        assert no not in sysp
+
+
+def test_guest_prompt_without_topics_has_nothing_of_sergio(tmp_path):
+    c, fake = claude_app(tmp_path)
+    seed(c)
+    _, G = guest(c)
+    c.post("/api/chat", headers=G, json={"message": "hola"})
+    sysp = fake.calls[-1]["system"]
+    for no in ("Beazley", "jazz", "cita médica", "Bogotá"):
+        assert no not in sysp
+
+
+def test_guest_profile_never_reaches_sergio_or_other_guest(tmp_path):
+    c, fake = claude_app(tmp_path)
+    ana, GA = guest(c, "Ana")
+    beto, GB = guest(c, "Beto")
+    c.app.state.db.add_memory(1.0, "Ana estudia arquitectura", owner=f"g{ana}")
+    c.post("/api/chat", headers=GA, json={"message": "¿qué estudio?"})
+    assert "arquitectura" in fake.calls[-1]["system"]
+    c.post("/api/chat", headers=GB, json={"message": "¿qué estudia Ana?"})
+    assert "arquitectura" not in fake.calls[-1]["system"]
+    c.post("/api/chat", headers=A, json={"message": "¿qué estudia Ana?"})
+    assert "arquitectura" not in fake.calls[-1]["system"]
+
+
+def test_guest_prompt_has_trato_but_not_sources_or_other_sections(tmp_path):
+    c, fake = claude_app(tmp_path)
+    seed(c)
+    _, G = guest(c)
+    r = c.post("/api/chat", headers=G, json={"message": "hola"}).json()
+    sysp = fake.calls[-1]["system"]
+    assert "pregunta antes de bromear" in sysp
+    for no in ("fuente", "cuaderno azul", "sereno y preciso"):
+        assert no not in sysp
+    assert "memories_used" not in r
+    assert "recuerdas" in sysp.lower() or "recuerda" in sysp.lower()
+
+
+def test_guest_prompt_without_trato_section(tmp_path):
+    c, fake = claude_app(tmp_path)
+    _, G = guest(c)
+    assert c.post("/api/chat", headers=G, json={"message": "hola"}).status_code == 200
+
+
+def test_guest_local_tier_profile_stays_off_claude(tmp_path):
+    c, fake = claude_app(tmp_path)
+    ana, GA = guest(c)
+    c.app.state.db.add_memory(1.0, "Ana está en tratamiento", tier="local", owner=f"g{ana}")
+    c.post("/api/chat", headers=GA, json={"message": "hola"})
+    assert "tratamiento" not in fake.calls[-1]["system"]

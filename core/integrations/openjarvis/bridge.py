@@ -22,7 +22,7 @@ AGENT_OP = "oj_agent"
 ANSWER_TIMEOUT_S = 1800     # an agent waiting this long for one answer is abandoned (cancelled encargo, or a restart)
 FIRST_ASK_TIMEOUT_S = 60    # building the agent and its first call
 
-Ask = Callable[[str, list], str]                 # (system, messages) -> the device's answer
+Ask = Callable[..., str]                         # (system, messages, tools=None) -> the device's answer
 KINDS: dict[str, tuple[str, Callable[[dict], Callable[[Ask], str]]]] = {}   # kind -> (capability, factory)
 RUNS: dict[str, "AgentRun"] = {}
 
@@ -52,9 +52,10 @@ class AgentRun:
         except Exception as e:                   # never the message: it may carry document or mail text
             self.requests.put(("error", type(e).__name__))
 
-    def ask(self, system: str, messages: list) -> str:
-        """Called from the agent's thread by AshurQueueEngine.generate."""
-        self.requests.put(("ask", {"system": system, "messages": messages}))
+    def ask(self, system: str, messages: list, tools: Optional[list] = None) -> str:
+        """Called from the agent's thread by AshurQueueEngine.generate. With tools, the answer is JSON
+        {"text", "tool_calls"} (see local_complete)."""
+        self.requests.put(("ask", {"system": system, "messages": messages, "tools": tools}))
         try:
             return self.answers.get(timeout=self.answer_timeout_s)
         except queue.Empty:
@@ -96,7 +97,10 @@ class OjAgent(Operation):
     @staticmethod
     def _unit(run_id: str, request: dict) -> dict:
         last_user = next((m["content"] for m in reversed(request["messages"]) if m.get("role") == "user"), "")
-        return {"system": request["system"], "messages": request["messages"], "text": last_user or "", "run": run_id}
+        unit = {"system": request["system"], "messages": request["messages"], "text": last_user or "", "run": run_id}
+        if request.get("tools"):
+            unit["tools"] = request["tools"]
+        return unit
 
     def _next(self, run_id: str, run: AgentRun, state: dict, timeout: float) -> list[dict]:
         kind, value = run.next(timeout)

@@ -77,13 +77,22 @@ def install(operations: dict, data_dir: str, db=None, clock=None) -> dict:
         return {}
     home = bootstrap(data_dir)
     from core.integrations.openjarvis.bridge import AGENT_OP, OjAgent
-    from core.integrations.openjarvis import chat, skills
+    from core.integrations.openjarvis import chat, research, skills
     operations.setdefault(AGENT_OP, OjAgent())
     if db is None:
         return {}
+    from core.brain import Brain
     skills.configure(home, doc_text_from(db),
                      lambda: [m["text"] for m in db.memories() if m.get("tier", "claude") == "claude"])
+    research.configure(lambda q: db.docs_search(Brain.file_words(q.lower()), limit=6, with_text=True, any_word=True))
     return chat.tools(db, clock)
+
+
+def due(db, clock) -> None:
+    """From Ashur's maintenance tick: the scheduled OpenJarvis runs whose time has come."""
+    if any_enabled():
+        from core.integrations.openjarvis import schedule
+        schedule.due(db, clock)
 
 
 def approve_request(action: str, args: dict):

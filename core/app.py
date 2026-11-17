@@ -252,6 +252,7 @@ def create_app(
                         app.state.notify_due()
                         app.state.daily_due()
                         app.state.propose_due()
+                        app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
                         threading.Thread(target=lambda: _quiet(app.state.energia_due), daemon=True, name="casa-energia").start()
@@ -1250,11 +1251,12 @@ def create_app(
 
     app.state.is_degraded = is_degraded
 
-    def local_complete(system: str, messages: list, pin: bool = False) -> tuple[str, str]:
+    def local_complete(system: str, messages: list, pin: bool = False, tools: Optional[list] = None) -> tuple[str, str]:
         """Ask a node with a local model (module 'llm') and wait for its answer. pin (lotes): only the most powerful
         device ready now may answer; while it is busy the question waits, and if it never takes it nobody weaker does
         (NoLocalDevice, which is «try later», not a failure of the document). A device that fails at the transport
-        level is set aside (NodeDegraded): the caller may ask again at once and another device answers."""
+        level is set aside (NodeDegraded): the caller may ask again at once and another device answers. tools (an
+        OpenJarvis agent's turn): the answer is then JSON {"text", "tool_calls"}."""
         sweep()
         ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
                  and not is_degraded(n["id"])]
@@ -1262,7 +1264,8 @@ def create_app(
             raise NoLocalDevice("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
                                    "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
         target = strongest_llm_node(ready) if pin else best_llm_node(ready)
-        tid = db.add_task("llm", {"system": system, "messages": messages}, Weight.LIGHT.value, clock(), target=target)
+        payload = {"system": system, "messages": messages, **({"tools": tools} if tools else {})}
+        tid = db.add_task("llm", payload, Weight.LIGHT.value, clock(), target=target)
         deadline = time.monotonic() + local_timeout_s
         handoff = time.monotonic() + 10           # the preferred device is busy or asleep: after 10 s, any device may take it
         try:
@@ -1272,7 +1275,12 @@ def create_app(
                     target = None
                 t = db.get_task(tid)
                 if t["status"] == "done":
-                    return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]
+                    out = (t["result"] or {}).get("result", {})
+                    if not tools:
+                        return out.get("text", ""), t["node_id"]
+                    if "tool_calls" not in out:          # a device still on the llm module of before 0.61.0
+                        raise LocalFailed(f"{t['node_id']} todavía no sabe usar herramientas.", t["node_id"])
+                    return json.dumps({"text": out.get("text", ""), "tool_calls": out["tool_calls"]}), t["node_id"]
                 if t["status"] in ("failed", "cancelled"):
                     err = (t["result"] or {}).get("error") or "sin detalle"
                     if t["node_id"] and is_transport_error(err):
@@ -3755,6 +3763,7 @@ def create_app(
     # OpenJarvis (0.61.0): with any ASHUR_OJ_* flag on, its agents join as one more operation whose units are its model calls
     oj_tools = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)), db=db, clock=clock)
     app.state.openjarvis = oj_adapter.any_enabled()
+    app.state.openjarvis_due = lambda: oj_adapter.due(db, clock)
     if oj_tools:
         from core.integrations.openjarvis.chat import offered as oj_offered
         brain.extra_tools = lambda: oj_offered(oj_tools)          # each tool only while its capability flag is on
@@ -3826,7 +3835,7 @@ def create_app(
                     return "wait", None, None
             try:
                 messages = unit.get("messages") or [{"role": "user", "content": unit["text"]}]   # an agent's turn: its history
-                answer, node = local_complete(unit["system"], messages, pin=pin)
+                answer, node = local_complete(unit["system"], messages, pin=pin, tools=unit.get("tools"))
                 return "ok", answer, node
             except NoLocalDevice:
                 return "wait", None, None

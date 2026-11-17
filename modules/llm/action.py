@@ -36,14 +36,20 @@ def run(payload: dict, ctx, client=None) -> dict:
             raise RuntimeError("Ollama no tiene modelos; ejecuta: ollama pull qwen2.5:3b")
         model = models[0]
     messages = [{"role": "system", "content": payload.get("system", "")}] + list(payload.get("messages", []))
-    r = c.post(f"{url}/api/chat", timeout=180,
-               json={"model": model, "messages": messages, "stream": False,
-                     "options": {"num_ctx": int(cfg.get("llm_context", 8192))}})
+    body = {"model": model, "messages": messages, "stream": False,
+            "options": {"num_ctx": int(cfg.get("llm_context", 8192))}}
+    tools = payload.get("tools")
+    if tools:                                   # 0.61.0: an agent's turn may offer tools; Ollama answers with tool_calls
+        body["tools"] = tools
+    r = c.post(f"{url}/api/chat", timeout=180, json=body)
     r.raise_for_status()
     data = r.json()
-    return {"text": data.get("message", {}).get("content", ""), "model": model,
-            "tokens_out": data.get("eval_count"), "seconds": round((data.get("total_duration") or 0) / 1e9, 2),
-            "gpu_share": gpu_share(url, model, c)}
+    out = {"text": data.get("message", {}).get("content", ""), "model": model,
+           "tokens_out": data.get("eval_count"), "seconds": round((data.get("total_duration") or 0) / 1e9, 2),
+           "gpu_share": gpu_share(url, model, c)}
+    if tools:                                   # always present when tools were offered: the core knows this node knows them
+        out["tool_calls"] = data.get("message", {}).get("tool_calls") or []
+    return out
 
 
 def gpu_share(url: str, model: str, client) -> "float | None":

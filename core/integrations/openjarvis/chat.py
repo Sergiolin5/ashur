@@ -8,7 +8,9 @@ from typing import Callable
 
 from core.encargos import EncargoError
 
-from core.integrations.openjarvis import bridge, enabled, skills
+from core.integrations.openjarvis import bridge, enabled, schedule, skills
+
+SCHEDULABLE = ("skills", "deep_research")
 
 RESULT_CHARS = 4000
 
@@ -26,7 +28,7 @@ SCHEMAS = {
             "skill": {"type": "string", "description": "El id que da skills_catalogo."},
             "entradas": {"type": "object", "description": "Valor de cada entrada que pide la skill."}},
             "required": ["skill"]}}),
-    "trabajo_resultado": ("skills", {
+    "trabajo_resultado": (SCHEDULABLE, {
         "name": "trabajo_resultado",
         "description": "Estado de un trabajo de OpenJarvis por su número de encargo, y su resultado si ya terminó y no "
                        "usó documentos ni recuerdos de Sergio.",
@@ -39,6 +41,33 @@ SCHEMAS = {
             "repo": {"type": "string", "description": "dueño/nombre"},
             "ref": {"type": "string", "description": "Rama, etiqueta o commit; por defecto la principal."}},
             "required": ["repo"]}}),
+    "investigar": ("deep_research", {
+        "name": "investigar",
+        "description": "Investigación de varios pasos con el modelo local de Sergio (agente deep_research de "
+                       "OpenJarvis): busca en la web, lee páginas y, si Sergio lo pide, sus documentos. Corre como "
+                       "encargo; el resultado se lee con trabajo_resultado.",
+        "input_schema": {"type": "object", "properties": {
+            "pregunta": {"type": "string"},
+            "documentos": {"type": "boolean", "description": "true solo si Sergio pidió buscar en sus documentos."}},
+            "required": ["pregunta"]}}),
+    "programar_trabajo": (SCHEDULABLE, {
+        "name": "programar_trabajo",
+        "description": "Programa una skill o una investigación para que Ashur la ponga en cola cada día a una hora "
+                       "(hora de Bogotá).",
+        "input_schema": {"type": "object", "properties": {
+            "tipo": {"type": "string", "enum": ["skill", "investigar"]},
+            "hora": {"type": "string", "description": "HH:MM"},
+            "dias": {"type": "array", "items": {"type": "integer"}, "description": "0 = lunes … 6 = domingo; "
+                                                                                    "sin esto, todos los días."},
+            "skill": {"type": "string"}, "entradas": {"type": "object"},
+            "pregunta": {"type": "string"}, "documentos": {"type": "boolean"}},
+            "required": ["tipo", "hora"]}}),
+    "trabajos_programados": (SCHEDULABLE, {
+        "name": "trabajos_programados", "description": "Lista los trabajos de OpenJarvis programados.",
+        "input_schema": {"type": "object", "properties": {}}}),
+    "desprogramar_trabajo": (SCHEDULABLE, {
+        "name": "desprogramar_trabajo", "description": "Quita un trabajo programado por su id.",
+        "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}}),
 }
 
 STATES = {"queued": "en cola", "running": "en curso", "paused": "en pausa", "kept": "terminado", "done": "terminado",
@@ -52,14 +81,42 @@ def tools(db, clock: Callable[[], float]) -> dict:
         return json.dumps([{k: r[k] for k in ("id", "descripcion", "estado", "entradas", "bloqueos")}
                            for r in skills.catalog()], ensure_ascii=False)
 
+    def spec(args, kind) -> tuple[str, str, dict]:
+        """(kind, label, params) of a run, checked as it would be queued now."""
+        if kind == "skill":
+            sid, entradas = str(args.get("skill", "")), args.get("entradas") or {}
+            if not isinstance(entradas, dict):
+                raise EncargoError("Las entradas van como un objeto.")
+            row = skills.validate_run(sid, entradas)
+            return "skill", f"Skill {row['nombre']}", {"skill": sid, "entradas": entradas, "privada": row["privada"]}
+        pregunta = str(args.get("pregunta", "")).strip()
+        if not pregunta:
+            raise EncargoError("Falta la pregunta.")
+        docs = bool(args.get("documentos"))
+        return "deep_research", "Investigar: " + pregunta[:60], {"pregunta": pregunta, "documentos": docs,
+                                                                   "privada": docs}
+
     def correr(args):
-        sid, entradas = str(args.get("skill", "")), args.get("entradas") or {}
-        if not isinstance(entradas, dict):
-            raise EncargoError("Las entradas van como un objeto.")
-        row = skills.validate_run(sid, entradas)
-        eid = bridge.queue_run(db, clock, "skill", f"Skill {row['nombre']}", skill=sid, entradas=entradas,
-                               privada=row["privada"])
-        return f"Encargo #{eid} en cola: skill {row['nombre']}."
+        kind, label, params = spec(args, "skill")
+        eid = bridge.queue_run(db, clock, kind, label, **params)
+        return f"Encargo #{eid} en cola: {label}."
+
+    def investigar(args):
+        kind, label, params = spec(args, "deep_research")
+        eid = bridge.queue_run(db, clock, kind, label, **params)
+        return f"Encargo #{eid} en cola: {label}."
+
+    def programar(args):
+        kind, label, params = spec(args, "skill" if args.get("tipo") == "skill" else "deep_research")
+        row = schedule.add(db, kind, label, str(args.get("hora", "")), args.get("dias"), params)
+        return "Programado: " + schedule.describe(row) + "."
+
+    def programados(_args):
+        rows = schedule.items(db)
+        return "\n".join(schedule.describe(r) for r in rows) or "No hay trabajos programados."
+
+    def desprogramar(args):
+        return "Quitado." if schedule.remove(db, str(args.get("id", ""))) else "No hay un trabajo programado con ese id."
 
     def resultado(args):
         eid = args.get("encargo")
@@ -84,7 +141,8 @@ def tools(db, clock: Callable[[], float]) -> dict:
         return f"{len(ids)} skill(s) de {repo} esperan tu aprobación en «Por aprobar»: " + ", ".join(ids) + "."
 
     handlers = {"skills_catalogo": catalogo, "skill_correr": correr, "trabajo_resultado": resultado,
-                "skills_importar": importar}
+                "skills_importar": importar, "investigar": investigar, "programar_trabajo": programar,
+                "trabajos_programados": programados, "desprogramar_trabajo": desprogramar}
 
     def guarded(fn):
         def call(args):
@@ -97,4 +155,7 @@ def tools(db, clock: Callable[[], float]) -> dict:
 
 
 def offered(tools_by_name: dict) -> dict:
-    return {n: t for n, t in tools_by_name.items() if enabled(t[2])}
+    """A tool's capability is one name, or a tuple: offered while any of them is on."""
+    def on(cap):
+        return any(enabled(c) for c in cap) if isinstance(cap, tuple) else enabled(cap)
+    return {n: t for n, t in tools_by_name.items() if on(t[2])}

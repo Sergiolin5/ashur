@@ -125,10 +125,24 @@ def test_a_restart_mid_agent_fails_the_encargo(oj_env, tmp_path, fast_local):
     assert e["status"] == "failed" and e["done"] == 1
 
 
-def test_engine_refuses_tools_until_phase_3b():
-    from openjarvis.core.types import Message, Role
-    from core.integrations.openjarvis.engine import AshurQueueEngine, ToolsNotSupported
-    eng = AshurQueueEngine(lambda s, m: "x")
-    with pytest.raises(ToolsNotSupported):
-        eng.generate([Message(role=Role.USER, content="hola")], tools=[{"type": "function"}])
-    assert eng.generate([Message(role=Role.SYSTEM, content="s"), Message(role=Role.USER, content="hola")])["content"] == "x"
+def test_engine_converts_tool_calls_both_ways():
+    """Agents speak OpenAI (arguments as a JSON string, ids); Ollama takes and gives objects and no ids."""
+    from openjarvis.core.types import Message, Role, ToolCall
+    from core.integrations.openjarvis.engine import AshurQueueEngine
+    seen = {}
+
+    def ask(system, messages, tools=None):
+        seen.update(system=system, messages=messages, tools=tools)
+        return json.dumps({"text": "", "tool_calls": [{"function": {"name": "web_search", "arguments": {"query": "x"}}}]})
+    eng = AshurQueueEngine(ask)
+    history = [Message(role=Role.SYSTEM, content="s"), Message(role=Role.USER, content="hola"),
+               Message(role=Role.ASSISTANT, content="", tool_calls=[ToolCall(id="c1", name="web_fetch",
+                                                                             arguments='{"url": "https://a.b"}')]),
+               Message(role=Role.TOOL, content="página", name="web_fetch", tool_call_id="c1")]
+    out = eng.generate(history, tools=[{"type": "function", "function": {"name": "web_search"}}])
+    assert seen["system"] == "s" and seen["tools"][0]["function"]["name"] == "web_search"
+    assert seen["messages"][1]["tool_calls"] == [{"function": {"name": "web_fetch", "arguments": {"url": "https://a.b"}}}]
+    assert seen["messages"][2] == {"role": "tool", "content": "página", "tool_name": "web_fetch"}
+    assert out["tool_calls"] == [{"id": "call_1", "function": {"name": "web_search", "arguments": '{"query": "x"}'}}]
+    assert out["finish_reason"] == "tool_calls"
+    assert AshurQueueEngine(lambda s, m: "x").generate([Message(role=Role.USER, content="hola")])["content"] == "x"

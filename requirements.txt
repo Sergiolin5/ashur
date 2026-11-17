@@ -8,3 +8,5 @@ psutil>=5.9
 anthropic>=0.40
 pywebpush>=2.0
 tzdata; sys_platform == "win32"   # Windows has no system zone database; zoneinfo needs it for America/Bogota
+openjarvis==1.0.4   # only core/integrations/openjarvis imports it; every capability is off unless its ASHUR_OJ_* flag is 1
+cryptography>=42   # the Google token at rest (core/integrations/openjarvis/google.py); already pulled by pywebpush

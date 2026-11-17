@@ -31,8 +31,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
-                        LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
+                        LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
+                        looks_like_secret, month_start)
 from core import casa as casa_mod, habits, lotes, signals
+from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
 from core.camaras import CamError, Go2rtc
@@ -250,6 +252,7 @@ def create_app(
                         app.state.notify_due()
                         app.state.daily_due()
                         app.state.propose_due()
+                        app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
                         threading.Thread(target=lambda: _quiet(app.state.energia_due), daemon=True, name="casa-energia").start()
@@ -269,7 +272,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.60.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.61.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -616,6 +619,8 @@ def create_app(
             # queue paused (0.41.1): hand out nothing new except the local model, which answers chat and self-test
             # questions; what a node already runs finishes on its own
             allowed = [m for m in mine if m in QUEUE_PAUSE_EXEMPT] if queue_paused() else mine
+            if "llm" in allowed and is_degraded(node["id"]):     # set aside after a transport failure: no local model work
+                allowed = [m for m in allowed if m != "llm"]
             t = db.claim_task(node["id"], allowed, WEIGHTS_FOR_MODE[Mode(fresh["mode"])], now=clock())
             if t or time.monotonic() >= deadline:
                 break
@@ -1106,14 +1111,41 @@ def create_app(
                 "node_code_label": db.code_label(node_code()[0])}
 
     # --- the brain -------------------------------------------------------
+    # --- one rendering of a device's state for the panel's connector and the chat (bug 2 of 2026-11-17) ----------
+    # The chat got the raw mode («full») and no figures, and the model said «en línea» with figures of its own. Both
+    # now read this, from the same status() snapshot; silence past OFFLINE_AFTER_S counts as offline even when the
+    # sweep has not run yet (another request held its lock), and a figure the snapshot lacks is «sin datos».
+    SIN_DATOS = "sin datos"
+
+    def node_view(n) -> dict:
+        silent = n.last_seen_s_ago is None or n.last_seen_s_ago > OFFLINE_AFTER_S
+        online = n.mode != Mode.OFFLINE and not silent
+        if online:
+            word = "en línea"
+        else:
+            reason = (n.reason or "") if n.mode == Mode.OFFLINE else ""
+            word = "dormido" if reason == "dormido" else "sin batería" if reason.startswith("sin batería") else "sin señal"
+
+        def pct(v):
+            return f"{v:.0f}%" if online and v is not None else SIN_DATOS
+
+        cpu, ram, gpu = pct(n.cpu_pct), pct(n.ram_pct), pct(n.gpu_pct)
+        bat = SIN_DATOS if not online or n.battery_pct is None else \
+            f"{n.battery_pct:.0f}%" + (" (con cargador)" if n.on_power else "")
+        bits = [word] + [f"{k} {v}" for k, v in (("CPU", cpu), ("RAM", ram), ("GPU", gpu), ("batería", bat)) if v != SIN_DATOS]
+        return {"estado": f"{n.device_id}: " + ", ".join(bits), "cpu": cpu, "ram": ram, "gpu": gpu, "bateria": bat}
+
     def network_for_brain() -> dict:
         st = status()
         return {"dispositivos": [{"id": n.device_id, "sistema": n.os, "modo": n.mode.value,
-                                  "visto_hace_s": n.last_seen_s_ago} for n in st["nodes"]],
+                                  "visto_hace_s": n.last_seen_s_ago, **node_view(n)} for n in st["nodes"]],
                 "tareas": st["tasks"],
                 "en_curso": [{"tarea": t["id"], "modulo": t["module"], "dispositivo": t["node_id"],
                               "elementos": progress.get(t["node_id"], {}).get("entries")}
                              for t in db.running_tasks()]}
+
+    app.state.network_for_brain = network_for_brain
+    app.state.sweep_lock = sweep_lock
 
     local_timeout_s = float(os.environ.get("ASHUR_LOCAL_TIMEOUT_S", "120"))
 
@@ -1202,17 +1234,38 @@ def create_app(
 
     app.state.strongest_llm_node = strongest_llm_node
 
-    def local_complete(system: str, messages: list, pin: bool = False) -> tuple[str, str]:
+    # --- a device that fails at the transport level is set aside (bug of 2026-11-17) ----------------------------
+    # A ReadTimeout on the Legion Go used to send every retry back to it (it was still the preferred device), so one
+    # failing device stopped the encargo while the Ryzen 9 sat free. Kept in memory: a restart forgives every device.
+    DEGRADED_FOR_S = 300
+    degraded: dict[str, float] = {}             # node id → until when it is left out of the local model's choice
+
+    def is_degraded(node_id: str) -> bool:
+        return degraded.get(node_id, 0.0) > clock()
+
+    def degrade(node_id: str, error: str) -> None:
+        was = is_degraded(node_id)
+        degraded[node_id] = clock() + DEGRADED_FOR_S
+        if not was:
+            db.log(clock(), node_id, "node_degraded", {"error": error.split(":", 1)[0][:40], "for_s": DEGRADED_FOR_S})
+
+    app.state.is_degraded = is_degraded
+
+    def local_complete(system: str, messages: list, pin: bool = False, tools: Optional[list] = None) -> tuple[str, str]:
         """Ask a node with a local model (module 'llm') and wait for its answer. pin (lotes): only the most powerful
         device ready now may answer; while it is busy the question waits, and if it never takes it nobody weaker does
-        (NoLocalDevice, which is «try later», not a failure of the document)."""
+        (NoLocalDevice, which is «try later», not a failure of the document). A device that fails at the transport
+        level is set aside (NodeDegraded): the caller may ask again at once and another device answers. tools (an
+        OpenJarvis agent's turn): the answer is then JSON {"text", "tool_calls"}."""
         sweep()
-        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")]
+        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
+                 and not is_degraded(n["id"])]
         if not ready:
             raise NoLocalDevice("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
                                    "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
         target = strongest_llm_node(ready) if pin else best_llm_node(ready)
-        tid = db.add_task("llm", {"system": system, "messages": messages}, Weight.LIGHT.value, clock(), target=target)
+        payload = {"system": system, "messages": messages, **({"tools": tools} if tools else {})}
+        tid = db.add_task("llm", payload, Weight.LIGHT.value, clock(), target=target)
         deadline = time.monotonic() + local_timeout_s
         handoff = time.monotonic() + 10           # the preferred device is busy or asleep: after 10 s, any device may take it
         try:
@@ -1222,9 +1275,17 @@ def create_app(
                     target = None
                 t = db.get_task(tid)
                 if t["status"] == "done":
-                    return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]
+                    out = (t["result"] or {}).get("result", {})
+                    if not tools:
+                        return out.get("text", ""), t["node_id"]
+                    if "tool_calls" not in out:          # a device still on the llm module of before 0.61.0
+                        raise LocalFailed(f"{t['node_id']} todavía no sabe usar herramientas.", t["node_id"])
+                    return json.dumps({"text": out.get("text", ""), "tool_calls": out["tool_calls"]}), t["node_id"]
                 if t["status"] in ("failed", "cancelled"):
                     err = (t["result"] or {}).get("error") or "sin detalle"
+                    if t["node_id"] and is_transport_error(err):
+                        degrade(t["node_id"], err)
+                        raise NodeDegraded(f"El modelo local falló en {t['node_id']}: {err}", t["node_id"])
                     raise LocalFailed(f"El modelo local falló en {t['node_id']}: {err}", t["node_id"])
                 time.sleep(0.2)
             if pin and db.cancel_queued(tid, clock()) == "queued":      # never taken: the device is busy, not broken
@@ -3699,6 +3760,26 @@ def create_app(
     request_lock = threading.Lock()
 
     # --- encargos (0.46.0): text work Claude orders over the indexed documents, one unit at a time on local models ---
+    # OpenJarvis (0.61.0): with any ASHUR_OJ_* flag on, its agents join as one more operation whose units are its model calls
+    def oj_status() -> list[str]:
+        """Ashur's state for the morning digest: the same device lines as the status view, the queue, the night's
+        failures (counted, never their text)."""
+        since = clock() - 12 * 3600
+        failed = sum(1 for r in db.log_rows(500) if r["ts"] >= since and r["event"] in
+                     ("task_failed", "encargo_failed", "lote_failed"))
+        return ([d["estado"] for d in network_for_brain()["dispositivos"]]
+                + ["Cola: " + ("pausada" if queue_paused() else "activa"),
+                   f"Fallas en las últimas 12 h: {failed}"])
+
+    oj_tools = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)), db=db, clock=clock,
+                                  status=oj_status)
+    app.state.openjarvis = oj_adapter.any_enabled()
+    app.state.openjarvis_due = lambda: oj_adapter.due(                # a routine's own steps: the panel's own functions
+        db, clock, run_action=lambda accion: run_request({"action": accion, "args": {}}),
+        notify=lambda body: _push_all({"title": "Ashur", "body": body, "url": "/#chat", "tag": "openjarvis"}))
+    if oj_tools:
+        from core.integrations.openjarvis.chat import offered as oj_offered
+        brain.extra_tools = lambda: oj_offered(oj_tools)          # each tool only while its capability flag is on
     ENCARGO_UNFINISHED = ("pending_approval", "queued", "running", "paused")
     ENCARGO_WITH_RESULT = ("done", "kept", "released", "failed")
     encargo_lock = threading.Lock()             # one step at a time: a unit is never sent twice by two callers
@@ -3758,16 +3839,22 @@ def create_app(
         """("ok", answer, device); ("failed", None, last device) after NOTES_TRIES tries; ("wait", None, None) when no
         device is ready or the queue got paused between tries: neither uses up the unit's tries."""
         node = None
-        for attempt in range(1, NOTES_TRIES + 1):
+        attempt = 0
+        while attempt < NOTES_TRIES:
+            attempt += 1
             if attempt > 1:
                 time.sleep(app.state.encargo_retry_wait_s)
                 if queue_paused():
                     return "wait", None, None
             try:
-                answer, node = local_complete(unit["system"], [{"role": "user", "content": unit["text"]}], pin=pin)
+                messages = unit.get("messages") or [{"role": "user", "content": unit["text"]}]   # an agent's turn: its history
+                answer, node = local_complete(unit["system"], messages, pin=pin, tools=unit.get("tools"))
                 return "ok", answer, node
             except NoLocalDevice:
                 return "wait", None, None
+            except NodeDegraded as ex:            # the device failed, not the unit: another device, no try used
+                node = ex.node
+                attempt -= 1
             except LocalFailed as ex:
                 node = ex.node
             except LocalUnavailable:              # timed out: a try
@@ -4127,6 +4214,9 @@ def create_app(
         true when Claude asked may not be anymore; then nothing runs and the reason comes back as not_done."""
         action, tarea = req["action"], req["args"].get("tarea")
         try:
+            oj = oj_adapter.approve_request(action, req["args"])      # an imported OpenJarvis skill
+            if oj is not None:
+                return oj
             if action == "encargo":
                 eid = req["args"].get("encargo")
                 if not isinstance(eid, int) or not db.encargo_set(eid, expect="pending_approval", status="queued"):
@@ -4213,26 +4303,11 @@ def create_app(
         """The connector's tools. Every one builds its text from an allowlist of fields (see the constraints of 0.45.0)."""
         NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
 
-        def state_of(n) -> str:
-            if n.mode != Mode.OFFLINE:
-                return "en línea"
-            reason = n.reason or ""
-            return "dormido" if reason == "dormido" else "sin batería" if reason.startswith("sin batería") else "sin señal"
-
         def estado(_args: dict) -> str:
             ov = overview()
             lines = []
             for n in ov["status"]["nodes"]:
-                bits = [state_of(n)]
-                if n.cpu_pct is not None:
-                    bits.append(f"CPU {n.cpu_pct:.0f}%")
-                if n.ram_pct is not None:
-                    bits.append(f"RAM {n.ram_pct:.0f}%")
-                if n.gpu_pct is not None:
-                    bits.append(f"GPU {n.gpu_pct:.0f}%")
-                if n.battery_pct is not None:
-                    bits.append(f"batería {n.battery_pct:.0f}%" + (" (con cargador)" if n.on_power else ""))
-                lines.append(f"{n.device_id}: " + ", ".join(bits))
+                lines.append(node_view(n)["estado"])
             lines.append("Cola: " + ("pausada" if ov["queue_paused"] else "activa"))
             for t in ov["running"]:
                 lines.append(f"En curso: #{t['id']} {t['module']} en {t['node_id']}")

@@ -32,7 +32,8 @@ TOOLS = [
          "words": {"type": "string", "description": "Una a tres palabras clave que deben aparecer."}},
          "required": ["words"]}},
     {"name": "network_status",
-     "description": "Estado actual de tus dispositivos (nodos): cuáles están conectados, su modo y las tareas en curso.",
+     "description": "Estado actual de tus dispositivos (nodos): cuáles están conectados, su modo y las tareas en curso. "
+                    "Usa el campo «estado» tal cual; no afirmes ninguna cifra que no esté ahí y di «sin datos» si falta.",
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "inventory_overview",
      "description": "Resumen de los inventarios de archivos por dispositivo; opcionalmente los ejecutables de uno.",
@@ -177,6 +178,23 @@ class LocalFailed(LocalUnavailable):
         self.node = node
 
 
+class NodeDegraded(LocalFailed):
+    """The device failed at the transport level (its Ollama timed out or dropped the connection): the device is set
+    aside for a while and the question can go to another one at once. Not a failed try of the question."""
+
+
+NET_RULE = ("Para el estado de un dispositivo usa su campo «estado» tal cual. No afirmes ninguna cifra que no esté "
+            "ahí: si falta, di «sin datos».")
+
+TRANSPORT_ERRORS = ("ReadTimeout", "ConnectTimeout", "ConnectError", "WriteTimeout", "PoolTimeout", "ReadError",
+                    "RemoteProtocolError")
+
+
+def is_transport_error(error: str) -> bool:
+    """A node reports «<ExceptionName>: <message>»; these names mean the device, not the question, failed."""
+    return (error or "").split(":", 1)[0].strip() in TRANSPORT_ERRORS
+
+
 def api_error_reason(e: Exception) -> str:
     """The human-readable reason Anthropic gives, e.g. a low credit balance. Never contains the key."""
     body = getattr(e, "body", None)
@@ -219,6 +237,7 @@ class Brain:
         self.s = settings or BrainSettings.from_env()
         self._client = client
         self.local = local                   # (system, messages) -> (reply, device_id)
+        self.extra_tools: Callable[[], dict] = dict      # name -> (schema, handler, _): tools a mounted library adds
 
     # --- plumbing ---------------------------------------------------------
     def client(self):
@@ -336,7 +355,7 @@ class Brain:
         return (f"{self.persona().strip()}\n\n"
                 f"Fecha y hora en Bogotá: {now:%Y-%m-%d %H:%M}.\n\n"
                 f"Tus recuerdos (número entre corchetes):\n{self._memory_block(False)}\n\n"
-                f"Estado actual de tus dispositivos: {net}\n\n"
+                f"Estado actual de tus dispositivos: {net}\n{NET_RULE}\n\n"
                 "Respondes a Claude, que habla con Sergio desde su teléfono. No tienes herramientas. "
                 "Responde breve y en español.")
 
@@ -417,6 +436,9 @@ class Brain:
                 out["ejecutables"] = [{"ruta": r["path"], "tamaño": r["size"], "aprobado": bool(r["approved"])}
                                       for r in rows]
             return json.dumps(out, ensure_ascii=False)
+        added = self.extra_tools().get(name)
+        if added:
+            return added[1](args)
         return f"Herramienta desconocida: {name}"
 
     # --- conversation -----------------------------------------------------
@@ -436,7 +458,7 @@ class Brain:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
         system = self.guest_persona(guest["name"]) if guest else self._system(voice)
-        extra = {} if guest else {"tools": TOOLS}
+        extra = {} if guest else {"tools": TOOLS + [t[0] for t in self.extra_tools().values()]}
         cost_total, reply_parts, tools_used = 0.0, [], []
         for _ in range(MAX_TOOL_ROUNDS + 1):
             resp = client.messages.create(model=self.s.model, max_tokens=self.s.max_tokens,
@@ -552,7 +574,7 @@ class Brain:
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
                 "No tienes herramientas: no puedes guardar ni borrar recuerdos; si te lo piden, dilo con "
                 "claridad. Responde breve y en español.\n\n"
-                f"Estado actual de tus dispositivos: {net}"
+                f"Estado actual de tus dispositivos: {net}\n{NET_RULE}"
                 + (f"\n\n{docs_block}" if docs_block else "")
                 + (f"\n\n{diary_block}" if diary_block else ""))
 

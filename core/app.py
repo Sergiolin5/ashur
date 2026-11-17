@@ -31,7 +31,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
-                        LocalUnavailable, NoLocalDevice, api_error_reason, looks_like_secret, month_start)
+                        LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
+                        looks_like_secret, month_start)
 from core import casa as casa_mod, habits, lotes, signals
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
@@ -269,7 +270,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.60.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.60.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -616,6 +617,8 @@ def create_app(
             # queue paused (0.41.1): hand out nothing new except the local model, which answers chat and self-test
             # questions; what a node already runs finishes on its own
             allowed = [m for m in mine if m in QUEUE_PAUSE_EXEMPT] if queue_paused() else mine
+            if "llm" in allowed and is_degraded(node["id"]):     # set aside after a transport failure: no local model work
+                allowed = [m for m in allowed if m != "llm"]
             t = db.claim_task(node["id"], allowed, WEIGHTS_FOR_MODE[Mode(fresh["mode"])], now=clock())
             if t or time.monotonic() >= deadline:
                 break
@@ -1106,14 +1109,41 @@ def create_app(
                 "node_code_label": db.code_label(node_code()[0])}
 
     # --- the brain -------------------------------------------------------
+    # --- one rendering of a device's state for the panel's connector and the chat (bug 2 of 2026-11-17) ----------
+    # The chat got the raw mode («full») and no figures, and the model said «en línea» with figures of its own. Both
+    # now read this, from the same status() snapshot; silence past OFFLINE_AFTER_S counts as offline even when the
+    # sweep has not run yet (another request held its lock), and a figure the snapshot lacks is «sin datos».
+    SIN_DATOS = "sin datos"
+
+    def node_view(n) -> dict:
+        silent = n.last_seen_s_ago is None or n.last_seen_s_ago > OFFLINE_AFTER_S
+        online = n.mode != Mode.OFFLINE and not silent
+        if online:
+            word = "en línea"
+        else:
+            reason = (n.reason or "") if n.mode == Mode.OFFLINE else ""
+            word = "dormido" if reason == "dormido" else "sin batería" if reason.startswith("sin batería") else "sin señal"
+
+        def pct(v):
+            return f"{v:.0f}%" if online and v is not None else SIN_DATOS
+
+        cpu, ram, gpu = pct(n.cpu_pct), pct(n.ram_pct), pct(n.gpu_pct)
+        bat = SIN_DATOS if not online or n.battery_pct is None else \
+            f"{n.battery_pct:.0f}%" + (" (con cargador)" if n.on_power else "")
+        bits = [word] + [f"{k} {v}" for k, v in (("CPU", cpu), ("RAM", ram), ("GPU", gpu), ("batería", bat)) if v != SIN_DATOS]
+        return {"estado": f"{n.device_id}: " + ", ".join(bits), "cpu": cpu, "ram": ram, "gpu": gpu, "bateria": bat}
+
     def network_for_brain() -> dict:
         st = status()
         return {"dispositivos": [{"id": n.device_id, "sistema": n.os, "modo": n.mode.value,
-                                  "visto_hace_s": n.last_seen_s_ago} for n in st["nodes"]],
+                                  "visto_hace_s": n.last_seen_s_ago, **node_view(n)} for n in st["nodes"]],
                 "tareas": st["tasks"],
                 "en_curso": [{"tarea": t["id"], "modulo": t["module"], "dispositivo": t["node_id"],
                               "elementos": progress.get(t["node_id"], {}).get("entries")}
                              for t in db.running_tasks()]}
+
+    app.state.network_for_brain = network_for_brain
+    app.state.sweep_lock = sweep_lock
 
     local_timeout_s = float(os.environ.get("ASHUR_LOCAL_TIMEOUT_S", "120"))
 
@@ -1202,12 +1232,31 @@ def create_app(
 
     app.state.strongest_llm_node = strongest_llm_node
 
+    # --- a device that fails at the transport level is set aside (bug of 2026-11-17) ----------------------------
+    # A ReadTimeout on the Legion Go used to send every retry back to it (it was still the preferred device), so one
+    # failing device stopped the encargo while the Ryzen 9 sat free. Kept in memory: a restart forgives every device.
+    DEGRADED_FOR_S = 300
+    degraded: dict[str, float] = {}             # node id → until when it is left out of the local model's choice
+
+    def is_degraded(node_id: str) -> bool:
+        return degraded.get(node_id, 0.0) > clock()
+
+    def degrade(node_id: str, error: str) -> None:
+        was = is_degraded(node_id)
+        degraded[node_id] = clock() + DEGRADED_FOR_S
+        if not was:
+            db.log(clock(), node_id, "node_degraded", {"error": error.split(":", 1)[0][:40], "for_s": DEGRADED_FOR_S})
+
+    app.state.is_degraded = is_degraded
+
     def local_complete(system: str, messages: list, pin: bool = False) -> tuple[str, str]:
         """Ask a node with a local model (module 'llm') and wait for its answer. pin (lotes): only the most powerful
         device ready now may answer; while it is busy the question waits, and if it never takes it nobody weaker does
-        (NoLocalDevice, which is «try later», not a failure of the document)."""
+        (NoLocalDevice, which is «try later», not a failure of the document). A device that fails at the transport
+        level is set aside (NodeDegraded): the caller may ask again at once and another device answers."""
         sweep()
-        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")]
+        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
+                 and not is_degraded(n["id"])]
         if not ready:
             raise NoLocalDevice("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
                                    "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
@@ -1225,6 +1274,9 @@ def create_app(
                     return (t["result"] or {}).get("result", {}).get("text", ""), t["node_id"]
                 if t["status"] in ("failed", "cancelled"):
                     err = (t["result"] or {}).get("error") or "sin detalle"
+                    if t["node_id"] and is_transport_error(err):
+                        degrade(t["node_id"], err)
+                        raise NodeDegraded(f"El modelo local falló en {t['node_id']}: {err}", t["node_id"])
                     raise LocalFailed(f"El modelo local falló en {t['node_id']}: {err}", t["node_id"])
                 time.sleep(0.2)
             if pin and db.cancel_queued(tid, clock()) == "queued":      # never taken: the device is busy, not broken
@@ -3758,7 +3810,9 @@ def create_app(
         """("ok", answer, device); ("failed", None, last device) after NOTES_TRIES tries; ("wait", None, None) when no
         device is ready or the queue got paused between tries: neither uses up the unit's tries."""
         node = None
-        for attempt in range(1, NOTES_TRIES + 1):
+        attempt = 0
+        while attempt < NOTES_TRIES:
+            attempt += 1
             if attempt > 1:
                 time.sleep(app.state.encargo_retry_wait_s)
                 if queue_paused():
@@ -3768,6 +3822,9 @@ def create_app(
                 return "ok", answer, node
             except NoLocalDevice:
                 return "wait", None, None
+            except NodeDegraded as ex:            # the device failed, not the unit: another device, no try used
+                node = ex.node
+                attempt -= 1
             except LocalFailed as ex:
                 node = ex.node
             except LocalUnavailable:              # timed out: a try
@@ -4213,26 +4270,11 @@ def create_app(
         """The connector's tools. Every one builds its text from an allowlist of fields (see the constraints of 0.45.0)."""
         NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
 
-        def state_of(n) -> str:
-            if n.mode != Mode.OFFLINE:
-                return "en línea"
-            reason = n.reason or ""
-            return "dormido" if reason == "dormido" else "sin batería" if reason.startswith("sin batería") else "sin señal"
-
         def estado(_args: dict) -> str:
             ov = overview()
             lines = []
             for n in ov["status"]["nodes"]:
-                bits = [state_of(n)]
-                if n.cpu_pct is not None:
-                    bits.append(f"CPU {n.cpu_pct:.0f}%")
-                if n.ram_pct is not None:
-                    bits.append(f"RAM {n.ram_pct:.0f}%")
-                if n.gpu_pct is not None:
-                    bits.append(f"GPU {n.gpu_pct:.0f}%")
-                if n.battery_pct is not None:
-                    bits.append(f"batería {n.battery_pct:.0f}%" + (" (con cargador)" if n.on_power else ""))
-                lines.append(f"{n.device_id}: " + ", ".join(bits))
+                lines.append(node_view(n)["estado"])
             lines.append("Cola: " + ("pausada" if ov["queue_paused"] else "activa"))
             for t in ov["running"]:
                 lines.append(f"En curso: #{t['id']} {t['module']} en {t['node_id']}")

@@ -54,3 +54,39 @@ def test_deleting_a_memory_deletes_its_vector(tmp_path):
     assert set(db.vectors("bge-m3")) == {mid}
     db.delete_memory(mid)
     assert db.vectors("bge-m3") == {}
+
+
+# --- Task 2: the node embeds ---------------------------------------------------
+import json as _json
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+
+def fake_embed_ollama(status=200, vectors=((0.1, 0.2),)):
+    seen = {}
+
+    def handler(req):
+        if req.url.path == "/api/embed":
+            seen["body"] = _json.loads(req.content)
+            if status != 200:
+                return httpx.Response(status, json={"error": 'model "bge-m3" not found, try pulling it first'})
+            return httpx.Response(200, json={"model": "bge-m3", "embeddings": [list(v) for v in vectors]})
+        return httpx.Response(404)
+    return httpx.Client(transport=httpx.MockTransport(handler)), seen
+
+
+def test_llm_module_embeds():
+    from modules.llm.action import run
+    client, seen = fake_embed_ollama()
+    out = run({"embed": ["hola"], "model": "bge-m3"}, SimpleNamespace(config={}), client=client)
+    assert out == {"vectors": [[0.1, 0.2]], "model": "bge-m3", "dim": 2}
+    assert seen["body"] == {"model": "bge-m3", "input": ["hola"]}
+
+
+def test_llm_module_embed_missing_model():
+    from modules.llm.action import run
+    client, _ = fake_embed_ollama(status=404)
+    with pytest.raises(RuntimeError, match="ollama pull bge-m3"):
+        run({"embed": ["hola"], "model": "bge-m3"}, SimpleNamespace(config={}), client=client)

@@ -29,6 +29,8 @@ def run(payload: dict, ctx, client=None) -> dict:
     cfg = getattr(ctx, "config", {}) or {}
     url = ollama_url(cfg)
     c = client or httpx
+    if "embed" in payload:                      # 0.62.0: the meaning of Ashur's memories, for the core to search
+        return embed(url, payload["embed"], payload.get("model") or "bge-m3", c)
     model = payload.get("model") or cfg.get("llm_model")
     if not model:
         models = installed_models(url, c)
@@ -50,6 +52,15 @@ def run(payload: dict, ctx, client=None) -> dict:
     if tools:                                   # always present when tools were offered: the core knows this node knows them
         out["tool_calls"] = data.get("message", {}).get("tool_calls") or []
     return out
+
+
+def embed(url: str, texts: list, model: str, client) -> dict:
+    r = client.post(f"{url}/api/embed", timeout=60, json={"model": model, "input": list(texts)})
+    if r.status_code == 404 or "not found" in r.text:
+        raise RuntimeError(f"falta el modelo: ollama pull {model}")
+    r.raise_for_status()
+    vectors = r.json().get("embeddings") or []
+    return {"vectors": vectors, "model": model, "dim": len(vectors[0]) if vectors else 0}
 
 
 def gpu_share(url: str, model: str, client) -> "float | None":

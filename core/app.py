@@ -272,7 +272,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.61.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.61.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2304,6 +2304,10 @@ def create_app(
             raise HTTPException(429, "Llegaste al límite de mensajes por hora. Inténtalo un poco más tarde.")
         if not guest:
             uso("chatear", body.persona)
+            oj_reply = app.state.oj_command(body.message) if app.state.oj_command else None
+            if oj_reply is not None:          # an OpenJarvis command: the core answers it, no model, local or Claude
+                return {"reply": oj_reply, "note": "Comando de OpenJarvis: respondió Ashur sin modelo.",
+                        "provider": "ashur", "cost_usd": 0.0, **brain.budget()}
         image = None
         if body.imagen is not None:
             if guest:
@@ -3777,9 +3781,12 @@ def create_app(
     app.state.openjarvis_due = lambda: oj_adapter.due(                # a routine's own steps: the panel's own functions
         db, clock, run_action=lambda accion: run_request({"action": accion, "args": {}}),
         notify=lambda body: _push_all({"title": "Ashur", "body": body, "url": "/#chat", "tag": "openjarvis"}))
+    app.state.oj_command = None
     if oj_tools:
         from core.integrations.openjarvis.chat import offered as oj_offered
+        from core.integrations.openjarvis.commands import run as oj_run_command
         brain.extra_tools = lambda: oj_offered(oj_tools)          # each tool only while its capability flag is on
+        app.state.oj_command = lambda text: oj_run_command(text, oj_offered(oj_tools))   # /skills, /investigar…
     ENCARGO_UNFINISHED = ("pending_approval", "queued", "running", "paused")
     ENCARGO_WITH_RESULT = ("done", "kept", "released", "failed")
     encargo_lock = threading.Lock()             # one step at a time: a unit is never sent twice by two callers
@@ -3904,8 +3911,16 @@ def create_app(
                 encargo_db_errors.pop(eid, None)
                 encargo_fail(e, op, state, "Error de la base al procesar el encargo.", done=e["done"])
                 return True
-            except Exception:                     # never the message: it may carry document text
-                encargo_fail(e, op, state, "Error interno al procesar el encargo.", done=e["done"])
+            except EncargoError as ex:            # our own words (an OpenJarvis capability off, its agent failed…)
+                encargo_fail(e, op, state, str(ex)[:200], done=e["done"])
+                return True
+            except Exception as ex:               # never the message: it may carry document text; its type and place do not
+                import traceback
+                last = traceback.extract_tb(ex.__traceback__)[-1] if ex.__traceback__ else None
+                where = f"{os.path.basename(last.filename)}:{last.lineno}" if last else "?"
+                db.log(clock(), None, "encargo_error", {"encargo": eid, "tipo": type(ex).__name__, "donde": where})
+                encargo_fail(e, op, state, f"Error interno al procesar el encargo ({type(ex).__name__}).",
+                             done=e["done"])
                 return True
 
     def encargo_run(e: dict, op, state: dict) -> bool:

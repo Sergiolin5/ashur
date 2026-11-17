@@ -448,9 +448,9 @@ class Brain:
         return f"Herramienta desconocida: {name}"
 
     # --- conversation -----------------------------------------------------
-    def _history(self, text: str, user: str = "sergio") -> list[dict]:
+    def _history(self, text: str, user: str = "sergio", conversation_id: Optional[int] = None) -> list[dict]:
         history = [{"role": m["role"], "content": m["content"]}
-                   for m in self.db.recent_messages(self.s.history_messages, user)]
+                   for m in self.db.recent_messages(self.s.history_messages, user, conversation_id)]
         while history and history[0]["role"] != "user":   # a conversation must start with Sergio
             history.pop(0)
         return history + [{"role": "user", "content": text}]
@@ -774,12 +774,13 @@ class Brain:
 
     def _chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
              voice: Optional[str] = None, allow_claude: bool = False,
-             share_docs: bool = False, share_diary: bool = False, image: Optional[dict] = None) -> dict:
+             share_docs: bool = False, share_diary: bool = False, image: Optional[dict] = None,
+             conversation_id: Optional[int] = None) -> dict:
         voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice
         text = text.strip()
         now = self.clock()
         user = guest_user(guest)
-        messages = self._history(text, user)
+        messages = self._history(text, user, conversation_id)
         over_budget = self.spent_this_month() >= self.s.monthly_budget_usd or (
             guest is not None and self.spent_this_month(user) >= guest["monthly_cap_usd"])
         want_claude = self.s.brain in ("auto", "claude") and self._has_claude()
@@ -878,8 +879,8 @@ class Brain:
 
         reply = (reply or "").strip() or "(Sin respuesta.)"
         end = self.clock()
-        self.db.add_message(now, channel, "user", saved, user)
-        self.db.add_message(end, channel, "assistant", reply, user)
+        self.db.add_message(now, channel, "user", saved, user, conversation_id)
+        self.db.add_message(end, channel, "assistant", reply, user, conversation_id)
         # the session log is paper data: lengths, cost and where it ran; never the words,
         # and a guest only as an anonymous number
         detail = {"channel": channel, "provider": provider, "chars_in": len(text),

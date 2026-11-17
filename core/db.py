@@ -2105,7 +2105,8 @@ class DB:
 
     def conv_list(self, user: str, limit: int = 50) -> list[dict]:
         with self.lock:
-            rows = self.conn.execute(f"SELECT {self.CONV_COLS} FROM conversations WHERE user = ? "
+            rows = self.conn.execute(f"SELECT {self.CONV_COLS}, (SELECT COUNT(*) FROM messages WHERE "
+                                     "conversation_id = conversations.id) AS n FROM conversations WHERE user = ? "
                                      "ORDER BY last_msg DESC, id DESC LIMIT ?", (user, limit)).fetchall()
         return [dict(r) for r in rows]
 

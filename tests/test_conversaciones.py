@@ -211,9 +211,12 @@ def reply(t):
 
 def claude_app(tmp_path, n=3):
     fake = FakeClaude([reply("ok") for _ in range(n)])
-    app = create_app(str(tmp_path / "c.db"), "e", "a", clock=VirtualClock(), sweep_every_s=None,
+    clock = VirtualClock()
+    app = create_app(str(tmp_path / "c.db"), "e", "a", clock=clock, sweep_every_s=None,
                      brain_settings=BrainSettings(monthly_budget_usd=10, brain="auto"), brain_client=fake)
-    return TestClient(app), fake
+    c = TestClient(app)
+    c.clock = clock
+    return c, fake
 
 
 def test_local_tier_never_reaches_claude(tmp_path):
@@ -254,3 +257,50 @@ def test_long_message_is_cut_for_embedding(tmp_path):
     r = c.post("/api/chat", headers=A, json={"message": "a" * 8000})
     th.join(5)
     assert r.status_code == 200 and len(seen[0]["embed"][0]) == 2000
+
+
+# --- Task 5: conversations in the chat ------------------------------------------------
+def guest_key(c, name="Ana"):
+    return c.post("/api/guests", headers=A, json={"name": name, "monthly_cap_usd": 1}).json()["key"]
+
+
+def test_new_conversation_is_clean(tmp_path):
+    c, fake = claude_app(tmp_path)
+    r1 = c.post("/api/chat", headers=A, json={"message": "primera charla"}).json()
+    new = c.post("/api/conversations", headers=A).json()["id"]
+    assert new != r1["conversation_id"]
+    r2 = c.post("/api/chat", headers=A, json={"message": "segunda", "conversation_id": new}).json()
+    assert r2["conversation_id"] == new
+    sent = fake.calls[1]["messages"]
+    assert [m["content"] for m in sent] == ["segunda"]
+    lst = c.get("/api/conversations", headers=A).json()
+    assert [x["id"] for x in lst][:2] == [new, r1["conversation_id"]]
+    got = c.get(f"/api/conversations/{new}", headers=A).json()
+    assert [m["content"] for m in got["messages"]] == ["segunda", "ok"]
+
+
+def test_guest_cannot_read_sergios_conversation(tmp_path):
+    c, fake = claude_app(tmp_path)
+    cid = c.post("/api/chat", headers=A, json={"message": "privado"}).json()["conversation_id"]
+    G = {"X-Admin-Key": guest_key(c)}
+    assert c.get(f"/api/conversations/{cid}", headers=G).status_code == 404
+    assert c.post("/api/chat", headers=G, json={"message": "hola", "conversation_id": cid}).status_code == 404
+    assert c.get("/api/conversations", headers=G).json() == []
+
+
+def test_message_after_idle_close_opens_new(tmp_path):
+    c, fake = claude_app(tmp_path)
+    cid = c.post("/api/chat", headers=A, json={"message": "uno"}).json()["conversation_id"]
+    c.clock.now += 31 * 60
+    assert c.app.state.conversations_close_idle() == 1
+    r = c.post("/api/chat", headers=A, json={"message": "dos"}).json()
+    assert r["conversation_id"] != cid and c.app.state.db.conv_get(cid)["closed"] is not None
+
+
+def test_reopening_own_closed_conversation(tmp_path):
+    c, fake = claude_app(tmp_path)
+    cid = c.post("/api/chat", headers=A, json={"message": "uno"}).json()["conversation_id"]
+    c.post("/api/conversations", headers=A)
+    r = c.post("/api/chat", headers=A, json={"message": "sigo", "conversation_id": cid}).json()
+    assert r["conversation_id"] == cid and c.app.state.db.conv_get(cid)["closed"] is None
+    assert [m["content"] for m in fake.calls[-1]["messages"]] == ["uno", "ok", "sigo"]

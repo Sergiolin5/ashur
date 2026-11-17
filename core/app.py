@@ -2248,6 +2248,7 @@ def create_app(
         share_diary: bool = False            # ...and diary entries
         imagen: Optional[str] = Field(default=None, max_length=7_200_000)   # a photo from the phone, base64; never stored
         imagen_tipo: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|png|webp|gif)$")
+        conversation_id: Optional[int] = None    # 0.62.0: none = the open conversation, or a new one
 
     # --- device personas (Sergio only; guests never see them) ---------------
     @app.get("/api/personas")
@@ -2375,11 +2376,13 @@ def create_app(
             if not raw or len(raw) > IMAGE_MAX_BYTES:
                 raise HTTPException(413, "La foto pesa más de 5 MB; mándala más pequeña.")
             image = {"media_type": body.imagen_tipo, "data": body.imagen}
+        cid = conversation_for(chat_user(guest), body.conversation_id)
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
                              allow_claude=body.allow_claude and guest is None,
                              share_docs=body.share_docs and guest is None,
-                             share_diary=body.share_diary and guest is None, image=image)
+                             share_diary=body.share_diary and guest is None, image=image, conversation_id=cid)
+            out["conversation_id"] = cid
             if guest:                     # which device answered and which tools ran stay Sergio's business
                 return {k: v for k, v in out.items() if k not in ("device", "tools", "model", "sources", "diary_used")}
             summarize_soon()
@@ -2392,6 +2395,46 @@ def create_app(
             if guest:
                 raise HTTPException(502, "Ashur no puede responder ahora. Inténtalo más tarde.")
             raise HTTPException(502, f"No pude hablar con Claude ({type(e).__name__}): {reason}")
+
+    # --- conversations (0.62.0): every chat starts clean; Ashur remembers through its memories -------------
+    def chat_user(guest: Optional[dict]) -> str:
+        return f"g{guest['id']}" if guest else "sergio"
+
+    def conversation_for(user: str, cid: Optional[int]) -> int:
+        """The conversation a message goes to. A closed one of his own is reopened; anyone else's is a 404."""
+        if cid is None:
+            return db.conv_open(user, clock())
+        cv = db.conv_get(cid)
+        if not cv or cv["user"] != user or cv["archived"]:
+            raise HTTPException(404, "No existe esa conversación.")
+        if cv["closed"] is not None:
+            db.conv_set(cid, closed=None)
+        return cid
+
+    @app.post("/api/conversations")
+    def conversation_new(guest: Optional[dict] = Depends(require_chat)):
+        return {"id": db.conv_new(chat_user(guest), clock())}
+
+    @app.get("/api/conversations")
+    def conversation_list(guest: Optional[dict] = Depends(require_chat)):
+        keep = ("id", "title", "started", "last_msg", "closed", "archived", "n")
+        return [{k: cv[k] for k in keep} for cv in db.conv_list(chat_user(guest)) if cv["n"]]   # an empty «Nueva» is not listed
+
+    @app.get("/api/conversations/{cid}")
+    def conversation_get(cid: int, guest: Optional[dict] = Depends(require_chat)):
+        cv = db.conv_get(cid)
+        if not cv or cv["user"] != chat_user(guest):
+            raise HTTPException(404, "No existe esa conversación.")
+        return {"conversation": cv, "messages": db.conv_messages(cid, limit=500)}
+
+    def conversations_close_idle() -> int:
+        idle = db.conv_idle(clock() - conv.CONV_IDLE_S)
+        for cid in idle:
+            db.conv_close(cid, clock())
+            db.log(clock(), None, "conversation_closed", {"id": cid, "mensajes": len(db.conv_messages(cid))})
+        return len(idle)
+
+    app.state.conversations_close_idle = conversations_close_idle
 
     @app.get("/api/chat/history")
     def chat_history(limit: int = 50, guest: Optional[dict] = Depends(require_chat)):

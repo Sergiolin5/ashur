@@ -254,6 +254,7 @@ def create_app(
                         app.state.propose_due()
                         app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
                         app.state.conversations_due()             # 0.62.0: close idle ones, learn from one
+                        app.state.archive_due()                   # 0.62.0: the old thread, one batch, if approved
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -2421,6 +2422,10 @@ def create_app(
         keep = ("id", "title", "started", "last_msg", "closed", "archived", "n")
         return [{k: cv[k] for k in keep} for cv in db.conv_list(chat_user(guest)) if cv["n"]]   # an empty «Nueva» is not listed
 
+    @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
+    def conversation_archive():
+        return archive_progress() or {}
+
     @app.get("/api/conversations/{cid}")
     def conversation_get(cid: int, guest: Optional[dict] = Depends(require_chat)):
         cv = db.conv_get(cid)
@@ -2450,6 +2455,59 @@ def create_app(
         return 0
 
     app.state.conversations_due = conversations_due
+
+    def archive_ask() -> None:
+        """Once: ask Sergio whether Ashur may learn from his old endless thread (one approval, local model only)."""
+        if db.setting("archivo_pedido"):
+            return
+        for cv in db.conv_list("sergio", limit=200):
+            if cv["archived"] and cv["extracted"] is None and cv["n"]:
+                db.claude_request_add(clock(), "aprender_archivo", {"conversacion": cv["id"], "mensajes": cv["n"]},
+                                      "Leer el chat de antes de 0.62 por tandas y guardar lo durable; lo sensible "
+                                      "va a la bandeja.")
+                db.set_setting("archivo_pedido", str(cv["id"]))
+                return
+
+    archive_ask()
+
+    def archive_progress() -> Optional[dict]:
+        cid = db.setting("archivo_aprender") or db.setting("archivo_pedido")
+        cv = db.conv_get(int(cid)) if cid else None
+        if not cv:
+            return None
+        msgs = db.conv_messages(cv["id"])
+        cursor = int(db.setting("archivo_cursor", "0"))
+        done = len(msgs) if cv["extracted"] is not None else sum(1 for m in msgs if m["id"] <= cursor)
+        return {"conversacion": cv["id"], "done": done, "total": len(msgs),
+                "aprobado": bool(db.setting("archivo_aprender")), "terminado": cv["extracted"] is not None}
+
+    def archive_due() -> int:
+        """One batch of the archive, if he approved it. Returns how many messages it read (0 = nothing now)."""
+        cid = db.setting("archivo_aprender")
+        cv = db.conv_get(int(cid)) if cid else None
+        if not cv or cv["extracted"] is not None:
+            return 0
+        cursor = int(db.setting("archivo_cursor", "0"))
+        rest = [m for m in db.conv_messages(cv["id"]) if m["id"] > cursor]
+        if not rest:
+            db.conv_set(cv["id"], extracted=clock())
+            db.log(clock(), None, "archive_learned", {"conv": cv["id"]})
+            return 0
+        piece, last, n = conv.first_chunk(rest)
+        try:
+            text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+        except LocalUnavailable:
+            return 0
+        got = brain.learn_lines(text, f"conv:{cv['id']}")
+        db.set_setting("archivo_cursor", str(last))
+        db.log(clock(), None, "memories_extracted", {"conv": cv["id"], "normales": got["normales"],
+                                                      "sensibles": got["sensibles"], "archivo": True})
+        if len(rest) == n:
+            db.conv_set(cv["id"], extracted=clock())
+            db.log(clock(), None, "archive_learned", {"conv": cv["id"]})
+        return n
+
+    app.state.archive_due = archive_due
 
     @app.get("/api/chat/history")
     def chat_history(limit: int = 50, guest: Optional[dict] = Depends(require_chat)):
@@ -4434,6 +4492,13 @@ def create_app(
                 if not isinstance(lid, int) or not db.lote_set(lid, expect="pending_approval", status="queued"):
                     return "not_done", "El lote ya no espera aprobación."
                 return "approved", f"Lote #{lid} en cola."
+            if action == "aprender_archivo":                 # 0.62.0: the old endless thread, learned once
+                cid = req["args"].get("conversacion")
+                cv = db.conv_get(cid) if isinstance(cid, int) else None
+                if not cv or not cv["archived"] or cv["extracted"] is not None:
+                    return "not_done", "Ese archivo ya no espera aprender."
+                db.set_setting("archivo_aprender", str(cid))
+                return "approved", "Ashur aprenderá del chat anterior por tandas, con el modelo local."
             if action == "cancelar_encargo":
                 return "approved", cancel_encargo(req["args"].get("encargo"))
             if action in ("pausar_cola", "reanudar_cola"):

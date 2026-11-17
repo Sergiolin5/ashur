@@ -380,3 +380,56 @@ def test_approved_sensitive_conversation_proposal_stays_local(tmp_path):
     c = local_app(tmp_path)
     pid = c.app.state.db.proposal_add(1.0, "le duele la espalda", "conv:3")
     assert c.post(f"/api/proposals/{pid}/approve", headers=A, json={}).json()["tier"] == "local"
+
+
+# --- Task 7: learning from the archive, by batches, with his approval ------------------------
+def archived_app(tmp_path, n=6, size=2500):
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, channel TEXT NOT NULL, "
+              "role TEXT NOT NULL, content TEXT NOT NULL, user TEXT NOT NULL DEFAULT 'sergio')")
+    for i in range(n):
+        c.execute("INSERT INTO messages (ts, channel, role, content, user) VALUES (?, 'app', ?, ?, 'sergio')",
+                  (100.0 + i, "user" if i % 2 == 0 else "assistant", f"m{i} " + "x" * size))
+    c.commit()
+    c.close()
+    clock = VirtualClock()
+    app = create_app(p, "e", "a", clock=clock, sweep_every_s=None,
+                     brain_settings=BrainSettings(monthly_budget_usd=10, brain="local-first"))
+    tc = TestClient(app)
+    tc.clock = clock
+    return tc
+
+
+def archive_request(c):
+    return [r for r in c.get("/api/claude-requests", headers=A).json() if r["action"] == "aprender_archivo"]
+
+
+def test_archive_waits_for_approval(tmp_path):
+    c = archived_app(tmp_path)
+    reqs = archive_request(c)
+    assert len(reqs) == 1 and reqs[0]["args"]["mensajes"] == 6 and reqs[0]["status"] == "pending"
+    assert c.app.state.archive_due() == 0
+    c.post(f"/api/claude-requests/{reqs[0]['id']}/reject", headers=A)
+    c2 = TestClient(create_app(c.app.state.db.path, "e", "a", sweep_every_s=None))
+    assert len(archive_request(c2)) == 1                                   # a «no» is not asked again
+
+
+def test_archive_resumes_from_cursor(tmp_path):
+    c = archived_app(tmp_path)
+    rid = archive_request(c)[0]["id"]
+    assert c.post(f"/api/claude-requests/{rid}/approve", headers=A).json()["status"] == "approved"
+    th, seen = node(c, answer=chat_answer("NORMAL: dato del archivo uno"), rounds=1)
+    assert c.app.state.archive_due() > 0
+    th.join(5)
+    prog = c.get("/api/conversations/archivo", headers=A).json()
+    assert 0 < prog["done"] < prog["total"] == 6
+    th, _ = node(c, answer=chat_answer("SENSIBLE: dato sensible del archivo"), rounds=5)
+    while c.app.state.archive_due():
+        pass
+    th.join(5)
+    cid = c.app.state.db.conv_list("sergio")[0]["id"]
+    assert c.app.state.db.conv_get(cid)["extracted"] is not None
+    assert c.get("/api/conversations/archivo", headers=A).json()["done"] == 6
+    assert [m["text"] for m in c.app.state.db.memories()] == ["dato del archivo uno"]
+    assert [p["text"] for p in c.app.state.db.proposals()] == ["dato sensible del archivo"]

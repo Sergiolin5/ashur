@@ -111,3 +111,16 @@ def chunks(messages: list, limit: int = EXTRACT_CHARS) -> list:
     if cur:
         out.append("\n".join(cur))
     return out
+
+
+def first_chunk(messages: list, limit: int = EXTRACT_CHARS) -> tuple:
+    """(the first transcript piece, id of its last message, how many messages it holds)."""
+    lines, size, last = [], 0, None
+    for m in messages:
+        line = ("Sergio: " if m["role"] == "user" else "Ashur: ") + m["content"][:limit]
+        if lines and size + len(line) > limit:
+            break
+        lines.append(line)
+        size += len(line) + 1
+        last = m["id"]
+    return "\n".join(lines), last, len(lines)

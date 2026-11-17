@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
                         looks_like_secret, month_start)
-from core import casa as casa_mod, habits, lotes, signals
+from core import casa as casa_mod, conversaciones as conv, habits, lotes, signals
 from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
@@ -252,6 +252,7 @@ def create_app(
                         app.state.notify_due()
                         app.state.daily_due()
                         app.state.propose_due()
+                        app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -1318,6 +1319,59 @@ def create_app(
             db.clear_payload(tid)
 
     app.state.local_vision = local_vision
+
+    def local_embed(texts: list, timeout_s: Optional[float] = None) -> list:
+        """Vectors from a node's Ollama (0.62.0), through the same queue and hand-off as local_complete.
+        Raises LocalUnavailable when nobody can do it now; the caller then searches by words."""
+        sweep()
+        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
+                 and not is_degraded(n["id"])]
+        if not ready:
+            raise NoLocalDevice("Ningún equipo con modelo local está disponible para buscar recuerdos.")
+        target = best_llm_node(ready)
+        tid = db.add_task("llm", {"embed": [conv.cut(t) for t in texts], "model": conv.EMBED_MODEL},
+                          Weight.LIGHT.value, clock(), target=target)
+        wait = local_timeout_s if timeout_s is None else timeout_s
+        deadline, handoff = time.monotonic() + wait, time.monotonic() + min(10, wait / 2)
+        try:
+            while time.monotonic() < deadline:
+                if target and time.monotonic() >= handoff:
+                    db.untarget_if_queued(tid)
+                    target = None
+                t = db.get_task(tid)
+                if t["status"] == "done":
+                    vectors = ((t["result"] or {}).get("result") or {}).get("vectors")
+                    if not isinstance(vectors, list) or len(vectors) != len(texts):
+                        raise LocalFailed(f"{t['node_id']} no devolvió vectores (¿módulo llm de antes de 0.62?).",
+                                          t["node_id"])
+                    return vectors
+                if t["status"] in ("failed", "cancelled"):
+                    err = (t["result"] or {}).get("error") or "sin detalle"
+                    raise LocalFailed(f"{t['node_id']}: {err}", t["node_id"])
+                time.sleep(0.05)
+            db.cancel_task(tid, "timeout", clock())
+            raise LocalUnavailable("El equipo no devolvió los vectores a tiempo.")
+        finally:
+            db.clear_payload(tid)
+
+    app.state.local_embed = local_embed
+
+    def embed_due() -> int:
+        """Embed memories that have no vector of the current model yet, one batch per pass."""
+        todo = db.memories_without_vector(conv.EMBED_MODEL, conv.EMBED_BATCH)
+        if not todo:
+            return 0
+        try:
+            vectors = local_embed([m["text"] for m in todo])
+        except LocalUnavailable as e:
+            if not isinstance(e, NoLocalDevice):
+                db.log(clock(), getattr(e, "node", None), "embed_failed", {"razon": str(e)[:200]})
+            return 0
+        for m, v in zip(todo, vectors):
+            db.vector_put(m["id"], conv.EMBED_MODEL, conv.pack(v), len(v))
+        return len(todo)
+
+    app.state.embed_due = embed_due
 
     brain = Brain(db, os.path.dirname(os.path.abspath(db_path)), clock, network_for_brain,
                   settings=brain_settings, client=brain_client, local=local_complete, vision=local_vision)
@@ -2399,6 +2453,11 @@ def create_app(
     @app.get("/api/memory", dependencies=[Depends(require_admin)])
     def memory_list():
         return db.memories()
+
+    @app.get("/api/memory/vectors", dependencies=[Depends(require_admin)])
+    def memory_vectors():
+        done, total = db.vector_count(conv.EMBED_MODEL)
+        return {"done": done, "total": total, "model": conv.EMBED_MODEL}
 
     class MemoryImport(BaseModel):
         lines: list[str] = Field(max_length=300)

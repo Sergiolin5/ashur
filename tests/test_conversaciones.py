@@ -90,3 +90,77 @@ def test_llm_module_embed_missing_model():
     client, _ = fake_embed_ollama(status=404)
     with pytest.raises(RuntimeError, match="ollama pull bge-m3"):
         run({"embed": ["hola"], "model": "bge-m3"}, SimpleNamespace(config={}), client=client)
+
+
+# --- Task 3: vectors in the core -------------------------------------------------
+import threading
+
+from fastapi.testclient import TestClient
+
+from core.app import create_app
+from core import conversaciones as conv
+
+A = {"X-Admin-Key": "a"}
+
+
+def node(c, device="sm-rtx", answer=None, rounds=1):
+    """A node with the llm module answering `rounds` tasks; answer(payload) -> result dict."""
+    token = c.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+                   json={"device_id": device, "os": "windows", "modules": ["llm"], "simulated": True}).json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+    c.post(f"/nodes/{device}/heartbeat", headers=h, json={"mode": "full"})
+    seen = []
+
+    def serve():
+        for _ in range(rounds):
+            t = c.get(f"/nodes/{device}/tasks/next", headers=h, params={"wait": 5, "modules": "llm"}).json()
+            if not t:
+                return
+            seen.append(t["payload"])
+            c.post(f"/tasks/{t['id']}/result", headers=h, json={"ok": True, "result": answer(t["payload"])})
+    th = threading.Thread(target=serve, daemon=True)
+    th.start()
+    return th, seen
+
+
+def vec_answer(payload):
+    return {"vectors": [[1.0, float(i)] for i, _ in enumerate(payload["embed"])], "model": "bge-m3", "dim": 2}
+
+
+def test_pack_and_cosine():
+    a, b = conv.pack([3.0, 4.0]), conv.pack([3.0, 4.0])
+    assert abs(conv.cosine(a, b) - 1.0) < 1e-6
+    assert abs(conv.cosine(conv.pack([1, 0]), conv.pack([0, 1]))) < 1e-6
+    assert conv.cosine(conv.pack([1, 0]), conv.pack([1, 0, 0])) == 0.0          # another dimension never matches
+
+
+def test_embed_due_fills_missing_vectors(tmp_path):
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    c = TestClient(app)
+    db = app.state.db
+    for t in ("uno", "dos", "tres"):
+        db.add_memory(1.0, t)
+    th, seen = node(c, answer=vec_answer)
+    assert app.state.embed_due() == 3
+    th.join(5)
+    assert seen[0]["embed"] == ["uno", "dos", "tres"] and seen[0]["model"] == "bge-m3"
+    assert c.get("/api/memory/vectors", headers=A).json() == {"done": 3, "total": 3, "model": "bge-m3"}
+
+
+def test_vectors_of_another_model_are_ignored(tmp_path):
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    c = TestClient(app)
+    db = app.state.db
+    mid = db.add_memory(1.0, "uno")
+    db.vector_put(mid, "otro", conv.pack([1.0, 2.0, 3.0]), 3)
+    assert [m["id"] for m in db.memories_without_vector("bge-m3", 10)] == [mid]
+    th, _ = node(c, answer=vec_answer)
+    assert app.state.embed_due() == 1
+    th.join(5)
+    assert set(db.vectors("bge-m3")) == {mid}
+
+
+def test_embed_due_without_node_does_nothing(tmp_path):
+    app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
+    app.state.db.add_memory(1.0, "uno")
+    assert app.state.embed_due() == 0

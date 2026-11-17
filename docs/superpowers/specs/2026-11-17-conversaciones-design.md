@@ -27,6 +27,9 @@ de datos que el cerebro visual (etapa 4) va a mostrar.
 4. Una conversación se cierra al tocar **«Nueva»** o tras **30 min sin mensajes**.
 5. **Cambio de esquema aprobado:** tabla `conversations`, columna `conversation_id` en `messages`, tabla
    `memory_vectors`. Su hilo actual queda como una conversación archivada; no se borra nada.
+6. El hilo archivado se extrae una vez, por tandas, con una aprobación suya.
+
+Diseño aprobado por Sergio el 2026-11-17.
 
 ## Metas
 - Botón «Nueva» y lista de conversaciones (hoy, ayer, archivo); retomar una conversación vieja.
@@ -61,7 +64,12 @@ de datos que el cerebro visual (etapa 4) va a mostrar.
 - `conversations(id, user, started, last_msg, closed REAL NULL, title TEXT, extracted REAL NULL, archived INTEGER)`.
 - `messages.conversation_id INTEGER` (migración con `ALTER TABLE`, como las anteriores en `db.py`). Al migrar,
   todos los mensajes existentes de cada `user` se asignan a una conversación «Archivo · antes de 0.62»
-  (`archived=1`, `extracted` = ahora, para que no se extraiga de golpe todo el historial).
+  (`archived=1`, `extracted` = NULL).
+- **Decisión de Sergio:** el hilo archivado se extrae **una vez, por tandas**, en segundo plano y solo después
+  de que él lo apruebe en «Por aprobar» (una sola aprobación). Cada tanda es de mensajes consecutivos que caben
+  en el contexto del modelo local. Lleva un cursor para que se pueda reanudar, y el panel muestra el avance
+  («aprendiendo del archivo: 340 de 2 100 mensajes»). Aplica la misma regla: lo normal entra solo y lo sensible
+  va a la bandeja.
 - `memory_vectors(memory_id PRIMARY KEY, model TEXT, dim INTEGER, vec BLOB)`. El vector se guarda como
   float32 normalizado. Se borra junto con el recuerdo.
 - Marca «nuevo»: sin columna extra. Los recuerdos automáticos llevan `source = 'conv:<id>'` y el panel muestra

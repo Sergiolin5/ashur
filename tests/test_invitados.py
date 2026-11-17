@@ -347,3 +347,32 @@ def test_double_approve_applies_once(tmp_path):
 def test_claude_cannot_ask_for_persona_changes():
     from core.mcp import OWN_TOOL
     assert "persona_trato" in OWN_TOOL and "persona_cambio" in OWN_TOOL
+
+
+# --- Task 6: one summary per conversation ---------------------------------------------------------------
+def test_conversation_summary_saved_at_last_piece(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("sergio", c.clock())
+    for i in range(2):
+        db.add_message(c.clock(), "app", "user", f"parte {i} " + "x" * 4000, "sergio", cid)
+    db.conv_close(cid, c.clock())
+    answers = iter(["TITULO: Cámaras\nRESUMEN: Hablamos de las cámaras.\nnada", "RESUMEN: Y de la grabación.\nnada"])
+    th, _ = node(c, answer=lambda p: {"text": next(answers)}, rounds=2)
+    assert c.app.state.conversations_due() == 1
+    assert db.summaries() == []                                            # not before the last piece
+    assert c.app.state.conversations_due() == 1
+    th.join(5)
+    s = db.summaries()
+    assert len(s) == 1 and s[0]["text"] == "Hablamos de las cámaras. Y de la grabación." and s[0]["provider"] == "local"
+
+
+def test_chat_no_longer_triggers_summarizer(tmp_path):
+    c, fake = claude_app(tmp_path)
+    called = []
+    c.app.state.brain.summarize = lambda: called.append(1)
+    for i in range(25):
+        c.post("/api/chat", headers=A, json={"message": f"m{i}"})
+    import time
+    time.sleep(0.3)
+    assert called == []

@@ -299,26 +299,6 @@ def _wait_summaries():
             t.join(5)
 
 
-def test_old_conversation_is_summarized_and_carried(tmp_path):
-    script = [resp([text(f"r{i}")]) for i in range(20)]
-    script.insert(20, resp([text("- Sergio decidió usar ZimaOS\n- token: abcdef\n- Falta el botón Actualizar")]))
-    script.append(resp([text("Lo recuerdo.")]))
-    c, fake, _ = make(tmp_path, script)
-    for i in range(20):                                   # 40 messages: the oldest 20 leave the window
-        c.post("/api/chat", headers=A, json={"message": f"m{i}"})
-    _wait_summaries()
-    sums = c.get("/api/summaries", headers=A).json()
-    assert len(sums) == 1 and sums[0]["provider"] == "claude"
-    assert "ZimaOS" in sums[0]["text"] and "token" not in sums[0]["text"]      # secret-looking line dropped
-    summary_call = fake.calls[20]
-    assert "Sergio: m0" in summary_call["messages"][0]["content"] and "tools" not in summary_call
-    c.post("/api/chat", headers=A, json={"message": "¿te acuerdas?"})
-    assert "Sergio decidió usar ZimaOS" not in fake.calls[-1]["system"]      # 0.62.0: summaries no longer enter the prompt
-    log = c.get("/log", headers=A).json()
-    ev = [e for e in log if e["event"] == "conversation_summarized"][0]
-    assert "ZimaOS" not in json.dumps(ev)                                       # paper data: no words
-
-
 def test_forgotten_summary_leaves_the_prompt_and_is_not_redone(tmp_path):
     c, fake, _ = make(tmp_path, [])
     brain = c.app.state.brain

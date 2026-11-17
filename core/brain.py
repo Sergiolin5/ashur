@@ -807,12 +807,20 @@ class Brain:
             got = self._learn_guest_piece(piece, cid, cv["user"])
         else:
             text, _device = self.local(conv.EXTRACTOR, [{"role": "user", "content": piece}])
-            got = self.learn_lines(text, f"conv:{cid}")
+            got = {**self.learn_lines(text, f"conv:{cid}"), "resumen": conv.find_resumen(text)}
+        if got.get("resumen"):                           # 0.63.0: one summary per conversation, piece by piece
+            key = f"conv_resumen:{cid}"
+            self.db.set_setting(key, (self.db.setting(key, "") + " " + got["resumen"]).strip())
         self.db.set_setting(f"conv_cursor:{cid}", str(last))
         done = n == len(rest)
         fields = {"title": cv["title"] or got["titulo"]}
         if done:
             fields["extracted"] = self.clock()
+            summary = self.db.setting(f"conv_resumen:{cid}", "")
+            msgs = self.db.conv_messages(cid)
+            if summary and msgs:
+                self.db.add_summary(self.clock(), msgs[0], msgs[-1], summary, "local")
+                self.db.set_setting(f"conv_resumen:{cid}", "")
         self.db.conv_set(cid, **fields)
         self.db.log(self.clock(), None, "memories_extracted",
                     {"conv": cid, "normales": got["normales"], "sensibles": got["sensibles"]})

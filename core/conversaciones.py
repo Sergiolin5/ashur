@@ -70,9 +70,19 @@ que valga la pena recordar dentro de un mes, en una conversación sobre otra cos
 - Empieza cada línea con "NORMAL: " o con "SENSIBLE: ". SENSIBLE es todo lo de salud, dinero o sobre otras personas.
 - Nada de lo que Ashur sugirió, nada pasajero (el ánimo de hoy, la tarea de este rato), ninguna clave ni código.
 - Primera línea: "TITULO: " y un título de 6 palabras o menos para la conversación.
+- Segunda línea: "RESUMEN: " una o dos frases de lo que se habló.
 - Si no hay nada que recordar, después del título escribe solo: nada"""
 
 EXTRACT_CHARS = 6000        # one call to the local model; a longer conversation goes in several
+
+
+def find_resumen(text: str) -> str:
+    """0.63.0: the «RESUMEN:» line of an extraction (the old summarizer, one summary per conversation)."""
+    for ln in (text or "").splitlines():
+        head, _, body = ln.strip().lstrip("-•* ").partition(":")
+        if head.strip().upper() == "RESUMEN":
+            return body.strip()[:400]
+    return ""
 
 
 def parse_extraction(text: str) -> tuple:

@@ -245,7 +245,6 @@ def create_app(
                     app.state.maturity_tick()                     # time in «crecimiento pleno», counted on the server
                     app.state.encargos_due()                      # cheap when idle; an approved encargo starts within seconds
                     if due:
-                        app.state.summarize_soon()
                         app.state.inventory_due()
                         app.state.docs_due()
                         app.state.diary_due()
@@ -1405,30 +1404,7 @@ def create_app(
                   embed=local_embed)
     app.state.brain = brain
 
-    # conversation memory: old messages are summarized in the background, one at a time;
-    # if nobody can think right now (no credit, Mac asleep) it simply tries again later
-    summarizing = threading.Lock()
-    next_try = [0.0]
-
-    def summarize_soon() -> None:
-        if clock() < next_try[0] or not brain.pending_summary() or not summarizing.acquire(blocking=False):
-            return
-
-        def run():
-            try:
-                while brain.pending_summary():
-                    if brain.summarize() is None:
-                        next_try[0] = clock() + 600
-                        break
-            except Exception as e:
-                db.log(clock(), None, "summary_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
-                next_try[0] = clock() + 600
-            finally:
-                summarizing.release()
-
-        threading.Thread(target=run, daemon=True, name="ashur-summary").start()
-
-    app.state.summarize_soon = summarize_soon
+    # 0.63.0: the old window summarizer no longer runs; each conversation is summarized when it closes
 
     def inventory_due() -> list[int]:
         """Rescan each device's files every few days. Heavy: it waits until the device is
@@ -2413,8 +2389,7 @@ def create_app(
             out["conversation_id"] = cid
             if guest:                     # which device answered and which tools ran stay Sergio's business
                 return {k: v for k, v in out.items() if k not in ("device", "tools", "model", "sources", "diary_used")}
-            summarize_soon()
-            return out
+            return out                    # 0.63.0: no summarizer here; each conversation is summarized when it closes
         except (BrainUnavailable, LocalUnavailable) as e:
             raise HTTPException(503, "Ashur no puede responder ahora. Inténtalo más tarde." if guest else str(e))
         except Exception as e:  # API down, bad key, no credit, network: say exactly why

@@ -2457,6 +2457,14 @@ class DB:
             c.close()
         return [r[0] for r in rows]
 
+    def update_memory(self, memory_id: int, text: str) -> bool:
+        """Sergio corrects a memory (0.62.0); its old vector goes, so the new text is embedded again."""
+        with self.lock:
+            cur = self.conn.execute("UPDATE memory SET text = ? WHERE id = ?", (text, memory_id))
+            self.conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
+            self.conn.commit()
+        return cur.rowcount > 0
+
     def delete_memory(self, memory_id: int) -> bool:
         with self.lock:
             cur = self.conn.execute("DELETE FROM memory WHERE id = ?", (memory_id,))

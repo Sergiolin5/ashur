@@ -386,6 +386,25 @@
   .bubble.ashur { align-self: flex-start; background: var(--row); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
   .bubble.note { align-self: center; background: none; border: 0; color: var(--secondary); font-size: var(--fs-meta); text-align: center; padding: var(--s1) var(--s2); }
   .bubble.note.bad { color: var(--red); }
+  /* 0.62.0: conversations */
+  .conv-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 0 var(--s2); }
+  .conv-bar button { width: auto; margin: 0; padding: 7px 12px; border-radius: var(--r-pill); background: var(--row);
+                     color: var(--label); border: 1px solid transparent; font-size: var(--fs-meta); }
+  .conv-bar button:hover { border-color: var(--tint); color: var(--tint); }
+  .conv-bar #conv-new { color: var(--tint); }
+  #conv-list { margin: 0 0 var(--s3); }
+  #conv-list .when { color: var(--secondary); font-size: var(--fs-meta); padding: 10px 4px 4px; }
+  #conv-list button { display: block; width: 100%; text-align: left; margin: 0; padding: 10px 12px; background: var(--row);
+                      color: var(--label); border: 0; border-radius: 10px; margin-bottom: 4px; }
+  #conv-list button.on { outline: 1px solid var(--tint); }
+  .mem-used { align-self: flex-start; font-size: var(--fs-meta); color: var(--secondary); margin: -2px 0 4px 4px; max-width: 82%; }
+  .mem-used summary { cursor: pointer; list-style: none; color: var(--tint); }
+  .mem-used summary::-webkit-details-marker { display: none; }
+  .mem-used li { margin: 4px 0; }
+  #memories .row { flex-wrap: wrap; row-gap: var(--s2); }
+  #memories .row .main { flex: 1 1 100%; min-width: 0; }
+  #memories .row .detail { white-space: normal; }
+  .dot-new { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--tint); margin-right: 6px; vertical-align: middle; }
   .day { align-self: center; color: var(--secondary); font: 12px var(--font); margin: 10px 0 2px; }
   .typing { display: inline-flex; gap: 4px; }
   .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--secondary); opacity: .35; animation: blink 1.2s infinite; }
@@ -618,6 +637,9 @@
   </div>
 
   <div id="chat" hidden>
+    <div class="conv-bar"><button type="button" id="conv-toggle" aria-expanded="false">☰ Conversaciones</button>
+      <button type="button" id="conv-new">＋ Nueva</button></div>
+    <div id="conv-list" hidden></div>
     <div class="thread" id="thread" aria-live="polite"></div>
   </div>
 
@@ -894,19 +916,20 @@
       <h2>Por revisar</h2>
       <div class="group" id="proposals"></div>
       <div class="group" style="margin-top:12px"><button class="link" id="prop-run" type="button">Buscar recuerdos nuevos ahora</button></div>
-      <div class="note" id="prop-note">Ashur lee lo nuevo de tu diario y tu chat con un modelo local, nunca con Claude, y te propone lo que parece duradero. Nada se guarda sin que lo aceptes. Lo que sale del diario se guarda «solo local» salvo que tú digas otra cosa.</div>
+      <div class="note" id="prop-note">Ashur lee lo nuevo de tu diario con un modelo local, nunca con Claude, y te propone lo que parece duradero. Aquí también llega lo sensible (salud, dinero, otras personas) que aprende al cerrar cada conversación. Nada de esto se guarda sin que lo aceptes, y lo aceptado se guarda «solo local» salvo que tú digas otra cosa.</div>
     </section>
 
     <section>
       <h2>Recuerdos de Ashur</h2>
+      <div class="note" id="mem-vectors" hidden></div>
       <div class="group" id="memories"></div>
-      <div class="note">Los que dicen «solo local» solo los leen los modelos de tus equipos; los demás pueden viajar a Claude en cada mensaje. Puedes cambiar el nivel o borrar cualquiera.</div>
+      <div class="note">Lo que aprende solo al cerrar cada conversación aparece con un punto hasta que lo veas; corrígelo o bórralo si quedó mal. Los que dicen «solo local» solo los leen los modelos de tus equipos; los demás pueden viajar a Claude en cada mensaje. Puedes cambiar el nivel o borrar cualquiera.</div>
     </section>
 
     <section>
       <h2>Conversaciones resumidas</h2>
       <div class="group" id="summaries"></div>
-      <div class="note">Ashur recuerda completas las últimas 20 líneas del chat. Las anteriores las resume aquí y las lleva siempre consigo; si necesita un detalle, lo busca en los mensajes originales. Olvidar quita el resumen, no los mensajes.</div>
+      <div class="note">Resúmenes del chat de antes de 0.62. Desde 0.62 cada conversación empieza limpia y Ashur recuerda por sus recuerdos, no por estos resúmenes; si necesita un detalle, lo busca en los mensajes originales. Olvidar quita el resumen, no los mensajes.</div>
     </section>
 
     <section>
@@ -2693,19 +2716,63 @@
   });
   document.addEventListener("visibilitychange", epLoop);
 
+  // 0.62.0: opening the chat is a new conversation; Ashur remembers through its memories, not the old thread
+  let convId = null;
+  function freshThread() {
+    $("thread").replaceChildren(); lastDay = null;
+    bubble("note intro", role === "guest"
+      ? "Escríbele a Ashur, el asistente de " + owner + ". Te responderá con gusto."
+      : "Conversación nueva. Ashur recuerda lo importante de las anteriores.");
+    suggest();
+  }
+  function dayGroup(ts) {
+    const d = new Date(ts * 1000), today = new Date(); today.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+    return diff <= 0 ? "Hoy" : diff === 1 ? "Ayer" : "Anteriores";
+  }
+  async function loadConvList() {
+    const box = $("conv-list"); box.replaceChildren();
+    try {
+      const list = await (await api("api/conversations")).json();
+      let last = null;
+      if (role !== "guest") {
+        const a = await (await api("api/conversations/archivo")).json();
+        if (a.total && !a.terminado && a.aprobado)
+          box.append(el("div", "when", "Aprendiendo del archivo: " + a.done + " de " + a.total + " mensajes"));
+      }
+      for (const cv of list) {
+        const g = cv.archived ? "Archivo" : dayGroup(cv.last_msg);
+        if (g !== last) { box.append(el("div", "when", g)); last = g; }
+        const b = el("button", cv.id === convId ? "on" : null, cv.title || new Date(cv.started * 1000).toLocaleString("es-CO",
+                     { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }));
+        b.type = "button";
+        b.addEventListener("click", () => openConv(cv.id));
+        box.append(b);
+      }
+      if (!list.length) box.append(el("div", "when", "Todavía no hay conversaciones."));
+    } catch (e) {}
+  }
+  async function openConv(id) {
+    const r = await api("api/conversations/" + id);
+    if (!r.ok) return;
+    const d = await r.json();
+    convId = id; $("thread").replaceChildren(); lastDay = null;
+    for (const m of d.messages) bubble(m.role === "user" ? "me" : "ashur", m.content, m.ts);
+    convShow(false);
+  }
+  function convShow(on) {
+    $("conv-list").hidden = !on; $("conv-toggle").setAttribute("aria-expanded", String(on));
+    if (on) loadConvList();
+  }
+  $("conv-toggle").addEventListener("click", () => convShow($("conv-list").hidden));
+  $("conv-new").addEventListener("click", () => { convId = null; convShow(false); freshThread(); msg.focus(); });
+
   async function loadHistory() {
     historyLoaded = true;
     try {
-      const r = await api("api/chat/history?limit=60");
+      const r = await api("api/chat/history?limit=1");
       const data = await r.json();
-      $("thread").replaceChildren(); lastDay = null;
-      if (!data.messages.length) {
-        bubble("note intro", role === "guest"
-          ? "Escríbele a Ashur, el asistente de " + owner + ". Te responderá con gusto."
-          : "Escríbele a Ashur. Recuerda lo importante entre conversaciones y puede consultar tus dispositivos.");
-        suggest();
-      }
-      for (const m of data.messages) bubble(m.role === "user" ? "me" : "ashur", m.content, m.ts);
+      convId = null; freshThread();
       showBudget(data.budget);
     } catch (e) { historyLoaded = false; }
   }
@@ -2743,7 +2810,12 @@
     const dots = el("span", "typing"); dots.append(el("i"), el("i"), el("i")); wait.append(dots);
     try {
       const v = $("voice-row").hidden ? "" : $("voice").value;
+      if (convId === null) {                       // the first message of a new conversation opens it on the server
+        const n = await api("api/conversations", { method: "POST" });
+        if (n.ok) convId = (await n.json()).id;
+      }
       const body = { message: text };
+      if (convId !== null) body.conversation_id = convId;
       if (v) body.persona = v;
       if (allowClaude) body.allow_claude = true;
       const sd = !$("docs-row").hidden && $("share-docs").checked, sy = !$("diary-row").hidden && $("share-diary").checked;
@@ -2769,6 +2841,13 @@
         showBudget(data);
       } else {
         bubble("ashur", data.reply);
+        if (data.conversation_id) convId = data.conversation_id;
+        const used = data.memories_used || [];
+        if (used.length && role !== "guest") {
+          const d = el("details", "mem-used"), sm = el("summary", null, "⟡ " + used.length + (used.length === 1 ? " recuerdo usado ▾" : " recuerdos usados ▾"));
+          const ul = el("ul"); for (const m of used) ul.append(el("li", null, m.text));
+          d.append(sm, ul); $("thread").append(d);
+        }
         const said = [];
         if (data.provider === "local" && role !== "guest") said.push("Respondió el modelo local en " + data.device + ".");
         if ((data.tools || []).includes("remember")) said.push("Ashur guardó un recuerdo.");
@@ -2833,10 +2912,32 @@
     try {
       const r = await api("api/memory");
       const list = await r.json();
-      fill("memories", list.slice().reverse().map((m) => {
+      api("api/memory/vectors").then((v) => v.json()).then((v) => {
+        const n = $("mem-vectors"); n.hidden = !v.total;
+        n.textContent = "Buscados por significado: " + v.done + " de " + v.total + (v.done < v.total ? " (los demás se preparan cuando un equipo con Ollama está libre)." : ".");
+      }).catch(() => {});
+      const ordered = list.slice().reverse().sort((a, b) => (b.nuevo === true) - (a.nuevo === true));
+      if (list.some((m) => m.nuevo)) api("api/memory/seen", { method: "POST" }).catch(() => {});
+      fill("memories", ordered.map((m) => {
         const r = row({ title: m.text, detail: new Date(m.created * 1000).toLocaleDateString("es-CO",
-                        { day: "numeric", month: "short", year: "numeric" }) + " · " + (m.tier === "local" ? "solo local" : "puede ir a Claude") });
-        r.querySelector(".title").style.whiteSpace = "normal";
+                        { day: "numeric", month: "short", year: "numeric" }) + " · " + (m.tier === "local" ? "solo local" : "puede ir a Claude")
+                        + (String(m.source || "").startsWith("conv:") ? " · aprendido de una conversación" : "") });
+        const title = r.querySelector(".title");
+        title.style.whiteSpace = "normal";
+        if (m.nuevo) title.prepend(el("span", "dot-new"));
+        const eb = el("button", "forget", "Corregir"); eb.type = "button";
+        eb.addEventListener("click", () => {
+          const ta = el("textarea"); ta.value = m.text; ta.maxLength = 300; ta.rows = 2; ta.style.width = "100%";
+          const ok = el("button", "forget", "Guardar"); ok.type = "button";
+          ok.addEventListener("click", async () => {
+            const t = ta.value.trim(); if (!t) return;
+            ok.disabled = true;
+            await api("api/memory/" + m.id, { method: "PUT", body: JSON.stringify({ text: t }) });
+            loadMemories();
+          });
+          title.replaceChildren(ta); eb.replaceWith(ok); ta.focus();
+        });
+        r.append(eb);
         const tb = el("button", "forget", m.tier === "local" ? "Permitir Claude" : "Solo local"); tb.type = "button";
         tb.addEventListener("click", async () => {
           tb.disabled = true;

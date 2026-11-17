@@ -2684,6 +2684,16 @@ def create_app(
 
     app.state.propose_due = propose_due
 
+    class MemoryText(BaseModel):
+        text: str = Field(min_length=1, max_length=300)
+
+    @app.put("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
+    def memory_correct(memory_id: int, body: MemoryText):
+        if not db.update_memory(memory_id, body.text.strip()):
+            raise HTTPException(404, "no such memory")
+        db.log(clock(), None, "memory_corrected", {"memory_id": memory_id})
+        return {"ok": True}
+
     @app.delete("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
     def memory_delete(memory_id: int):
         if not db.delete_memory(memory_id):

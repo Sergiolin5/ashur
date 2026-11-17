@@ -433,3 +433,16 @@ def test_archive_resumes_from_cursor(tmp_path):
     assert c.get("/api/conversations/archivo", headers=A).json()["done"] == 6
     assert [m["text"] for m in c.app.state.db.memories()] == ["dato del archivo uno"]
     assert [p["text"] for p in c.app.state.db.proposals()] == ["dato sensible del archivo"]
+
+
+# --- Task 8: correcting a memory from the panel ----------------------------------------------
+def test_correcting_a_memory_drops_its_old_vector(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    mid = db.add_memory(1.0, "sus cámaras son Hikvision", source="conv:1")
+    db.vector_put(mid, "bge-m3", conv.pack([1, 0]), 2)
+    r = c.put(f"/api/memory/{mid}", headers=A, json={"text": "sus cámaras son VTA+"})
+    assert r.status_code == 200
+    assert db.memories()[0]["text"] == "sus cámaras son VTA+" and db.vectors("bge-m3") == {}
+    assert c.put("/api/memory/999", headers=A, json={"text": "x" * 10}).status_code == 404
+    assert c.put(f"/api/memory/{mid}", headers=A, json={"text": ""}).status_code == 422

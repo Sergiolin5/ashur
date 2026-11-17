@@ -8,10 +8,10 @@ from typing import Callable
 
 from core.encargos import EncargoError
 
-from core.integrations.openjarvis import bridge, enabled, google, schedule, skills, traces
+from core.integrations.openjarvis import bench, bridge, enabled, google, schedule, skills, traces
 
 SCHEDULABLE = ("skills", "deep_research")
-RUNS_RESULTS = ("skills", "deep_research", "gmail", "digest")   # every capability whose work runs as an encargo
+RUNS_RESULTS = ("skills", "deep_research", "gmail", "digest", "bench")   # every capability whose work runs as an encargo
 GOOGLE = ("gmail", "tasks", "calendar")
 
 
@@ -96,6 +96,15 @@ SCHEMAS = {
                        "ISO 8601, hora de Bogotá (AAAA-MM-DDTHH:MM:SS).",
         "input_schema": _obj({"titulo": "string", "inicio": "string", "fin": "string", "descripcion": "string"},
                              ["titulo", "inicio", "fin"])}),
+    "bench_skills": ("bench", {
+        "name": "bench_skills",
+        "description": "Corre el benchmark de skills: cada skill lista una vez con entradas de prueba, como encargo en "
+                       "los equipos de Sergio. Tarda; el informe se lee con bench_resultado.",
+        "input_schema": {"type": "object", "properties": {}}}),
+    "bench_resultado": ("bench", {
+        "name": "bench_resultado",
+        "description": "Informe del último benchmark de skills: cuáles funcionaron, tiempo, llamadas y equipo.",
+        "input_schema": {"type": "object", "properties": {}}}),
     "programar_trabajo": (SCHEDULABLE, {
         "name": "programar_trabajo",
         "description": "Programa una skill o una investigación para que Ashur la ponga en cola cada día a una hora "
@@ -206,6 +215,15 @@ def tools(db, clock: Callable[[], float]) -> dict:
             raise EncargoError("Falta título, inicio o fin.")
         return ask_approval("oj_evento", a, f"crear el evento «{a['titulo']}» ({a['inicio']})")
 
+    def bench_skills(_args):
+        if not enabled("skills"):
+            raise EncargoError("El benchmark corre skills: enciende ASHUR_OJ_SKILLS.")
+        b = bench.start(db, clock)
+        return f"Benchmark {b['id']}: {len(b['encargos'])} skills en cola; {len(b['omitidas'])} omitidas."
+
+    def bench_resultado(_args):
+        return bench.report(db)
+
     def programar(args):
         kind, label, params = spec(args, "skill" if args.get("tipo") == "skill" else "deep_research")
         row = schedule.add(db, kind, label, str(args.get("hora", "")), args.get("dias"), params)
@@ -245,7 +263,8 @@ def tools(db, clock: Callable[[], float]) -> dict:
                 "trabajos_programados": programados, "desprogramar_trabajo": desprogramar,
                 "rutinas": rutinas, "google_conectar": g_conectar, "google_conectar_fin": g_fin,
                 "correo_consultar": correo_consultar, "correo_enviar": correo_enviar, "tareas": tareas_ver,
-                "tarea_crear": tarea_crear, "agenda": agenda, "evento_crear": evento_crear}
+                "tarea_crear": tarea_crear, "agenda": agenda, "evento_crear": evento_crear,
+                "bench_skills": bench_skills, "bench_resultado": bench_resultado}
 
     def guarded(fn):
         def call(args):

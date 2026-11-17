@@ -680,10 +680,12 @@ def test_operation_error_marks_failed_and_stops(tmp_path, fast_local, monkeypatc
     finally:
         node.close()
     e = c.db.encargo_get(eid)
-    assert e["status"] == "failed" and e["error"] == "Error interno al procesar el encargo."
+    assert e["status"] == "failed" and e["error"] == "Error interno al procesar el encargo (ValueError)."
     assert e["result"] is not None and len(node.payloads) == 1
-    failed = [ev for ev in c.db.log_rows(100) if ev["event"] == "encargo_failed"]
-    assert len(failed) == 1 and "CANARIO" not in json.dumps(failed)
+    failed = [ev for ev in c.db.log_rows(100) if ev["event"] in ("encargo_failed", "encargo_error")]
+    assert len(failed) == 2 and "CANARIO" not in json.dumps(failed)
+    err = [ev for ev in failed if ev["event"] == "encargo_error"][0]["detail"]
+    assert err["tipo"] == "ValueError" and err["donde"].startswith("test_encargos.py:")
 
 
 def test_unknown_operation_logs_failed(tmp_path):

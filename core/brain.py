@@ -698,6 +698,42 @@ class Brain:
         out = ["## " + h + "\n" + "\n".join(lines) for h, lines in topics.items()]   # all of them: until 0.43.2 a 120-line cap cut the end
         return "\n\n".join(out)
 
+    def learn_lines(self, text: str, source: str) -> dict:
+        """Save what a local model extracted: normal lines straight to memory, sensitive ones to the inbox."""
+        normal, sensitive, title = conv.parse_extraction(text)
+        known = {m["text"].strip().lower() for m in self.db.memories()} | self.db.proposal_texts()
+        n = s = 0
+        for ln in normal:
+            if ln.lower() not in known:
+                self.db.add_memory(self.clock(), ln, source=source)
+                known.add(ln.lower())
+                n += 1
+        for ln in sensitive:
+            if ln.lower() not in known:
+                self.db.proposal_add(self.clock(), ln, source)
+                known.add(ln.lower())
+                s += 1
+        return {"normales": n, "sensibles": s, "titulo": title}
+
+    def extract_conversation(self, cid: int) -> dict:
+        """0.62.0: what a closed conversation of Sergio's leaves in memory, with a LOCAL model only. Raises
+        LocalUnavailable (and marks nothing) when no device can think now: it is retried later."""
+        if self.local is None or self.s.brain == "claude":
+            raise LocalUnavailable("Este modo de Ashur no usa modelos locales.")
+        cv = self.db.conv_get(cid)
+        msgs = self.db.conv_messages(cid, after_ts=cv["extracted"])
+        total = {"normales": 0, "sensibles": 0}
+        title = cv["title"]
+        for piece in conv.chunks(msgs):
+            text, _device = self.local(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+            got = self.learn_lines(text, f"conv:{cid}")
+            total["normales"] += got["normales"]
+            total["sensibles"] += got["sensibles"]
+            title = title or got["titulo"]
+        self.db.conv_set(cid, extracted=self.clock(), title=title or "")
+        self.db.log(self.clock(), None, "memories_extracted", {"conv": cid, **total})
+        return total
+
     def propose_memories(self) -> int:
         """Read what Sergio wrote since last time (diary and chat) with a LOCAL model only, and put lasting facts
         in the inbox for him to accept or discard. Nothing is saved as a memory without his say-so, and the
@@ -706,8 +742,8 @@ class Brain:
         if self.local is None or self.s.brain == "claude":
             self.propose_reason = "Este modo de Ashur no usa modelos locales."
             return 0
-        d_cur, m_cur = int(self.db.setting("prop_diary_cursor", "0")), int(self.db.setting("prop_msg_cursor", "0"))
-        entries, msgs = self.db.diary_after(d_cur), self.db.user_messages_after(m_cur)
+        d_cur = int(self.db.setting("prop_diary_cursor", "0"))
+        entries, msgs = self.db.diary_after(d_cur), []     # 0.62.0: the chat is learned per conversation instead
         if not entries and not msgs:
             self.propose_reason = "No hay entradas del diario ni mensajes nuevos desde la última búsqueda."
             return 0

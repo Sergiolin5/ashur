@@ -62,3 +62,52 @@ def pick_memories(memories: list, vectors: dict, query_vec, query: str, max_char
         seen.add(m["id"])
         size += line
     return chosen, mode
+
+
+EXTRACTOR = """Lees una conversación entre Sergio y Ashur, su asistente. Saca los hechos duraderos sobre Sergio o su vida
+que valga la pena recordar dentro de un mes, en una conversación sobre otra cosa.
+- Una línea por hecho, en español, corta y literal. Solo lo que Sergio afirma; no inventes ni completes.
+- Empieza cada línea con "NORMAL: " o con "SENSIBLE: ". SENSIBLE es todo lo de salud, dinero o sobre otras personas.
+- Nada de lo que Ashur sugirió, nada pasajero (el ánimo de hoy, la tarea de este rato), ninguna clave ni código.
+- Primera línea: "TITULO: " y un título de 6 palabras o menos para la conversación.
+- Si no hay nada que recordar, después del título escribe solo: nada"""
+
+EXTRACT_CHARS = 6000        # one call to the local model; a longer conversation goes in several
+
+
+def parse_extraction(text: str) -> tuple:
+    """(normal lines, sensitive lines, title). A NORMAL line the health filter catches is sensitive anyway;
+    a line that looks like a secret is dropped."""
+    from core.brain import DIARY_SECRET, health_split, looks_like_secret
+    normal, sensitive, title = [], [], ""
+    for ln in (text or "").splitlines():
+        ln = ln.strip().lstrip("-•* ").strip()
+        head, _, body = ln.partition(":")
+        head, body = head.strip().upper(), body.strip()
+        if head in ("TITULO", "TÍTULO"):
+            title = body[:60]
+            continue
+        if head not in ("NORMAL", "SENSIBLE") or not (8 <= len(body) <= 300):
+            continue
+        if looks_like_secret(body) or DIARY_SECRET.search(ln):
+            continue
+        if head == "SENSIBLE" or health_split(body)[1]:
+            sensitive.append(body)
+        else:
+            normal.append(body)
+    return normal, sensitive, title
+
+
+def chunks(messages: list, limit: int = EXTRACT_CHARS) -> list:
+    """Transcript pieces that fit one call, never cutting a message (a single huge one is trimmed)."""
+    out, cur, size = [], [], 0
+    for m in messages:
+        line = ("Sergio: " if m["role"] == "user" else "Ashur: ") + m["content"][:limit]
+        if cur and size + len(line) > limit:
+            out.append("\n".join(cur))
+            cur, size = [], 0
+        cur.append(line)
+        size += len(line) + 1
+    if cur:
+        out.append("\n".join(cur))
+    return out

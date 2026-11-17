@@ -304,3 +304,79 @@ def test_reopening_own_closed_conversation(tmp_path):
     r = c.post("/api/chat", headers=A, json={"message": "sigo", "conversation_id": cid}).json()
     assert r["conversation_id"] == cid and c.app.state.db.conv_get(cid)["closed"] is None
     assert [m["content"] for m in fake.calls[-1]["messages"]] == ["uno", "ok", "sigo"]
+
+
+# --- Task 6: close and learn ------------------------------------------------------------
+def test_parse_moves_health_to_sensitive():
+    normal, sens, title = conv.parse_extraction(
+        "TITULO: Cámaras y salud\nNORMAL: las cámaras son VTA+\nNORMAL: toma una pastilla cada mañana\n"
+        "SENSIBLE: le debe plata a su primo\nNORMAL: clave: 1234\nnada")
+    assert normal == ["las cámaras son VTA+"]
+    assert sens == ["toma una pastilla cada mañana", "le debe plata a su primo"]
+    assert title == "Cámaras y salud"
+
+
+def local_app(tmp_path):
+    clock = VirtualClock()
+    app = create_app(str(tmp_path / "l.db"), "e", "a", clock=clock, sweep_every_s=None,
+                     brain_settings=BrainSettings(monthly_budget_usd=10, brain="local-first"))
+    c = TestClient(app)
+    c.clock = clock
+    return c
+
+
+def chat_answer(text):
+    return lambda p: ({"vectors": [[1.0, 0.0] for _ in p["embed"]], "model": "bge-m3", "dim": 2}
+                      if "embed" in p else {"text": text})
+
+
+def test_extract_splits_normal_and_sensitive(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("sergio", c.clock())
+    db.add_message(c.clock(), "app", "user", "las cámaras son VTA+ y me duele la espalda", "sergio", cid)
+    db.conv_close(cid, c.clock())
+    th, seen = node(c, answer=chat_answer("TITULO: Cámaras\nNORMAL: sus cámaras son VTA+\nSENSIBLE: le duele la espalda"))
+    assert c.app.state.conversations_due() == 1
+    th.join(5)
+    assert [m["text"] for m in db.memories()] == ["sus cámaras son VTA+"]
+    assert db.memories()[0]["source"] == f"conv:{cid}"
+    assert [p["text"] for p in db.proposals()] == ["le duele la espalda"]
+    cv = db.conv_get(cid)
+    assert cv["extracted"] is not None and cv["title"] == "Cámaras"
+    assert "las cámaras son VTA+" in seen[0]["messages"][0]["content"]
+
+
+def test_guest_conversations_are_never_extracted(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("g1", c.clock())
+    db.add_message(c.clock(), "app", "user", "hola", "g1", cid)
+    db.conv_close(cid, c.clock())
+    assert c.app.state.conversations_due() == 0 and db.conv_get(cid)["extracted"] is None
+
+
+def test_no_local_model_leaves_it_pending(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    cid = db.conv_open("sergio", c.clock())
+    db.add_message(c.clock(), "app", "user", "algo", "sergio", cid)
+    db.conv_close(cid, c.clock())
+    assert c.app.state.conversations_due() == 0 and db.conv_get(cid)["extracted"] is None
+
+
+def test_new_memories_are_marked_until_seen(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    db.add_memory(c.clock(), "viejo", source="ashur")
+    db.add_memory(c.clock(), "nuevo", source="conv:1")
+    got = {m["text"]: m["nuevo"] for m in c.get("/api/memory", headers=A).json()}
+    assert got == {"viejo": False, "nuevo": True}
+    c.post("/api/memory/seen", headers=A)
+    assert not any(m["nuevo"] for m in c.get("/api/memory", headers=A).json())
+
+
+def test_approved_sensitive_conversation_proposal_stays_local(tmp_path):
+    c = local_app(tmp_path)
+    pid = c.app.state.db.proposal_add(1.0, "le duele la espalda", "conv:3")
+    assert c.post(f"/api/proposals/{pid}/approve", headers=A, json={}).json()["tier"] == "local"

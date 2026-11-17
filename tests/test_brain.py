@@ -675,15 +675,12 @@ def test_accepting_a_diary_proposal_defaults_to_local_and_rejected_ones_never_co
     assert [p["text"] for p in c.get("/api/proposals", headers=A).json()] == ["Corre por las mañanas"]
 
 
-def test_chat_proposals_default_to_claude_and_without_a_local_model_nothing_happens(tmp_path, monkeypatch):
+def test_chat_messages_are_no_longer_proposed(tmp_path, monkeypatch):
+    # 0.62.0: the chat is learned per conversation when it closes (tests/test_conversaciones.py); proposals = diary
     c = _local_app(tmp_path, monkeypatch)
     c.app.state.db.add_message(1.0, "app", "user", "Trabajo en Beazley como ingeniero", "sergio")
-    r = c.post("/api/proposals/run", headers=A).json()                                   # no node online: retried later
-    assert r["added"] == 0 and "modelo local" in r["reason"]                             # and it says why
-    th, _ = fake_llm_node(c, reply="- Trabaja en Beazley")
-    assert c.post("/api/proposals/run", headers=A).json() == {"added": 1, "reason": ""}; th.join(5)
-    p = c.get("/api/proposals", headers=A).json()[0]
-    assert p["source"] == "chat" and c.post(f"/api/proposals/{p['id']}/approve", headers=A, json={}).json()["tier"] == "claude"
+    r = c.post("/api/proposals/run", headers=A).json()
+    assert r["added"] == 0 and c.get("/api/proposals", headers=A).json() == []
 
 
 def test_the_proposals_endpoints_are_admin_only(tmp_path):

@@ -253,6 +253,7 @@ def create_app(
                         app.state.daily_due()
                         app.state.propose_due()
                         app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
+                        app.state.conversations_due()             # 0.62.0: close idle ones, learn from one
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -2436,6 +2437,20 @@ def create_app(
 
     app.state.conversations_close_idle = conversations_close_idle
 
+    def conversations_due() -> int:
+        """Close idle conversations, then learn from one closed conversation of Sergio's per pass (local model)."""
+        conversations_close_idle()
+        for cv in db.conv_list("sergio", limit=200):
+            if cv["closed"] is not None and not cv["archived"] and cv["extracted"] is None and cv["n"]:
+                try:
+                    brain.extract_conversation(cv["id"])
+                except LocalUnavailable:
+                    return 0
+                return 1
+        return 0
+
+    app.state.conversations_due = conversations_due
+
     @app.get("/api/chat/history")
     def chat_history(limit: int = 50, guest: Optional[dict] = Depends(require_chat)):
         user = f"g{guest['id']}" if guest else "sergio"
@@ -2496,7 +2511,14 @@ def create_app(
 
     @app.get("/api/memory", dependencies=[Depends(require_admin)])
     def memory_list():
-        return db.memories()
+        seen = float(db.setting("memory_seen", "0"))
+        return [dict(m, nuevo=str(m.get("source") or "").startswith("conv:") and m["created"] > seen)
+                for m in db.memories()]
+
+    @app.post("/api/memory/seen", dependencies=[Depends(require_admin)])
+    def memory_seen():
+        db.set_setting("memory_seen", str(clock()))
+        return {"ok": True}
 
     @app.get("/api/memory/vectors", dependencies=[Depends(require_admin)])
     def memory_vectors():
@@ -2570,7 +2592,8 @@ def create_app(
         p = db.proposal_get(pid)
         if not p or p["status"] != "pending":
             raise HTTPException(404, "No existe esa propuesta.")
-        tier = body.tier or ("local" if p["source"] == "diary" else "claude")
+        # diary and a conversation's sensitive lines (0.62.0) stay with the local models unless he says otherwise
+        tier = body.tier or ("local" if p["source"] == "diary" or p["source"].startswith("conv:") else "claude")
         mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier)
         db.proposal_set(pid, "accepted")
         db.log(clock(), None, "memory_accepted", {"memory_id": mid, "tier": tier})

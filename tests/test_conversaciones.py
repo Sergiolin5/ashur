@@ -164,3 +164,93 @@ def test_embed_due_without_node_does_nothing(tmp_path):
     app = create_app(str(tmp_path / "x.db"), "e", "a", sweep_every_s=None)
     app.state.db.add_memory(1.0, "uno")
     assert app.state.embed_due() == 0
+
+
+# --- Task 4: recall ---------------------------------------------------------------
+from types import SimpleNamespace as NS
+
+from core.brain import BrainSettings
+from sim.scenario import VirtualClock
+
+
+def mem(i, t, tier="claude"):
+    return {"id": i, "text": t, "tier": tier, "created": float(i)}
+
+
+def test_pick_prefers_the_closest_vector():
+    ms = [mem(1, "A"), mem(2, "B")]
+    vs = {1: conv.pack([1, 0]), 2: conv.pack([0, 1])}
+    picked, mode = conv.pick_memories(ms, vs, conv.pack([0.9, 0.1]), "x", 6000)
+    assert mode == "vector" and picked[0]["id"] == 1
+
+
+def test_pick_falls_back_to_words():
+    ms = [mem(1, "le gusta el café"), mem(2, "las cámaras VTA+ de la casa"), mem(3, "toca guitarra")]
+    picked, mode = conv.pick_memories(ms, {}, None, "las camaras de la casa", 6000)
+    assert mode == "palabras" and picked[0]["id"] == 2
+
+
+def test_pick_respects_the_cap():
+    ms = [mem(i, "x" * 100) for i in range(1, 200)]
+    picked, _ = conv.pick_memories(ms, {}, None, "nada", 1000)
+    assert sum(len(m["text"]) for m in picked) <= 1000
+
+
+class FakeClaude:
+    def __init__(self, script):
+        self.script, self.calls, self.messages = list(script), [], self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return self.script.pop(0)
+
+
+def reply(t):
+    return NS(content=[NS(type="text", text=t)], stop_reason="end_turn", usage=NS(input_tokens=10, output_tokens=5))
+
+
+def claude_app(tmp_path, n=3):
+    fake = FakeClaude([reply("ok") for _ in range(n)])
+    app = create_app(str(tmp_path / "c.db"), "e", "a", clock=VirtualClock(), sweep_every_s=None,
+                     brain_settings=BrainSettings(monthly_budget_usd=10, brain="auto"), brain_client=fake)
+    return TestClient(app), fake
+
+
+def test_local_tier_never_reaches_claude(tmp_path):
+    c, fake = claude_app(tmp_path)
+    db = c.app.state.db
+    db.add_memory(1.0, "secreto local de las cámaras", tier="local")
+    db.add_memory(1.0, "las cámaras son VTA+")
+    c.post("/api/chat", headers=A, json={"message": "las cámaras"})
+    assert "VTA+" in fake.calls[0]["system"] and "secreto local" not in fake.calls[0]["system"]
+
+
+def test_no_node_still_answers_and_says_words(tmp_path):
+    c, fake = claude_app(tmp_path)
+    c.app.state.db.add_memory(1.0, "las cámaras son VTA+")
+    r = c.post("/api/chat", headers=A, json={"message": "las cámaras"}).json()
+    assert r["reply"] == "ok" and "por palabras" in (r["note"] or "")
+    assert [m["text"] for m in r["memories_used"]] == ["las cámaras son VTA+"]
+
+
+def test_chat_uses_vectors_when_a_node_answers(tmp_path):
+    c, fake = claude_app(tmp_path)
+    db = c.app.state.db
+    a = db.add_memory(1.0, "uno")
+    b = db.add_memory(1.0, "dos")
+    db.vector_put(a, "bge-m3", conv.pack([1, 0]), 2)
+    db.vector_put(b, "bge-m3", conv.pack([0, 1]), 2)
+    th, seen = node(c, answer=lambda p: {"vectors": [[0.0, 1.0]], "model": "bge-m3", "dim": 2})
+    r = c.post("/api/chat", headers=A, json={"message": "algo"}).json()
+    th.join(5)
+    assert r["memories_used"][0]["id"] == b and "por palabras" not in (r["note"] or "")
+
+
+def test_long_message_is_cut_for_embedding(tmp_path):
+    c, fake = claude_app(tmp_path)
+    mid = c.app.state.db.add_memory(1.0, "uno")
+    c.app.state.db.vector_put(mid, "bge-m3", conv.pack([1, 0]), 2)
+    th, seen = node(c, answer=lambda p: {"vectors": [[1.0, 0.0]], "model": "bge-m3", "dim": 2})
+    r = c.post("/api/chat", headers=A, json={"message": "a" * 8000})
+    th.join(5)
+    assert r.status_code == 200 and len(seen[0]["embed"][0]) == 2000

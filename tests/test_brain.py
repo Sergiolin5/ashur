@@ -313,7 +313,7 @@ def test_old_conversation_is_summarized_and_carried(tmp_path):
     summary_call = fake.calls[20]
     assert "Sergio: m0" in summary_call["messages"][0]["content"] and "tools" not in summary_call
     c.post("/api/chat", headers=A, json={"message": "¿te acuerdas?"})
-    assert "Sergio decidió usar ZimaOS" in fake.calls[-1]["system"]
+    assert "Sergio decidió usar ZimaOS" not in fake.calls[-1]["system"]      # 0.62.0: summaries no longer enter the prompt
     log = c.get("/log", headers=A).json()
     ev = [e for e in log if e["event"] == "conversation_summarized"][0]
     assert "ZimaOS" not in json.dumps(ev)                                       # paper data: no words

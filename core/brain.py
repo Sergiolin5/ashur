@@ -11,10 +11,13 @@ import datetime as dt
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+from core import conversaciones as conv
 
 TOOLS = [
     {"name": "remember",
@@ -226,7 +229,10 @@ class Brain:
     def __init__(self, db, data_dir: str, clock: Callable[[], float],
                  network: Callable[[], dict], settings: Optional[BrainSettings] = None,
                  client: Any = None, local: Optional[Callable[[str, list], tuple[str, str]]] = None,
-                 vision: Optional[Callable[..., tuple[str, str]]] = None):
+                 vision: Optional[Callable[..., tuple[str, str]]] = None,
+                 embed: Optional[Callable[..., list]] = None):
+        self.embed = embed                   # (texts, timeout_s) -> vectors, from a node's Ollama (0.62.0)
+        self._recall = threading.local()     # this chat's query, its vector and the memories it used
         self.vision = vision                 # (prompt, image_b64, system) -> (reply, device): the Ryzen's vision model
         self.db = db
         self.persona_path = Path(data_dir) / "persona.md"
@@ -338,6 +344,14 @@ class Brain:
     def _memory_block(self, local: bool) -> str:
         # memories marked «solo local» never enter a prompt that goes to Claude
         notes = [m for m in self.db.memories() if local or m.get("tier", "claude") == "claude"]
+        query = getattr(self._recall, "query", None)
+        if query is not None:                          # 0.62.0: inside a chat, the memories related to what he wrote
+            picked, mode = conv.pick_memories(notes, self.db.vectors(conv.EMBED_MODEL), self._recall.vec,
+                                              query, MAX_MEMORY_CHARS)
+            self._recall.mode = mode
+            self._recall.used.update({m["id"]: m["text"] for m in picked})
+            picked.sort(key=lambda m: m["id"])
+            return "\n".join(f"[{m['id']}] {m['text']}" for m in picked) or "(todavía no hay recuerdos)"
         lines, size = [], 0
         for m in reversed(notes):                      # newest first until the cap, then restore order
             line = f"[{m['id']}] {m['text']}"
@@ -361,23 +375,15 @@ class Brain:
 
     def _system(self, voice: Optional[str] = None, local: bool = False) -> str:
         memory = self._memory_block(local)
-        past, size = [], 0
-        for sm in reversed(self.db.summaries()):
-            day = dt.datetime.fromtimestamp(sm["ts_to"], BOGOTA).strftime("%Y-%m-%d")
-            block = f"({day})\n{sm['text']}"
-            if size + len(block) > MAX_SUMMARY_CHARS:
-                break
-            past.append(block)
-            size += len(block)
-        talks = "\n".join(reversed(past)) or "(todavía no hay conversaciones resumidas)"
+        # 0.62.0: no summaries of other conversations; a chat starts clean and remembers through `memory`
+        # (search_conversations is how Ashur looks into an earlier talk when it needs to)
         now = dt.datetime.fromtimestamp(self.clock(), BOGOTA)
         text = self.voice(voice)
         layer = (f"\n\nAhora Sergio te habla desde su dispositivo «{voice}». Sigues siendo Ashur, con la misma "
                  f"memoria; en este dispositivo tu voz es así:\n{text}") if text else ""
         return (f"{self.persona().strip()}{layer}\n\n"
                 f"Fecha y hora en Bogotá: {now:%Y-%m-%d %H:%M}.\n\n"
-                f"Tus recuerdos (número entre corchetes):\n{memory}\n\n"
-                f"Resumen de conversaciones anteriores con Sergio:\n{talks}")
+                f"Tus recuerdos (número entre corchetes):\n{memory}")
 
     def _cost(self, usage) -> tuple[int, int, float]:
         tin = int(_get(usage, "input_tokens", 0) or 0) + int(_get(usage, "cache_creation_input_tokens", 0) or 0) \
@@ -738,7 +744,35 @@ class Brain:
         est = chars / 3.5 * self.s.price_in_per_mtok / 1e6 + 400 * self.s.price_out_per_mtok / 1e6
         return round(max(est, 0.001), 3)
 
-    def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
+    def _prepare_recall(self, text: str) -> None:
+        r = self._recall
+        r.query, r.vec, r.mode, r.used = text, None, None, {}
+        if self.embed is None or not self.db.vectors(conv.EMBED_MODEL):
+            return
+        try:
+            r.vec = conv.pack(self.embed([text], conv.CHAT_EMBED_TIMEOUT_S)[0])
+        except LocalUnavailable:
+            pass                                       # searched by words; the reply says so
+
+    def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None, voice: Optional[str] = None,
+             **kw) -> dict:
+        kw["voice"] = voice
+        if guest is not None:                          # a guest gets no memories at all (stage 2 changes that)
+            return self._chat(text, channel, guest, **kw)
+        self._prepare_recall(text.strip())
+        try:
+            out = self._chat(text, channel, guest, **kw)
+            r = self._recall
+            if r.mode and out.get("provider") not in (None, "none"):
+                out["memories_used"] = [{"id": i, "text": t} for i, t in r.used.items()]
+                if r.mode == "palabras" and r.used:
+                    out["note"] = ((out.get("note") or "") + " Busqué recuerdos por palabras.").strip()
+                self.db.log(self.clock(), out.get("device"), "memory_search", {"modo": r.mode, "usados": len(r.used)})
+            return out
+        finally:
+            self._recall.query = None
+
+    def _chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
              voice: Optional[str] = None, allow_claude: bool = False,
              share_docs: bool = False, share_diary: bool = False, image: Optional[dict] = None) -> dict:
         voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice

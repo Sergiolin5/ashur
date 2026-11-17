@@ -1374,7 +1374,8 @@ def create_app(
     app.state.embed_due = embed_due
 
     brain = Brain(db, os.path.dirname(os.path.abspath(db_path)), clock, network_for_brain,
-                  settings=brain_settings, client=brain_client, local=local_complete, vision=local_vision)
+                  settings=brain_settings, client=brain_client, local=local_complete, vision=local_vision,
+                  embed=local_embed)
     app.state.brain = brain
 
     # conversation memory: old messages are summarized in the background, one at a time;

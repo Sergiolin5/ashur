@@ -376,3 +376,17 @@ def test_chat_no_longer_triggers_summarizer(tmp_path):
     import time
     time.sleep(0.3)
     assert called == []
+
+
+# --- Task 7: endpoints for the panel ---------------------------------------------------------------------
+def test_guest_temas_and_profile_endpoints(tmp_path):
+    c = local_app(tmp_path)
+    gid, G = guest(c, "Ana")
+    assert c.put(f"/api/guests/{gid}/temas", headers=A, json={"temas": ["gustos", "trabajo"]}).status_code == 200
+    assert c.put(f"/api/guests/{gid}/temas", headers=A, json={"temas": ["privado"]}).status_code == 422
+    assert [g["temas"] for g in c.get("/api/guests", headers=A).json() if g["id"] == gid] == [["gustos", "trabajo"]]
+    c.app.state.db.add_memory(1.0, "estudia arquitectura", owner=f"g{gid}")
+    assert [m["text"] for m in c.get(f"/api/guests/{gid}/perfil", headers=A).json()] == ["estudia arquitectura"]
+    assert c.get(f"/api/guests/{gid}/perfil", headers=G).status_code == 401           # only Sergio sees it
+    assert c.put(f"/api/guests/{gid}/temas", headers=G, json={"temas": []}).status_code == 401
+    assert c.get("/api/guests/999/perfil", headers=A).status_code == 404

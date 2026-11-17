@@ -401,7 +401,16 @@
   .mem-used summary { cursor: pointer; list-style: none; color: var(--tint); }
   .mem-used summary::-webkit-details-marker { display: none; }
   .mem-used li { margin: 4px 0; }
-  #memories .row { flex-wrap: wrap; row-gap: var(--s2); }
+  #memories .row, #guests .row { flex-wrap: wrap; row-gap: var(--s2); }
+  #guests .row .main { flex: 1 1 100%; min-width: 0; }
+  .tema-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; }
+  .tema-chips button { width: auto; margin: 0; padding: 5px 10px; border-radius: var(--r-pill); background: var(--field);
+                       color: var(--secondary); border: 1px solid transparent; font-size: var(--fs-small); }
+  .tema-chips button[aria-pressed="true"] { color: var(--tint); border-color: var(--tint); }
+  .perfil { flex: 1 1 100%; font-size: var(--fs-meta); }
+  .perfil .pf { display: flex; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid var(--sep, rgba(127,127,127,.2)); }
+  .perfil .pf span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .mem-tema { font: inherit; font-size: var(--fs-small); color: var(--tint); background: var(--field); border: 0; border-radius: 6px; padding: 5px 6px; }
   #memories .row .main { flex: 1 1 100%; min-width: 0; }
   #memories .row .detail { white-space: normal; }
   .dot-new { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--tint); margin-right: 6px; vertical-align: middle; }
@@ -1087,7 +1096,7 @@
       <h2>Invitados</h2>
       <div class="group" id="guests"></div>
       <div class="group signin" style="margin-top:12px">
-        <p>Un invitado solo puede chatear con Ashur, en su propia conversación. No ve tus recuerdos, tus conversaciones ni tus dispositivos. Tiene un tope de gasto propio y un máximo de mensajes por hora; ambos los cambias aquí abajo.</p>
+        <p>Un invitado solo puede chatear con Ashur, en su propia conversación. No ve tus conversaciones ni tus dispositivos; de tus recuerdos, Ashur solo le cuenta los de los temas que marques en cada invitado (nunca salud ni lo «solo local»). Ashur recuerda lo que cada invitado le cuenta en su perfil, que solo ves tú, y lo que te enseñe a ti o a Ashur llega a «Por aprobar». Tiene un tope de gasto propio y un máximo de mensajes por hora; ambos los cambias aquí abajo.</p>
         <div style="display:flex;gap:8px;align-items:center;margin:0 0 6px;font-size:15px;color:var(--label)">
           <input id="lim-msgs" type="number" min="1" max="1000" step="1" aria-label="Mensajes por hora por invitado" style="flex:1" placeholder="Mensajes/hora">
           <input id="lim-cap" type="number" min="0" max="100" step="0.5" aria-label="Tope de gasto al mes por defecto en dólares" style="flex:1" placeholder="Tope US$ por defecto">
@@ -2721,7 +2730,7 @@
   function freshThread() {
     $("thread").replaceChildren(); lastDay = null;
     bubble("note intro", role === "guest"
-      ? "Escríbele a Ashur, el asistente de " + owner + ". Te responderá con gusto."
+      ? "Escríbele a Ashur, el asistente de " + owner + ". Ashur recuerda lo que le cuentas, y " + owner + " puede ver lo que recuerda de ti."
       : "Conversación nueva. Ashur recuerda lo importante de las anteriores.");
     suggest();
   }
@@ -2948,6 +2957,12 @@
           title.replaceChildren(ta); eb.replaceWith(ok); ta.focus();
         });
         r.append(eb);
+        const ts = el("select", "mem-tema"); ts.setAttribute("aria-label", "Tema de: " + m.text);
+        for (const [v, label] of [["", "sin tema"], ["trabajo", "Trabajo"], ["gustos", "Gustos"], ["ashur", "Ashur"], ["privado", "Privado"]]) {
+          const o = el("option", null, label); o.value = v; if ((m.tema || "") === v) o.selected = true; if (!v) o.disabled = true; ts.append(o);
+        }
+        ts.addEventListener("change", async () => { await api("api/memory/" + m.id + "/tema", { method: "PUT", body: JSON.stringify({ tema: ts.value }) }); });
+        r.append(ts);
         const tb = el("button", "forget", m.tier === "local" ? "Permitir Claude" : "Solo local"); tb.type = "button";
         tb.addEventListener("click", async () => {
           tb.disabled = true;
@@ -2971,11 +2986,16 @@
   async function loadProposals() {
     try {
       const r = await api("api/proposals"); const list = await r.json();
+      const names = {};
+      if (list.some((p) => p.owner && p.owner !== "sergio"))
+        for (const g of await (await api("api/guests")).json()) names["g" + g.id] = g.name;
       fill("proposals", list.map((p) => {
-        const rw = row({ title: p.text, detail: (p.source === "diary" ? "Del diario" : "Del chat") });
+        const guestOf = p.owner && p.owner !== "sergio" ? (names[p.owner] || "un invitado") : null;
+        const rw = row({ title: p.text, detail: guestOf ? "De " + guestOf + " · irá a su perfil, solo local"
+                                                    : (p.source === "diary" ? "Del diario" : "Del chat") });
         rw.querySelector(".title").style.whiteSpace = "normal";
         const act = (path, body) => async () => { await api("api/proposals/" + p.id + path, { method: "POST", body: JSON.stringify(body || {}) }); loadProposals(); loadMemories(); };
-        const a = el("button", "keep", p.source === "diary" ? "Guardar (solo local)" : "Guardar"); a.type = "button";
+        const a = el("button", "keep", guestOf ? "Guardar en su perfil" : p.source === "diary" ? "Guardar (solo local)" : "Guardar"); a.type = "button";
         a.addEventListener("click", act("/approve", {}));
         const d = el("button", "drop", "Descartar"); d.type = "button";
         d.addEventListener("click", act("/reject"));
@@ -3140,6 +3160,50 @@
       fill("guests", list.map((g) => {
         const r = row({ title: g.name, detail: g.is_self ? "Clave de chat tuya: solo chat, con tus recuerdos"
                                                          : money.format(g.spent_usd) + " de " + money.format(g.monthly_cap_usd) + " este mes" });
+        if (!g.is_self) {                                // 0.63.0: what Ashur may tell this guest of you, and what it knows of them
+          const chips = el("div", "tema-chips");
+          chips.append(el("span", "detail", "Puede contarle de ti:"));
+          for (const [t, label] of [["trabajo", "Trabajo y proyectos"], ["gustos", "Gustos y aficiones"], ["ashur", "Ashur mismo"]]) {
+            const c = el("button", null, label); c.type = "button";
+            c.setAttribute("aria-pressed", String((g.temas || []).includes(t)));
+            c.addEventListener("click", async () => {
+              const on = c.getAttribute("aria-pressed") !== "true";
+              const temas = new Set(g.temas || []); if (on) temas.add(t); else temas.delete(t);
+              c.disabled = true;
+              const ok = (await api("api/guests/" + g.id + "/temas", { method: "PUT", body: JSON.stringify({ temas: [...temas] }) })).ok;
+              c.disabled = false;
+              if (ok) { g.temas = [...temas]; c.setAttribute("aria-pressed", String(on)); }
+            });
+            chips.append(c);
+          }
+          const pb = el("button", "forget", "Perfil (" + (g.perfil || 0) + ")"); pb.type = "button";
+          const box = el("div", "perfil"); box.hidden = true;
+          pb.addEventListener("click", async () => {
+            box.hidden = !box.hidden;
+            if (box.hidden) return;
+            box.replaceChildren(el("div", "detail", "Lo que Ashur recuerda de " + g.name + ". Solo tú lo ves."));
+            const items = await (await api("api/guests/" + g.id + "/perfil")).json();
+            if (!items.length) box.append(el("div", "detail", "Todavía nada."));
+            for (const m of items) {
+              const it = el("div", "pf"), tx = el("span", null, m.text + (m.tier === "local" ? " · solo local" : ""));
+              const ed = el("button", "forget", "Corregir"); ed.type = "button";
+              ed.addEventListener("click", () => {
+                const ta = el("textarea"); ta.value = m.text; ta.maxLength = 300; ta.rows = 2; ta.style.width = "100%";
+                const ok = el("button", "forget", "Guardar"); ok.type = "button";
+                ok.addEventListener("click", async () => {
+                  const t = ta.value.trim(); if (!t) return;
+                  ok.disabled = true; await api("api/memory/" + m.id, { method: "PUT", body: JSON.stringify({ text: t }) });
+                  pb.click(); pb.click();
+                });
+                tx.replaceChildren(ta); ed.replaceWith(ok); ta.focus();
+              });
+              const del = el("button", "forget", "Olvidar"); del.type = "button";
+              del.addEventListener("click", async () => { del.disabled = true; await api("api/memory/" + m.id, { method: "DELETE" }); it.remove(); });
+              it.append(tx, ed, del); box.append(it);
+            }
+          });
+          r.append(chips, pb, box);
+        }
         const b = el("button", "forget", "Revocar"); b.type = "button";
         b.setAttribute("aria-label", "Revocar el acceso de " + g.name);
         b.addEventListener("click", async () => {

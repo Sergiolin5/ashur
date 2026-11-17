@@ -2557,8 +2557,27 @@ def create_app(
     def guests_list():
         start = month_start(clock())
         return [{**g, "is_self": bool(g["is_self"]),
-                 "spent_usd": None if g["is_self"] else round(db.spent_since(start, f"g{g['id']}"), 4)}
+                 "spent_usd": None if g["is_self"] else round(db.spent_since(start, f"g{g['id']}"), 4),
+                 "temas": db.guest_temas(g["id"]), "perfil": len(db.memories_of(f"g{g['id']}"))}
                 for g in db.guests()]
+
+    class TemasIn(BaseModel):
+        temas: list[str] = Field(max_length=3)
+
+    @app.put("/api/guests/{gid}/temas", dependencies=[Depends(require_admin)])
+    def guest_temas_put(gid: int, body: TemasIn):
+        if any(t not in conv.TEMAS_COMPARTIBLES for t in body.temas):
+            raise HTTPException(422, "Temas posibles: trabajo, gustos, ashur.")
+        if not db.set_guest_temas(gid, sorted(set(body.temas))):
+            raise HTTPException(404, "No existe ese invitado.")
+        db.log(clock(), None, "guest_temas", {"guest": gid, "temas": sorted(set(body.temas))})
+        return {"ok": True}
+
+    @app.get("/api/guests/{gid}/perfil", dependencies=[Depends(require_admin)])
+    def guest_perfil(gid: int):
+        if not db.guest_get(gid):
+            raise HTTPException(404, "No existe ese invitado.")
+        return db.memories_of(f"g{gid}")
 
     @app.post("/api/guests", dependencies=[Depends(require_admin)])
     def guest_create(body: GuestIn):

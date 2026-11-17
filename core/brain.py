@@ -327,6 +327,22 @@ class Brain:
         (self.versions_dir / f"{vid}.md").write_text(old, encoding="utf-8")
         self.persona_path.write_text(text.strip() + "\n", encoding="utf-8")
 
+    def add_persona_line(self, section: str, text: str, source: str) -> None:
+        """0.63.0: an approved lesson or correction, under «## <section>» (created at the end if missing), with its
+        source line; saved as a new version like any other edit."""
+        lines = self.persona_file().rstrip("\n").splitlines()
+        entry = [f"- {text.strip()}", f"> fuente: {source}"]
+        start = next((i for i, ln in enumerate(lines) if HEADING.match(ln)
+                      and ln.lstrip("#").strip().lower() == section.lower()), None)
+        if start is None:
+            lines += ["", f"## {section}"] + entry
+        else:
+            end = next((i for i in range(start + 1, len(lines)) if HEADING.match(lines[i])), len(lines))
+            while end > start + 1 and not lines[end - 1].strip():
+                end -= 1
+            lines[end:end] = entry
+        self.save_persona("\n".join(lines))
+
     def persona_versions(self) -> list[dict]:
         """Earlier texts, newest first; the id is when each one was replaced (Bogotá)."""
         if not self.versions_dir.exists():

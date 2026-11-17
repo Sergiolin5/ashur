@@ -290,3 +290,60 @@ def test_same_text_not_proposed_again(tmp_path):
         th.join(5)
         c.clock.now += 10
     assert [r["action"] for r in db.claude_requests()] == ["persona_cambio"]
+
+
+# --- Task 5: lessons and corrections into the persona -------------------------------------------------
+def pending(c, action):
+    return [r for r in c.get("/api/claude-requests", headers=A).json() if r["action"] == action]
+
+
+def test_approving_trato_writes_line_and_source_and_version(tmp_path):
+    c = local_app(tmp_path)
+    brain = c.app.state.brain
+    brain.save_persona("# Ashur\nSoy sereno.\n## Trato\n- Saluda por el nombre.")
+    before = len(brain.persona_versions())
+    brain._propose_persona("persona_trato", "Pregunta antes de bromear.", {"id": 1, "name": "Ana"}, 3)
+    rid = pending(c, "persona_trato")[0]["id"]
+    assert pending(c, "persona_trato")[0]["label"].startswith("enseñarle a Ashur")
+    assert c.post(f"/api/claude-requests/{rid}/approve", headers=A).json()["status"] == "approved"
+    text = brain.persona_file()
+    trato = text.split("## Trato", 1)[1]
+    assert "- Pregunta antes de bromear." in trato and "> fuente: Ana, conversación 3" in trato
+    assert "- Saluda por el nombre." in trato and len(brain.persona_versions()) == before + 1
+    assert "Pregunta antes de bromear" in brain.persona_section("Trato")
+
+
+def test_approving_cambio_creates_its_section(tmp_path):
+    c = local_app(tmp_path)
+    brain = c.app.state.brain
+    brain.save_persona("# Ashur\nSoy sereno.")
+    brain._propose_persona("persona_cambio", "Ashur es muy formal.", {"id": 1, "name": "Ana"}, 4)
+    rid = pending(c, "persona_cambio")[0]["id"]
+    c.post(f"/api/claude-requests/{rid}/approve", headers=A)
+    assert "## Correcciones\n- Ashur es muy formal.\n> fuente: Ana, conversación 4" in brain.persona_file()
+
+
+def test_rejecting_changes_nothing(tmp_path):
+    c = local_app(tmp_path)
+    brain = c.app.state.brain
+    brain.save_persona("# Ashur\nSoy sereno.")
+    before = brain.persona_file()
+    brain._propose_persona("persona_trato", "Pregunta antes de bromear.", {"id": 1, "name": "Ana"}, 3)
+    c.post(f"/api/claude-requests/{pending(c, 'persona_trato')[0]['id']}/reject", headers=A)
+    assert brain.persona_file() == before
+
+
+def test_double_approve_applies_once(tmp_path):
+    c = local_app(tmp_path)
+    brain = c.app.state.brain
+    brain.save_persona("# Ashur")
+    brain._propose_persona("persona_trato", "Pregunta antes de bromear.", {"id": 1, "name": "Ana"}, 3)
+    rid = pending(c, "persona_trato")[0]["id"]
+    c.post(f"/api/claude-requests/{rid}/approve", headers=A)
+    assert c.post(f"/api/claude-requests/{rid}/approve", headers=A).status_code == 404
+    assert brain.persona_file().count("Pregunta antes de bromear.") == 1
+
+
+def test_claude_cannot_ask_for_persona_changes():
+    from core.mcp import OWN_TOOL
+    assert "persona_trato" in OWN_TOOL and "persona_cambio" in OWN_TOOL

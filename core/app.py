@@ -4549,6 +4549,13 @@ def create_app(
                 if not isinstance(lid, int) or not db.lote_set(lid, expect="pending_approval", status="queued"):
                     return "not_done", "El lote ya no espera aprobación."
                 return "approved", f"Lote #{lid} en cola."
+            if action in ("persona_trato", "persona_cambio"):    # 0.63.0: what a guest taught, now part of Ashur
+                a = req["args"]
+                day = dt.datetime.fromtimestamp(req["ts"], BOGOTA).strftime("%Y-%m-%d")
+                brain.add_persona_line("Trato" if action == "persona_trato" else "Correcciones", str(a.get("texto", "")),
+                                       f"{a.get('invitado', 'invitado')}, conversación {a.get('conv', '?')}, {day}")
+                db.log(clock(), None, "persona_aplicada", {"accion": action})
+                return "approved", "Ashur lo incorporó a su persona."
             if action == "aprender_archivo":                 # 0.62.0: the old endless thread, learned once
                 cid = req["args"].get("conversacion")
                 cv = db.conv_get(cid) if isinstance(cid, int) else None

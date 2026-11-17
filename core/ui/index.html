@@ -3209,6 +3209,10 @@
           twice(send, "Toca otra vez para enviar", () => moveEncargo(e.id, "release", [send, keep]));
           keep.onclick = () => moveEncargo(e.id, "keep", [send, keep]);
           a.append(send, keep);
+        } else if (e.status === "failed") {
+          const again = el("button", null, "Reintentar"); again.type = "button";
+          again.onclick = () => retryJob("encargos", e.id, again);
+          a.append(again);
         }
         if (a.childElementCount) m.append(a);
         r.append(m); return r;
@@ -3359,6 +3363,11 @@
           a.append(send);
           if (L.status === "done") { const keep = el("button", null, "No enviar"); keep.type = "button"; keep.onclick = () => moveLote(L.id, "keep", [send, keep]); a.append(keep); }
         }
+        if (L.status === "failed" || (L.failed && ["done", "kept", "released"].includes(L.status))) {
+          const again = el("button", null, L.status === "failed" ? "Reintentar" : "Reintentar " + L.failed + " fallidos"); again.type = "button";
+          again.onclick = () => retryJob("lotes", L.id, again);
+          a.append(again);
+        }
         if (a.childElementCount) m.append(a);
         r.append(m); return r;
       }));
@@ -3373,6 +3382,21 @@
       note.textContent = r.ok ? "Lote #" + id + ": " + ENC_DONE_TEXT[what] + "." : await detailOf(r, "No pude cambiar el lote.");
     } catch (e) { note.textContent = "No pude cambiar el lote."; }
     loadLotes();
+  }
+  // A retry is a new encargo or lote waiting in Pedidos: nothing runs until it is approved there.
+  async function retryJob(kind, id, button) {
+    button.disabled = true;
+    const note = $("enc-status");
+    note.hidden = false;
+    try {
+      const r = await api("api/" + kind + "/" + id + "/retry", { method: "POST" });
+      if (r.ok) {
+        const d = await r.json(), what = kind === "lotes" ? "Lote #" + d.lote + " (" + nf.format(d.documentos) + " documentos)" : "Encargo #" + d.encargo;
+        note.textContent = what + " creado: apruébalo en Pedidos para que corra.";
+        loadInbox();
+      } else { note.textContent = await detailOf(r, "No pude crear el reintento."); button.disabled = false; }
+    } catch (e) { note.textContent = "No pude crear el reintento."; button.disabled = false; }
+    loadEncargos(); loadLotes();
   }
   const ENC_DONE_TEXT = { cancel: "cancelado", release: "enviado a Claude", keep: "se queda solo en el panel" };
   async function moveEncargo(id, what, buttons) {

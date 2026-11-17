@@ -1776,11 +1776,13 @@ class DB:
                                   "ORDER BY (status = 'queued'), id LIMIT 1").fetchone()
         return self._lote_row(r) if r else None
 
-    def lote_pending(self, pase: str, redo: Optional[int] = None, mine_only: bool = False) -> list[tuple]:
+    def lote_pending(self, pase: str, redo: Optional[int] = None, mine_only: bool = False,
+                     also_done: tuple = ()) -> list[tuple]:
         """(node_id, path, chunks, first_rowid) of every indexed document with no signal for this pass yet, in order.
         redo (a lote that does documents again): also those whose signal came from another lote, so after a restart
-        it goes on with what it has not redone itself. mine_only: only documents the «tipo» pass says Sergio wrote.
-        Own read-only connection: it reads all of docs, which must never hold the shared lock."""
+        it goes on with what it has not redone itself. also_done: with redo, lotes whose signals count as redone too
+        (a retry of a «rehacer» lote takes only what that lote failed). mine_only: only documents the «tipo» pass
+        says Sergio wrote. Own read-only connection: it reads all of docs, which must never hold the shared lock."""
         mine = ("JOIN doc_signals m ON m.node_id = d.node_id AND m.path = d.path AND m.pase = 'tipo' "
                 "AND json_extract(m.value, '$.autor') = 'sergio' " if mine_only else "")
         c = sqlite3.connect(self.path, timeout=30)
@@ -1788,8 +1790,9 @@ class DB:
             return c.execute(
                 "SELECT d.node_id, d.path, d.chunks, d.first_rowid FROM docs d " + mine + "LEFT JOIN doc_signals s "
                 "ON s.node_id = d.node_id AND s.path = d.path AND s.pase = ? "
-                "WHERE s.path IS NULL OR (? IS NOT NULL AND s.lote != ?) ORDER BY d.node_id, d.path",
-                (pase, redo, redo)).fetchall()
+                "WHERE s.path IS NULL OR (? IS NOT NULL AND s.lote NOT IN (" + ", ".join("?" * (1 + len(also_done))) + ")) "
+                "ORDER BY d.node_id, d.path",
+                (pase, redo, redo, *also_done)).fetchall()
         finally:
             c.close()
 

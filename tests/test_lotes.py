@@ -370,3 +370,70 @@ def test_pass_c_reads_only_what_the_first_pass_called_his(tmp_path, fast_local):
     assert "- proyecto (2; mac-m1: /Users/s/Documents/Diario (2))" in seen
     assert "- tecnología (2;" in seen and "- informal y directo (2)" in seen
     assert ask(c, pase="voz")[1] is True                            # nothing of his left to read
+
+
+# --- retry (0.61.1): a failed lote or its failed documents, back through Pedidos -------------------------------
+def test_retry_takes_only_the_failed_documents_and_waits_for_approval(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    ask(c)
+    bad = {"on": True}
+    node = FakeLLM(t, lambda p, n: (Exception("boom") if bad["on"] and "b.txt" in json.dumps(p) else answer(p, n)))
+    try:
+        approve(c, t, 1)
+        run(c)
+        assert c.db.lote_get(1)["failed"] == 1
+        assert t.post("/api/lotes/9/retry", headers=A).status_code == 404
+        r = t.post("/api/lotes/1/retry", headers=A)
+        assert r.status_code == 200 and r.json()["documentos"] == 1 and r.json()["lote"] == 2
+        assert t.post("/api/lotes/1/retry", headers=A).status_code == 409          # one retry at a time
+        assert c.db.lote_get(2)["status"] == "pending_approval" and run(c) == 0     # nothing before approval
+        bad["on"] = False
+        approve(c, t, 2)
+        run(c)
+    finally:
+        node.close()
+    L = c.db.lote_get(2)
+    assert (L["status"], L["done"], L["failed"]) == ("done", 1, 0)
+    assert sum("b.txt" in json.dumps(p) for p in node.payloads) == 3 + 1     # three failed tries, then one
+    assert sum("a.txt" in json.dumps(p) for p in node.payloads) == 1         # what worked is not redone
+    assert t.post("/api/lotes/2/retry", headers=A).status_code == 409        # nothing failed in it
+
+
+def test_retry_of_a_redo_lote_does_not_redo_what_it_already_redid(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    ask(c)
+    bad = {"on": False}
+    node = FakeLLM(t, lambda p, n: (Exception("boom") if bad["on"] and "b.txt" in json.dumps(p) else answer(p, n)))
+    try:
+        approve(c, t, 1)
+        run(c)
+        bad["on"] = True
+        ask(c, rehacer=True)
+        approve(c, t, 2)
+        run(c)
+        assert c.db.lote_get(2)["failed"] == 1
+        r = t.post("/api/lotes/2/retry", headers=A).json()
+        assert r["documentos"] == 1 and c.db.lote_get(3)["scope"]["sigue"] == [2]
+        bad["on"] = False
+        approve(c, t, 3)
+        c.step()
+        c.app.state.lote_forget()                                                    # restart: still only b.txt
+        run(c)
+    finally:
+        node.close()
+    assert sum("a.txt" in json.dumps(p) for p in node.payloads) == 2               # first pass + redo, never a third
+    assert (c.db.lote_get(3)["status"], c.db.lote_get(3)["done"]) == ("done", 1)
+
+
+def test_retry_a_failed_encargo_is_a_new_one_in_pedidos(tmp_path, fast_local):
+    c, t = setup(tmp_path)
+    e1 = c.db.encargo_add(c.clock(), "resumir", {}, False, "x", [{"node_id": "mac-m1", "path": "/Users/s/Downloads/manual.txt",
+                                                                 "name": "manual.txt", "chunks": 1}])
+    assert t.post(f"/api/encargos/{e1}/retry", headers=A).status_code == 409     # not failed
+    c.db.encargo_set(e1, status="failed", error="boom")
+    r = t.post(f"/api/encargos/{e1}/retry", headers=A)
+    assert r.status_code == 200
+    new = c.db.encargo_get(r.json()["encargo"], light=True)
+    assert new["status"] == "pending_approval" and new["op"] == "resumir" and new["docs"][0]["name"] == "manual.txt"
+    assert [q for q in c.db.claude_requests(50) if q["args"] == {"encargo": new["id"]}][0]["status"] == "pending"
+    assert t.post(f"/api/encargos/{e1}/retry", headers=A).status_code == 409     # one retry at a time

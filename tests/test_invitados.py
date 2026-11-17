@@ -234,3 +234,59 @@ def test_guest_local_tier_profile_stays_off_claude(tmp_path):
     c.app.state.db.add_memory(1.0, "Ana está en tratamiento", tier="local", owner=f"g{ana}")
     c.post("/api/chat", headers=GA, json={"message": "hola"})
     assert "tratamiento" not in fake.calls[-1]["system"]
+
+
+# --- Task 4: learning from a guest's conversation ----------------------------------------------------
+def test_parse_guest_extraction():
+    out = conv.parse_guest_extraction(
+        "TITULO: Arquitectura\nRESUMEN: Ana habló de su carrera.\nPERFIL: estudia arquitectura\n"
+        "SENSIBLE: está en tratamiento psicológico\nPERFIL: tiene una cita médica el viernes\n"
+        "TRATO: a la gente nueva le gusta que le pregunten antes de bromear\nTRATO: con Ana hay que ir despacio\n"
+        "TRATO: conviene confirmar lo que entendiste\nTRATO: saluda por el nombre\nTRATO: una cuarta regla de trato\n"
+        "CAMBIO: Ashur es demasiado formal\nCAMBIO: Ashur repite mucho\nCAMBIO: Ashur habla muy largo\n"
+        "PERFIL: clave: 1234", "Ana")
+    assert out["perfil"] == ["estudia arquitectura"]
+    assert out["sensibles"] == ["está en tratamiento psicológico", "tiene una cita médica el viernes"]
+    assert out["trato"] == ["a la gente nueva le gusta que le pregunten antes de bromear",
+                            "conviene confirmar lo que entendiste"]
+    assert out["cambio"] == ["Ashur es demasiado formal", "Ashur repite mucho"]
+    assert out["titulo"] == "Arquitectura" and out["resumen"] == "Ana habló de su carrera."
+
+
+def test_guest_extraction_routes_each_line(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    gid, G = guest(c, "Ana")
+    cid = db.conv_open(f"g{gid}", c.clock())
+    db.add_message(c.clock(), "app", "user", "estudio arquitectura y estoy en terapia", f"g{gid}", cid)
+    db.add_message(c.clock(), "app", "assistant", "Sergio trabaja en Beazley.", f"g{gid}", cid)
+    db.conv_close(cid, c.clock())
+    th, seen = node(c, answer=lambda p: {"text": "TITULO: Estudios\nPERFIL: estudia arquitectura\n"
+                                                 "SENSIBLE: va a terapia\nTRATO: pregunta antes de bromear\n"
+                                                 "CAMBIO: Ashur es muy formal"})
+    assert c.app.state.conversations_due() == 1
+    th.join(5)
+    content = seen[0]["messages"][0]["content"]
+    assert "arquitectura" in content and "Beazley" not in content            # only the guest's own lines
+    assert seen[0]["system"] == conv.EXTRACTOR_INVITADO.format(name="Ana")
+    assert db.memories() == []
+    assert [m["text"] for m in db.memories_of(f"g{gid}")] == ["estudia arquitectura"]
+    assert [(p["text"], p["owner"]) for p in db.proposals()] == [("va a terapia", f"g{gid}")]
+    reqs = {r["action"]: r["args"] for r in db.claude_requests()}
+    assert reqs["persona_trato"]["texto"] == "pregunta antes de bromear" and reqs["persona_trato"]["invitado"] == "Ana"
+    assert reqs["persona_cambio"]["texto"] == "Ashur es muy formal"
+
+
+def test_same_text_not_proposed_again(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    gid, _ = guest(c, "Ana")
+    for _ in range(2):
+        cid = db.conv_open(f"g{gid}", c.clock())
+        db.add_message(c.clock(), "app", "user", "eres muy formal", f"g{gid}", cid)
+        db.conv_close(cid, c.clock())
+        th, _ = node(c, answer=lambda p: {"text": "CAMBIO: Ashur es muy formal"})
+        c.app.state.conversations_due()
+        th.join(5)
+        c.clock.now += 10
+    assert [r["action"] for r in db.claude_requests()] == ["persona_cambio"]

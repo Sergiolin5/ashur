@@ -734,19 +734,45 @@ class Brain:
     def learn_lines(self, text: str, source: str) -> dict:
         """Save what a local model extracted: normal lines straight to memory, sensitive ones to the inbox."""
         normal, sensitive, title = conv.parse_extraction(text)
-        known = {m["text"].strip().lower() for m in self.db.memories()} | self.db.proposal_texts()
+        return {**self._save_learned(normal, sensitive, source, "sergio"), "titulo": title}
+
+    def _save_learned(self, normal: list, sensitive: list, source: str, owner: str) -> dict:
+        mine = self.db.memories() if owner == "sergio" else self.db.memories_of(owner)
+        known = {m["text"].strip().lower() for m in mine} | self.db.proposal_texts()
         n = s = 0
         for ln in normal:
             if ln.lower() not in known:
-                self.db.add_memory(self.clock(), ln, source=source)
+                self.db.add_memory(self.clock(), ln, source=source, owner=owner)
                 known.add(ln.lower())
                 n += 1
         for ln in sensitive:
             if ln.lower() not in known:
-                self.db.proposal_add(self.clock(), ln, source)
+                self.db.proposal_add(self.clock(), ln, source, owner=owner)
                 known.add(ln.lower())
                 s += 1
-        return {"normales": n, "sensibles": s, "titulo": title}
+        return {"normales": n, "sensibles": s}
+
+    def _propose_persona(self, action: str, text: str, guest: dict, cid: int) -> bool:
+        """A lesson or correction from a guest, as a request Sergio approves. The same text is never proposed twice."""
+        for r in self.db.claude_requests(limit=1000):
+            if r["action"] == action and str(r["args"].get("texto", "")).strip().lower() == text.strip().lower():
+                return False
+        self.db.claude_request_add(self.clock(), action, {"texto": text, "invitado": guest["name"], "conv": cid},
+                                   f"Lo aprendió en una conversación con {guest['name']}.")
+        self.db.log(self.clock(), None, "persona_propuesta", {"accion": action})
+        return True
+
+    def _learn_guest_piece(self, piece: str, cid: int, owner: str) -> dict:
+        g = self.db.guest_get(int(owner[1:])) or {"id": int(owner[1:]), "name": "invitado"}
+        text, _device = self.local(conv.EXTRACTOR_INVITADO.format(name=g["name"]), [{"role": "user", "content": piece}])
+        got = conv.parse_guest_extraction(text, g["name"])
+        saved = self._save_learned(got["perfil"], got["sensibles"], f"conv:{cid}", owner)
+        trato = sum(self._propose_persona("persona_trato", t, g, cid) for t in got["trato"])
+        cambio = sum(self._propose_persona("persona_cambio", t, g, cid) for t in got["cambio"])
+        self.db.log(self.clock(), None, "guest_memories_extracted",
+                    {"conv": cid, "perfil": saved["normales"], "sensibles": saved["sensibles"], "trato": trato, "cambio": cambio})
+        return {"normales": saved["normales"], "sensibles": saved["sensibles"], "titulo": got["titulo"],
+                "resumen": got["resumen"]}
 
     def extract_conversation(self, cid: int) -> dict:
         """0.62.0: what a closed conversation of Sergio's leaves in memory, with a LOCAL model only. Raises
@@ -761,8 +787,11 @@ class Brain:
             self.db.conv_set(cid, extracted=self.clock())
             return {"normales": 0, "sensibles": 0, "terminado": True}
         piece, last, n = conv.first_chunk(rest)          # one piece per pass: the sweep never waits long
-        text, _device = self.local(conv.EXTRACTOR, [{"role": "user", "content": piece}])
-        got = self.learn_lines(text, f"conv:{cid}")
+        if cv["user"].startswith("g"):                   # 0.63.0: a guest's conversation, into that guest's profile
+            got = self._learn_guest_piece(piece, cid, cv["user"])
+        else:
+            text, _device = self.local(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+            got = self.learn_lines(text, f"conv:{cid}")
         self.db.set_setting(f"conv_cursor:{cid}", str(last))
         done = n == len(rest)
         fields = {"title": cv["title"] or got["titulo"]}

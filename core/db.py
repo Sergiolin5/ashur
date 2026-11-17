@@ -2294,6 +2294,21 @@ class DB:
             self.conn.commit()
         return cur.rowcount > 0
 
+    def guest_get(self, gid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT id, name, revoked FROM guests WHERE id = ?", (gid,)).fetchone()
+        return dict(r) if r else None
+
+    def conv_due(self, limit: int = 50) -> list[dict]:
+        """Closed conversations (anyone's, not archived) with something not learned yet: new, or reopened since."""
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT {self.CONV_COLS} FROM conversations c WHERE closed IS NOT NULL AND archived = 0 "
+                "AND (extracted IS NULL OR last_msg > extracted) "
+                "AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id) ORDER BY last_msg LIMIT ?",
+                (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
     def guest_temas(self, gid: int) -> list:
         with self.lock:
             r = self.conn.execute("SELECT temas FROM guests WHERE id = ?", (gid,)).fetchone()

@@ -347,7 +347,7 @@ def test_extract_splits_normal_and_sensitive(tmp_path):
     assert "las cámaras son VTA+" in seen[0]["messages"][0]["content"]
 
 
-def test_guest_conversations_are_never_extracted(tmp_path):
+def test_guest_conversation_without_local_model_stays_pending(tmp_path):   # 0.63.0: guests are learned too
     c = local_app(tmp_path)
     db = c.app.state.db
     cid = db.conv_open("g1", c.clock())

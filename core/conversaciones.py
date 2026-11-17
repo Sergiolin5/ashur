@@ -147,3 +147,45 @@ def parse_temas(text: str, n: int) -> dict:
         if num.isdigit() and int(num) in out and tema in TEMAS:
             out[int(num)] = tema
     return out
+
+
+# --- 0.63.0: what a guest's conversation teaches -----------------------------------------------------------
+EXTRACTOR_INVITADO = """Lees lo que {name} le escribió a Ashur, el asistente de Sergio. Saca lo que vale la pena recordar,
+en español, con líneas cortas y literales. Solo lo que {name} afirma; no inventes ni completes.
+- "TITULO: " un título de 6 palabras o menos, y "RESUMEN: " una o dos frases de la conversación.
+- "PERFIL: " un hecho duradero sobre {name}: quién es, a qué se dedica, qué le gusta, cómo le gusta que le hablen.
+- "SENSIBLE: " lo de {name} sobre salud, dinero, su pareja u otras personas.
+- "TRATO: " una regla general de cómo tratar a la gente que se nota en la conversación, sin nombres ni datos de nadie.
+- "CAMBIO: " una corrección u opinión de {name} sobre Ashur mismo (cómo habla, algo que dijo mal).
+- Nada pasajero, ninguna clave ni código. Si no hay nada, después del título escribe solo: nada"""
+
+MAX_TRATO = MAX_CAMBIO = 2
+
+
+def parse_guest_extraction(text: str, name: str) -> dict:
+    """The lines of a guest's conversation, sorted. Health in PERFIL is sensitive; secrets are dropped; a TRATO rule
+    that names the guest is not general and is dropped; at most two TRATO and two CAMBIO."""
+    from core.brain import DIARY_SECRET, health_split, looks_like_secret
+    out = {"perfil": [], "sensibles": [], "trato": [], "cambio": [], "titulo": "", "resumen": ""}
+    for ln in (text or "").splitlines():
+        ln = ln.strip().lstrip("-•* ").strip()
+        head, _, body = ln.partition(":")
+        head, body = head.strip().upper(), body.strip()
+        if head in ("TITULO", "TÍTULO"):
+            out["titulo"] = body[:60]
+            continue
+        if head == "RESUMEN":
+            out["resumen"] = body[:400]
+            continue
+        if head not in ("PERFIL", "SENSIBLE", "TRATO", "CAMBIO") or not (8 <= len(body) <= 300):
+            continue
+        if looks_like_secret(body) or DIARY_SECRET.search(ln):
+            continue
+        if head in ("PERFIL", "SENSIBLE"):
+            out["sensibles" if head == "SENSIBLE" or health_split(body)[1] else "perfil"].append(body)
+        elif head == "TRATO":
+            if name.lower() not in body.lower() and len(out["trato"]) < MAX_TRATO:
+                out["trato"].append(body)
+        elif len(out["cambio"]) < MAX_CAMBIO:
+            out["cambio"].append(body)
+    return out

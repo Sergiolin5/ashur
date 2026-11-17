@@ -2473,16 +2473,15 @@ def create_app(
     app.state.conversations_close_idle = conversations_close_idle
 
     def conversations_due() -> int:
-        """Close idle conversations, then learn from one closed conversation of Sergio's per pass (local model)."""
+        """Close idle conversations, then learn one piece of one closed conversation per pass (local model).
+        0.63.0: guests' conversations too, each into that guest's profile."""
         conversations_close_idle()
-        for cv in db.conv_list("sergio", limit=200):
-            if cv["closed"] is not None and not cv["archived"] and cv["n"] and (
-                    cv["extracted"] is None or cv["last_msg"] > cv["extracted"]):     # new, or reopened since
-                try:
-                    brain.extract_conversation(cv["id"])
-                except LocalUnavailable:
-                    return 0
-                return 1
+        for cv in db.conv_due():
+            try:
+                brain.extract_conversation(cv["id"])
+            except LocalUnavailable:
+                return 0
+            return 1
         return 0
 
     app.state.conversations_due = conversations_due

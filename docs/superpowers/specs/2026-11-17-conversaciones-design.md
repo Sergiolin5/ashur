@@ -151,5 +151,5 @@ Diseño aprobado por Sergio el 2026-11-17.
 - Nombres exactos de endpoints y funciones.
 
 ## Entrega
-Rama `etapa1/conversaciones`, imagen `ashur-core:experimental`; Sergio prueba desde el teléfono y, con su visto
+Rama `experimento/etapa1-conversaciones`, imagen `ashur-core:experimental`; Sergio prueba desde el teléfono y, con su visto
 bueno, pasa a main como 0.62.0. Antes de probar: `ollama pull bge-m3` en el Ryzen 9 y en la Legion Go.

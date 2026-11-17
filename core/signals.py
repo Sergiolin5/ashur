@@ -20,6 +20,24 @@ def folder(path: str, depth: int = FOLDER_DEPTH) -> str:
     return "/".join(parts[:depth]) or "/"
 
 
+def map_folder(path: str, depth: int = FOLDER_DEPTH) -> str:
+    """The same folder as folder(), written as the file map writes it: the device's own separator, with a trailing one
+    («C:\\Users\\s\\Docs\\», «/Users/s/Docs/»), so its «Mía» / «Ruido» mark can be looked up."""
+    sep = "\\" if "\\" in path else "/"
+    parts = path.split(sep)[:-1][:depth]
+    return sep.join(parts) + sep if parts else sep
+
+
+def unreviewed(rows, mark_of, top: int = 10) -> dict:
+    """rows: (node_id, path, modified). mark_of(node, folder) → «mia», «ruido» or None. The folders with the most
+    documents that Sergio has not marked yet, for the panel (they stay out of the consolidation until he does)."""
+    folders = Counter((node, map_folder(path)) for node, path, _ in rows)
+    open_ = sorted(((k, n, f) for (n, f), k in folders.items() if not mark_of(n, f)), key=lambda x: (-x[0], x[1], x[2]))
+    return {"carpetas": len(folders), "revisadas": len(folders) - len(open_),
+            "docs_sin_revisar": sum(k for k, _, _ in open_),
+            "top": [{"equipo": n, "carpeta": f, "documentos": k} for k, n, f in open_[:top]]}
+
+
 def _n(n: int, one: str, many: str) -> str:
     return f"{n} {one if n == 1 else many}"
 

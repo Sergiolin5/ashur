@@ -272,7 +272,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.61.3", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.61.4", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2274,7 +2274,11 @@ def create_app(
     @app.get("/api/persona/signals", dependencies=[Depends(require_admin)])
     def persona_signals():
         """Counts over every indexed document, no model. Plain def: FastAPI runs it off the event loop."""
-        out = signals.profile(db.docs_profile())
+        rows = db.docs_profile()
+        out = signals.profile(rows)
+        marks: dict[str, dict] = {}
+        out["sin_revisar"] = signals.unreviewed(            # panel only: the text for Claude is out["text"], as before
+            rows, lambda n, f: db.mark_under(marks.setdefault(n, db.folder_marks(n)), f)[0])
         db.log(clock(), None, "persona_signals", {"documents": out["documents"]})
         return out
 

@@ -770,9 +770,14 @@ class Brain:
 
     def _propose_persona(self, action: str, text: str, guest: dict, cid: int) -> bool:
         """A lesson or correction from a guest, as a request Sergio approves. The same text is never proposed twice."""
-        for r in self.db.claude_requests(limit=1000):
+        seen = self.db.claude_requests(limit=1000)
+        for r in seen:
             if r["action"] == action and str(r["args"].get("texto", "")).strip().lower() == text.strip().lower():
                 return False
+        if sum(1 for r in seen if r["status"] == "pending" and r["action"] in ("persona_trato", "persona_cambio")) \
+                >= conv.MAX_PERSONA_PENDING:
+            self.db.log(self.clock(), None, "persona_propuesta_tope", {"accion": action})
+            return False
         self.db.claude_request_add(self.clock(), action, {"texto": text, "invitado": guest["name"], "conv": cid},
                                    f"Lo aprendió en una conversación con {guest['name']}.")
         self.db.log(self.clock(), None, "persona_propuesta", {"accion": action})
@@ -802,7 +807,10 @@ class Brain:
         if not rest:
             self.db.conv_set(cid, extracted=self.clock())
             return {"normales": 0, "sensibles": 0, "terminado": True}
-        piece, last, n = conv.first_chunk(rest)          # one piece per pass: the sweep never waits long
+        speaker = "Sergio"
+        if cv["user"].startswith("g"):
+            speaker = (self.db.guest_get(int(cv["user"][1:])) or {}).get("name") or "Invitado"
+        piece, last, n = conv.first_chunk(rest, speaker=speaker)   # one piece per pass: the sweep never waits long
         if cv["user"].startswith("g"):                   # 0.63.0: a guest's conversation, into that guest's profile
             got = self._learn_guest_piece(piece, cid, cv["user"])
         else:

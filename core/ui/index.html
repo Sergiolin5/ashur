@@ -3169,9 +3169,11 @@
             c.addEventListener("click", async () => {
               const on = c.getAttribute("aria-pressed") !== "true";
               const temas = new Set(g.temas || []); if (on) temas.add(t); else temas.delete(t);
-              c.disabled = true;
-              const ok = (await api("api/guests/" + g.id + "/temas", { method: "PUT", body: JSON.stringify({ temas: [...temas] }) })).ok;
-              c.disabled = false;
+              const all = chips.querySelectorAll("button");
+              all.forEach((x) => { x.disabled = true; });        // one save at a time: a second tap never sends a stale set
+              let ok = false;
+              try { ok = (await api("api/guests/" + g.id + "/temas", { method: "PUT", body: JSON.stringify({ temas: [...temas] }) })).ok; }
+              finally { all.forEach((x) => { x.disabled = false; }); }
               if (ok) { g.temas = [...temas]; c.setAttribute("aria-pressed", String(on)); }
             });
             chips.append(c);

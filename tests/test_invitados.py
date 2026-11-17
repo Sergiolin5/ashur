@@ -390,3 +390,66 @@ def test_guest_temas_and_profile_endpoints(tmp_path):
     assert c.get(f"/api/guests/{gid}/perfil", headers=G).status_code == 401           # only Sergio sees it
     assert c.put(f"/api/guests/{gid}/temas", headers=G, json={"temas": []}).status_code == 401
     assert c.get("/api/guests/999/perfil", headers=A).status_code == 404
+
+
+# --- Final review fixes ------------------------------------------------------------------------------------
+import sqlite3
+
+
+def test_guest_conversations_from_before_063_are_not_mined(tmp_path):
+    p = str(tmp_path / "old.db")
+    db = DB(p)
+    cid = db.conv_open("g1", 1.0)
+    db.add_message(1.0, "app", "user", "estoy en tratamiento", "g1", cid)
+    db.conv_close(cid, 2.0)
+    s = db.conv_open("sergio", 1.0)
+    db.add_message(1.0, "app", "user", "hola", "sergio", s)
+    db.conv_close(s, 2.0)
+    db.close()
+    c = sqlite3.connect(p)                                      # as a 0.62 database: no owner/tema/temas columns yet
+    c.execute("CREATE TABLE m2 AS SELECT id, created, kind, text, source, tier FROM memory")
+    c.execute("DROP TABLE memory")
+    c.execute("ALTER TABLE m2 RENAME TO memory")
+    c.commit()
+    c.close()
+    db = DB(p)
+    assert [cv["id"] for cv in db.conv_due()] == [s]           # Sergio's still learned; the guest's is not
+
+
+def test_guest_transcript_is_labelled_with_the_guest_name(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    gid, _ = guest(c, "Ana")
+    cid = db.conv_open(f"g{gid}", c.clock())
+    db.add_message(c.clock(), "app", "user", "soy arquitecta", f"g{gid}", cid)
+    db.conv_close(cid, c.clock())
+    th, seen = node(c, answer=lambda p: {"text": "nada"})
+    c.app.state.conversations_due()
+    th.join(5)
+    content = seen[0]["messages"][0]["content"]
+    assert content.startswith("Ana: soy arquitecta") and "Sergio" not in content
+
+
+def test_guest_proposals_do_not_fill_claudes_request_slots(tmp_path):
+    c = local_app(tmp_path)
+    db = c.app.state.db
+    brain = c.app.state.brain
+    for i in range(14):
+        brain._propose_persona("persona_trato", f"regla de trato número {i}", {"id": 1, "name": "Ana"}, i)
+    assert db.claude_requests_pending_count() == 0
+    assert len([r for r in db.claude_requests() if r["action"] == "persona_trato"]) == 10      # their own cap
+
+
+def test_health_in_trato_or_cambio_is_dropped_and_money_or_partner_in_profile_is_sensitive():
+    out = conv.parse_guest_extraction(
+        "CAMBIO: no me ofrezcas vino, tengo un diagnóstico de cirrosis\nTRATO: a quien toma medicamentos no le ofrezcas alcohol\n"
+        "CAMBIO: Ashur habla muy largo\nPERFIL: gana cinco millones al mes\nPERFIL: su novio se llama Juan\n"
+        "PERFIL: estudia arquitectura", "Beto")
+    assert out["cambio"] == ["Ashur habla muy largo"] and out["trato"] == []
+    assert out["perfil"] == ["estudia arquitectura"]
+    assert out["sensibles"] == ["gana cinco millones al mes", "su novio se llama Juan"]
+
+
+def test_trato_name_filter_is_by_whole_word():
+    out = conv.parse_guest_extraction("TRATO: confirma el plan de la semana antes de cerrar\nTRATO: con Ana ve despacio", "Ana")
+    assert out["trato"] == ["confirma el plan de la semana antes de cerrar"]

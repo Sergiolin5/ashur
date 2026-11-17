@@ -367,11 +367,13 @@ class DB:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN gpus TEXT")
         if "mode_reason" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN mode_reason TEXT")
+        stamp_guests = False
         mem = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory)")}
         if "tier" not in mem:                          # 'claude' = may travel to Claude; 'local' = local models only
             self.conn.execute("ALTER TABLE memory ADD COLUMN tier TEXT NOT NULL DEFAULT 'claude'")
         if "owner" not in mem:                         # 0.63.0: 'sergio' or a guest's profile, 'g<id>'
             self.conn.execute("ALTER TABLE memory ADD COLUMN owner TEXT NOT NULL DEFAULT 'sergio'")
+            stamp_guests = True                        # see below, once messages have conversation_id
         if "tema" not in mem:                          # 0.63.0: trabajo, gustos, ashur, privado; NULL = not yet classified
             self.conn.execute("ALTER TABLE memory ADD COLUMN tema TEXT")
         pcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory_proposals)")}
@@ -389,6 +391,15 @@ class DB:
                     (r["user"], r["a"], r["b"], r["b"], "Archivo · antes de 0.62")).lastrowid
                 self.conn.execute("UPDATE messages SET conversation_id = ? WHERE user = ?", (cid, r["user"]))
         self.conn.execute("CREATE INDEX IF NOT EXISTS messages_conv ON messages (conversation_id, id)")
+        if stamp_guests:
+            # 0.63.0: guests talked before 0.63 under «no puedes guardar recuerdos». That promise holds: what they
+            # said then is never learned; only what they write from now on is.
+            for r in self.conn.execute("SELECT c.id, COALESCE(c.closed, c.last_msg) AS t, "
+                                       "(SELECT MAX(id) FROM messages WHERE conversation_id = c.id) AS last "
+                                       "FROM conversations c WHERE c.user LIKE 'g%'").fetchall():
+                self.conn.execute("UPDATE conversations SET extracted = COALESCE(extracted, ?) WHERE id = ?", (r["t"], r["id"]))
+                self.conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                                  (f"conv_cursor:{r['id']}", str(r["last"] or 0)))
         gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
@@ -2417,7 +2428,9 @@ class DB:
 
     def claude_requests_pending_count(self) -> int:
         with self.lock:
-            return self.conn.execute("SELECT COUNT(*) FROM claude_requests WHERE status = 'pending'").fetchone()[0]
+            # 0.63.0: what guests teach has its own cap (core/brain.py) and never takes Claude's slots
+            return self.conn.execute("SELECT COUNT(*) FROM claude_requests WHERE status = 'pending' "
+                                     "AND action NOT IN ('persona_trato', 'persona_cambio')").fetchone()[0]
 
     def claude_request_get(self, rid: int) -> Optional[dict]:
         with self.lock:

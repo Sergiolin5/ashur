@@ -4,6 +4,7 @@ The vectors come from a node's Ollama (bge-m3); the similarity runs here, in pla
 memories of 1024 numbers each take a fraction of a second, so the core needs no numpy.
 """
 import math
+import re
 from array import array
 
 EMBED_MODEL = "bge-m3"
@@ -123,11 +124,12 @@ def chunks(messages: list, limit: int = EXTRACT_CHARS) -> list:
     return out
 
 
-def first_chunk(messages: list, limit: int = EXTRACT_CHARS) -> tuple:
-    """(the first transcript piece, id of its last message, how many messages it holds)."""
+def first_chunk(messages: list, limit: int = EXTRACT_CHARS, speaker: str = "Sergio") -> tuple:
+    """(the first transcript piece, id of its last message, how many messages it holds). speaker: who wrote the
+    user lines (a guest's name in a guest's conversation)."""
     lines, size, last = [], 0, None
     for m in messages:
-        line = ("Sergio: " if m["role"] == "user" else "Ashur: ") + m["content"][:limit]
+        line = (f"{speaker}: " if m["role"] == "user" else "Ashur: ") + m["content"][:limit]
         if lines and size + len(line) > limit:
             break
         lines.append(line)
@@ -170,6 +172,14 @@ en español, con líneas cortas y literales. Solo lo que {name} afirma; no inven
 - Nada pasajero, ninguna clave ni código. Si no hay nada, después del título escribe solo: nada"""
 
 MAX_TRATO = MAX_CAMBIO = 2
+MAX_PERSONA_PENDING = 10     # guests' lessons and corrections waiting in «Por aprobar», all guests together
+# money and partners: the inbox even when the model calls it PERFIL (health is caught by health_split)
+PRIVATE_LIFE = re.compile(r"\b(dinero|plata|sueldo|salario|gana|ganaba|millones|deuda|debe|pr[eé]stamo|cr[eé]dito|"
+                          r"novi[oa]|pareja|espos[oa]|marido|ex\s?novi[oa]|amante|divorci)", re.I)
+
+
+def _names_in(text: str, name: str) -> bool:
+    return any(re.search(r"\b" + re.escape(w) + r"\b", text, re.I) for w in re.split(r"\s+", name or "") if len(w) > 2)
 
 
 def parse_guest_extraction(text: str, name: str) -> dict:
@@ -192,9 +202,12 @@ def parse_guest_extraction(text: str, name: str) -> dict:
         if looks_like_secret(body) or DIARY_SECRET.search(ln):
             continue
         if head in ("PERFIL", "SENSIBLE"):
-            out["sensibles" if head == "SENSIBLE" or health_split(body)[1] else "perfil"].append(body)
+            private = head == "SENSIBLE" or health_split(body)[1] or PRIVATE_LIFE.search(body)
+            out["sensibles" if private else "perfil"].append(body)
+        elif health_split(body)[1]:                  # a lesson or correction about health would end up in the persona
+            continue
         elif head == "TRATO":
-            if name.lower() not in body.lower() and len(out["trato"]) < MAX_TRATO:
+            if not _names_in(body, name) and not _names_in(body, "Sergio") and len(out["trato"]) < MAX_TRATO:
                 out["trato"].append(body)
         elif len(out["cambio"]) < MAX_CAMBIO:
             out["cambio"].append(body)

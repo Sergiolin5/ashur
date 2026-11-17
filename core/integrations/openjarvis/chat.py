@@ -8,7 +8,7 @@ from typing import Callable
 
 from core.encargos import EncargoError
 
-from core.integrations.openjarvis import bridge, enabled, schedule, skills
+from core.integrations.openjarvis import bridge, enabled, schedule, skills, traces
 
 SCHEDULABLE = ("skills", "deep_research")
 
@@ -50,6 +50,11 @@ SCHEMAS = {
             "pregunta": {"type": "string"},
             "documentos": {"type": "boolean", "description": "true solo si Sergio pidió buscar en sus documentos."}},
             "required": ["pregunta"]}}),
+    "rutinas": ("traces", {
+        "name": "rutinas",
+        "description": "Rutinas que Ashur aprendió de lo que Sergio hace: secuencias de acciones que repite en una "
+                     "misma sesión (por ejemplo, aprobar pedidos y luego enviar resultados a Claude).",
+        "input_schema": {"type": "object", "properties": {}}}),
     "programar_trabajo": (SCHEDULABLE, {
         "name": "programar_trabajo",
         "description": "Programa una skill o una investigación para que Ashur la ponga en cola cada día a una hora "
@@ -106,6 +111,11 @@ def tools(db, clock: Callable[[], float]) -> dict:
         eid = bridge.queue_run(db, clock, kind, label, **params)
         return f"Encargo #{eid} en cola: {label}."
 
+    def rutinas(_args):
+        traces.sync_usage(db, clock)
+        found = traces.rutinas(clock)
+        return "\n".join(r["texto"] for r in found) or "Todavía no veo rutinas que se repitan."
+
     def programar(args):
         kind, label, params = spec(args, "skill" if args.get("tipo") == "skill" else "deep_research")
         row = schedule.add(db, kind, label, str(args.get("hora", "")), args.get("dias"), params)
@@ -142,7 +152,8 @@ def tools(db, clock: Callable[[], float]) -> dict:
 
     handlers = {"skills_catalogo": catalogo, "skill_correr": correr, "trabajo_resultado": resultado,
                 "skills_importar": importar, "investigar": investigar, "programar_trabajo": programar,
-                "trabajos_programados": programados, "desprogramar_trabajo": desprogramar}
+                "trabajos_programados": programados, "desprogramar_trabajo": desprogramar,
+                "rutinas": rutinas}
 
     def guarded(fn):
         def call(args):

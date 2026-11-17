@@ -37,7 +37,8 @@ def register_kind(kind: str, capability: str, factory: Callable[[dict], Callable
 
 
 class AgentRun:
-    def __init__(self, fn: Callable[[Ask], str], answer_timeout_s: float = ANSWER_TIMEOUT_S):
+    def __init__(self, fn: Callable[[Ask], str], answer_timeout_s: float = ANSWER_TIMEOUT_S, kind: str = ""):
+        self.kind, self.asks = kind, 0
         self.requests: queue.Queue = queue.Queue()
         self.answers: queue.Queue = queue.Queue()
         self.answer_timeout_s = answer_timeout_s
@@ -55,6 +56,7 @@ class AgentRun:
     def ask(self, system: str, messages: list, tools: Optional[list] = None) -> str:
         """Called from the agent's thread by AshurQueueEngine.generate. With tools, the answer is JSON
         {"text", "tool_calls"} (see local_complete)."""
+        self.asks += 1
         self.requests.put(("ask", {"system": system, "messages": messages, "tools": tools}))
         try:
             return self.answers.get(timeout=self.answer_timeout_s)
@@ -107,6 +109,8 @@ class OjAgent(Operation):
         if kind == "ask":
             return [self._unit(run_id, value)]
         RUNS.pop(run_id, None)
+        from core.integrations.openjarvis import traces
+        traces.record_run(run.kind, kind == "done", run.asks)          # local, no text
         if kind == "done":
             state["result"] = str(value or "")
             return []
@@ -117,7 +121,7 @@ class OjAgent(Operation):
         if kind not in KINDS or not enabled(KINDS[kind][0]):
             raise EncargoError("Esa capacidad de OpenJarvis está apagada.")
         run_id = params["run"]
-        run = AgentRun(KINDS[kind][1](params))
+        run = AgentRun(KINDS[kind][1](params), kind=kind)
         RUNS[run_id] = run
         state: dict = {}
         units = self._next(run_id, run, state, FIRST_ASK_TIMEOUT_S)

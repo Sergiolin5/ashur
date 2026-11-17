@@ -3763,7 +3763,9 @@ def create_app(
     # OpenJarvis (0.61.0): with any ASHUR_OJ_* flag on, its agents join as one more operation whose units are its model calls
     oj_tools = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)), db=db, clock=clock)
     app.state.openjarvis = oj_adapter.any_enabled()
-    app.state.openjarvis_due = lambda: oj_adapter.due(db, clock)
+    app.state.openjarvis_due = lambda: oj_adapter.due(                # a routine's own steps: the panel's own functions
+        db, clock, run_action=lambda accion: run_request({"action": accion, "args": {}}),
+        notify=lambda body: _push_all({"title": "Ashur", "body": body, "url": "/#chat", "tag": "rutina"}))
     if oj_tools:
         from core.integrations.openjarvis.chat import offered as oj_offered
         brain.extra_tools = lambda: oj_offered(oj_tools)          # each tool only while its capability flag is on

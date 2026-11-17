@@ -11,7 +11,8 @@ here imports openjarvis, so an Ashur without OpenJarvis behaves exactly as befor
 import os
 from pathlib import Path
 
-CAPABILITIES = ("skills", "skills_import", "deep_research", "digest", "traces", "gmail", "tasks", "calendar", "bench")
+CAPABILITIES = ("skills", "skills_import", "deep_research", "digest", "traces", "rutinas_auto", "gmail", "tasks",
+                "calendar", "bench")
 
 # The adapter owns OpenJarvis's config file: rewritten at every start, so a hand edit cannot turn telemetry back on.
 # PostHog analytics is on by default upstream (AnalyticsConfig.enabled = True) and has no environment switch.
@@ -77,7 +78,7 @@ def install(operations: dict, data_dir: str, db=None, clock=None) -> dict:
         return {}
     home = bootstrap(data_dir)
     from core.integrations.openjarvis.bridge import AGENT_OP, OjAgent
-    from core.integrations.openjarvis import chat, research, skills, traces
+    from core.integrations.openjarvis import chat, google, research, skills, traces
     operations.setdefault(AGENT_OP, OjAgent())
     if db is None:
         return {}
@@ -85,23 +86,45 @@ def install(operations: dict, data_dir: str, db=None, clock=None) -> dict:
     skills.configure(home, doc_text_from(db),
                      lambda: [m["text"] for m in db.memories() if m.get("tier", "claude") == "claude"])
     traces.configure(home)
+    google.configure(home)
     research.configure(lambda q: db.docs_search(Brain.file_words(q.lower()), limit=6, with_text=True, any_word=True))
     return chat.tools(db, clock)
 
 
-def due(db, clock) -> None:
-    """From Ashur's maintenance tick: the scheduled OpenJarvis runs whose time has come."""
+def due(db, clock, run_action=None, notify=None) -> None:
+    """From Ashur's maintenance tick: the scheduled OpenJarvis runs whose time has come, the traces of Sergio's last
+    sessions, and the routines whose usual hour has come (run_action(accion) -> (status, text); notify(text))."""
     if any_enabled():
         from core.integrations.openjarvis import schedule, traces
         schedule.due(db, clock)
         traces.sync_usage(db, clock)            # nothing when ASHUR_OJ_TRACES is off
+        if run_action and notify:
+            traces.due_routines(db, clock, run_action, notify)   # nothing unless ASHUR_OJ_RUTINAS_AUTO is on too
+
+
+GOOGLE_ACTIONS = {"oj_correo": "gmail", "oj_tarea": "tasks", "oj_evento": "calendar"}
 
 
 def approve_request(action: str, args: dict):
     """run_request's door for OpenJarvis's own approvals; None when the action is not one of them."""
-    if action != "oj_skill":
+    if action == "oj_skill":
+        if not enabled("skills_import"):
+            return "not_done", "Importar skills está apagado."
+        from core.integrations.openjarvis import skills
+        return skills.approve(str(args.get("skill", "")))
+    if action not in GOOGLE_ACTIONS:
         return None
-    if not enabled("skills_import"):
-        return "not_done", "Importar skills está apagado."
-    from core.integrations.openjarvis import skills
-    return skills.approve(str(args.get("skill", "")))
+    if not enabled(GOOGLE_ACTIONS[action]):
+        return "not_done", f"La capacidad «{GOOGLE_ACTIONS[action]}» está apagada."
+    from core.encargos import EncargoError
+    from core.integrations.openjarvis import google
+    a = {k: str(v) for k, v in (args or {}).items()}
+    try:
+        if action == "oj_correo":
+            return "approved", google.mail_send(a.get("para", ""), a.get("asunto", ""), a.get("cuerpo", ""))
+        if action == "oj_tarea":
+            return "approved", google.task_create(a.get("titulo", ""), a.get("notas", ""), a.get("vence", ""))
+        return "approved", google.event_create(a.get("titulo", ""), a.get("inicio", ""), a.get("fin", ""),
+                                               a.get("descripcion", ""))
+    except EncargoError as e:
+        return "not_done", str(e)

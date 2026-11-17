@@ -48,8 +48,10 @@ def test_usage_becomes_traces_once_and_routines_are_learned(oj, tmp_path):
     assert [s.input["tool"] for s in first.steps] == ["aprobar_pedido", "liberar_resultado"]
     assert first.query == "" and first.result == ""                 # no words of his, only which action
     found = oj.rutinas(clock)
-    assert found == [{"secuencia": ["aprobar_pedido", "liberar_resultado"], "veces": 3,
-                      "texto": "Sueles aprobar pedidos, luego enviar resultados a Claude (3 veces)"}]
+    band = found[0]["franja"]
+    assert found == [{"secuencia": ["aprobar_pedido", "liberar_resultado"], "veces": 3, "franja": band,
+                      "texto": f"Sueles aprobar pedidos, luego enviar resultados a Claude, entre las {band}:00 y las "
+                               f"{band + 2}:00 (3 veces)"}]
 
 
 def test_openjarvis_runs_leave_a_trace_without_text(oj, tmp_path, fast_local):
@@ -89,4 +91,68 @@ def test_chat_tells_the_routines(oj, tmp_path):
     clock.now = start + 3 * 86400
     c.post("/api/chat", headers=A, json={"message": "¿qué rutinas tengo?"})
     said = fake.calls[1]["messages"][-1]["content"][0]["content"]
-    assert said == "Sueles releer los documentos, luego repasar el inventario (3 veces)"
+    assert said.startswith("Sueles releer los documentos, luego repasar el inventario, entre las ")
+
+
+# ---- routines run on their own at their usual hour (Sergio's choice, 2026-11-17) ------------------------------------
+import datetime as dt  # noqa: E402
+
+from core.brain import BOGOTA  # noqa: E402
+
+
+def at(day, hour, minute=0):
+    return dt.datetime(2026, 11, day, hour, minute, tzinfo=BOGOTA).timestamp()
+
+
+def learned(c, seq=("releer_documentos", "aprobar_pedido")):
+    for day in (10, 11, 12):
+        for i, a in enumerate(seq):
+            uso(c.db, at(day, 8, 10 + i), a)
+
+
+def test_at_its_usual_hour_ashur_does_the_low_risk_steps_and_offers_the_rest(oj, tmp_path, monkeypatch):
+    monkeypatch.setenv("ASHUR_OJ_RUTINAS_AUTO", "1")
+    c = runner_app(tmp_path)
+    learned(c)
+    ran, said = [], []
+    run = lambda a: (ran.append(a), ("approved", "ok"))[1]          # noqa: E731
+    c.clock.now = at(13, 7, 0)
+    oj.sync_usage(c.db, c.clock)
+    assert oj.due_routines(c.db, c.clock, run, said.append) == []   # 7:00: before its band (8-10)
+    c.clock.now = at(13, 8, 30)
+    out = oj.due_routines(c.db, c.clock, run, said.append)
+    assert ran == ["releer_documentos"]                              # low risk: done on its own
+    assert said == ["Hice releer los documentos, como sueles a esta hora. ¿Quieres aprobar pedidos?"]
+    assert out[0]["ofrecidas"] == ["aprobar pedidos"]                # approving Claude's requests: only offered
+    c.clock.now = at(13, 9, 0)
+    assert oj.due_routines(c.db, c.clock, run, said.append) == [] and ran == ["releer_documentos"]   # once a day
+
+
+def test_a_step_already_done_today_is_skipped(oj, tmp_path, monkeypatch):
+    monkeypatch.setenv("ASHUR_OJ_RUTINAS_AUTO", "1")
+    c = runner_app(tmp_path)
+    learned(c)
+    uso(c.db, at(13, 8, 5), "releer_documentos")
+    c.clock.now = at(13, 8, 30)
+    oj.sync_usage(c.db, c.clock)
+    ran, said = [], []
+    oj.due_routines(c.db, c.clock, lambda a: (ran.append(a), ("approved", ""))[1], said.append)
+    assert ran == [] and said == ["¿Quieres aprobar pedidos?"]
+
+
+def test_without_its_flag_routines_never_run(oj, tmp_path):
+    c = runner_app(tmp_path)
+    learned(c)
+    c.clock.now = at(13, 8, 30)
+    oj.sync_usage(c.db, c.clock)
+    assert oj.due_routines(c.db, c.clock, lambda a: 1 / 0, lambda t: 1 / 0) == []
+
+
+def test_the_tick_runs_routines_through_the_panels_own_functions(oj, tmp_path, monkeypatch):
+    monkeypatch.setenv("ASHUR_OJ_RUTINAS_AUTO", "1")
+    c = runner_app(tmp_path)
+    learned(c, seq=("pausar_cola", "aprobar_pedido"))
+    c.clock.now = at(13, 8, 30)
+    c.app.state.openjarvis_due()
+    assert c.get("/api/overview", headers=A).json()["queue_paused"] is True
+    assert any(e["event"] == "oj_rutina" for e in c.db.log_rows(50))

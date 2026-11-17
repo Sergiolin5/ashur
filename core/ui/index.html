@@ -969,9 +969,12 @@
     <section>
       <h2>Señales de tus documentos</h2>
       <div class="group signin">
-        <p>Cuenta todos los documentos leídos por carpeta, tipo, hora y día. No usa ningún modelo ni lee su texto. Las carpetas de salud se ven aquí pero no entran en el texto para Claude.</p>
+        <p>Qué carpetas con documentos leídos te faltan por revisar en el mapa. Lo que no marcas «Mía» o «Ruido» se queda fuera de la mudanza. Cuenta sin modelo y sin leer el texto.</p>
         <button type="button" id="signals-run">Contar ahora</button>
-        <button type="button" id="signals-copy" class="link" style="text-align:center" hidden>Copiar para Claude</button>
+        <div id="signals-sum" class="note" hidden></div>
+        <div id="signals-top" class="group" hidden></div>
+        <button type="button" id="signals-raw" class="link" style="text-align:center" hidden>Ver el conteo completo</button>
+        <button type="button" id="signals-copy" class="link" style="text-align:center" hidden>Copiar conteo para Claude</button>
         <pre id="signals-out" class="note" hidden style="white-space:pre-wrap;font-size:12px;user-select:all"></pre>
         <div id="signals-health" class="note" hidden></div>
       </div>
@@ -3889,12 +3892,25 @@
       if (!r.ok) throw new Error(await detailOf(r, "HTTP " + r.status));
       const p = await r.json();
       signalsText = p.text;
-      out.textContent = p.text; out.hidden = false; $("signals-copy").hidden = false;
+      out.textContent = p.text; out.hidden = true; $("signals-raw").hidden = false; $("signals-copy").hidden = false;
+      const u = p.sin_revisar, sum = $("signals-sum"), top = $("signals-top");
+      sum.hidden = false;
+      sum.textContent = nf.format(u.revisadas) + " de " + nf.format(u.carpetas) + " carpetas revisadas" +
+        (u.top.length ? "; faltan " + nf.format(u.docs_sin_revisar) + " documentos. Las que más tienen:" : ". No te falta ninguna.");
+      top.hidden = !u.top.length;
+      top.replaceChildren(...u.top.map((x) => {                // each one opens that folder in the map, where Mía / Ruido are
+        const r = el("div", "row nrow"), m = el("div", "main"), go = el("button", null, "Abrir en el mapa");
+        m.append(el("div", "title wrap", x.carpeta), el("div", "detail", nm(x.equipo) + " · " + nf.format(x.documentos) + " documentos"));
+        go.type = "button";
+        go.onclick = async () => { showPage("map"); loadMoves(); await mapLoad(null, ""); mapLoad(x.equipo, x.carpeta); };
+        const a = el("div", "acts"); a.append(go); m.append(a); r.append(m); return r;
+      }));
       h.hidden = !p.health_folders.length;
       h.textContent = "Solo para ti (salud, no va a Claude): " + p.health_folders.map((f) => f[0] + ": " + f[1] + " (" + f[2] + ")").join(" · ");
     } catch (e) { out.textContent = "No pude contar las señales: " + e.message; out.hidden = false; }
     b.disabled = false; b.textContent = "Contar ahora";
   });
+  $("signals-raw").addEventListener("click", () => { const o = $("signals-out"); o.hidden = !o.hidden; $("signals-raw").textContent = o.hidden ? "Ver el conteo completo" : "Ocultar el conteo"; });
   $("signals-copy").addEventListener("click", async () => {
     const b = $("signals-copy");
     try { await navigator.clipboard.writeText(signalsText); b.textContent = "Copiado: pégalo en el chat"; } catch (e) { b.textContent = "No pude copiar"; showCopy(signalsText); }

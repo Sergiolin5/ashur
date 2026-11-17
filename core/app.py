@@ -34,6 +34,7 @@ from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES
                         LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
                         looks_like_secret, month_start)
 from core import casa as casa_mod, habits, lotes, signals
+from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
 from core.camaras import CamError, Go2rtc
@@ -3751,6 +3752,8 @@ def create_app(
     request_lock = threading.Lock()
 
     # --- encargos (0.46.0): text work Claude orders over the indexed documents, one unit at a time on local models ---
+    # OpenJarvis (0.61.0): with any ASHUR_OJ_* flag on, its agents join as one more operation whose units are its model calls
+    app.state.openjarvis = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)))
     ENCARGO_UNFINISHED = ("pending_approval", "queued", "running", "paused")
     ENCARGO_WITH_RESULT = ("done", "kept", "released", "failed")
     encargo_lock = threading.Lock()             # one step at a time: a unit is never sent twice by two callers
@@ -3818,7 +3821,8 @@ def create_app(
                 if queue_paused():
                     return "wait", None, None
             try:
-                answer, node = local_complete(unit["system"], [{"role": "user", "content": unit["text"]}], pin=pin)
+                messages = unit.get("messages") or [{"role": "user", "content": unit["text"]}]   # an agent's turn: its history
+                answer, node = local_complete(unit["system"], messages, pin=pin)
                 return "ok", answer, node
             except NoLocalDevice:
                 return "wait", None, None

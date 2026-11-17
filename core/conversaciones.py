@@ -124,3 +124,26 @@ def first_chunk(messages: list, limit: int = EXTRACT_CHARS) -> tuple:
         size += len(line) + 1
         last = m["id"]
     return "\n".join(lines), last, len(lines)
+
+
+# --- 0.63.0: topics of Sergio's memories, so a guest hears only what he allowed -----------------------------
+TEMAS = ("trabajo", "gustos", "ashur", "privado")
+TEMAS_COMPARTIBLES = ("trabajo", "gustos", "ashur")
+TEMA_BATCH = 32
+CLASIFICADOR = """Clasifica cada recuerdo de Sergio en un tema. Temas:
+- trabajo: su trabajo, su oficio y sus proyectos
+- gustos: gustos, aficiones, música, juegos, comida, lo que disfruta
+- ashur: cómo está hecho Ashur, sus equipos y lo que sabe hacer
+- privado: todo lo demás (salud, dinero, familia, pareja, otras personas, casa, rutinas, lugares)
+Ante la duda, privado. Responde una línea por recuerdo: «número: tema». Nada más."""
+
+
+def parse_temas(text: str, n: int) -> dict:
+    """{line number: topic} for 1..n; anything missing or unknown is «privado»."""
+    out = {i: "privado" for i in range(1, n + 1)}
+    for ln in (text or "").splitlines():
+        num, _, tema = ln.partition(":")
+        num, tema = num.strip().rstrip("."), tema.strip().lower()
+        if num.isdigit() and int(num) in out and tema in TEMAS:
+            out[int(num)] = tema
+    return out

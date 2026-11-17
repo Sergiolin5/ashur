@@ -253,6 +253,7 @@ def create_app(
                         app.state.daily_due()
                         app.state.propose_due()
                         app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
+                        app.state.tema_due()                      # 0.63.0: memories without a topic, one batch
                         app.state.conversations_due()             # 0.62.0: close idle ones, learn from one
                         app.state.archive_due()                   # 0.62.0: the old thread, one batch, if approved
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
@@ -1374,6 +1375,30 @@ def create_app(
         return len(todo)
 
     app.state.embed_due = embed_due
+
+    def tema_due() -> int:
+        """0.63.0: give Sergio's memories a topic. Health, secrets and «solo local» are «privado» without asking a
+        model; the rest goes to the local model in batches. Returns how many got a topic."""
+        todo = db.memories_without_tema(conv.TEMA_BATCH)
+        if not todo:
+            return 0
+        safe = [m for m in todo if m["tier"] == "local" or health_split(m["text"])[1] or looks_like_secret(m["text"])]
+        for m in safe:
+            db.set_memory_tema(m["id"], "privado")
+        ask = [m for m in todo if m not in safe]
+        if not ask:
+            return len(safe)
+        lines = "\n".join(f"{i}. {m['text']}" for i, m in enumerate(ask, 1))
+        try:
+            text, _device = local_complete(conv.CLASIFICADOR, [{"role": "user", "content": lines}])
+        except LocalUnavailable:
+            return len(safe)
+        for i, tema in conv.parse_temas(text, len(ask)).items():
+            db.set_memory_tema(ask[i - 1]["id"], tema)
+        db.log(clock(), None, "memory_tema", {"clasificados": len(ask)})
+        return len(safe) + len(ask)
+
+    app.state.tema_due = tema_due
 
     brain = Brain(db, os.path.dirname(os.path.abspath(db_path)), clock, network_for_brain,
                   settings=brain_settings, client=brain_client, local=local_complete, vision=local_vision,
@@ -2699,6 +2724,16 @@ def create_app(
 
     class MemoryText(BaseModel):
         text: str = Field(min_length=1, max_length=300)
+
+    class TemaIn(BaseModel):
+        tema: str = Field(pattern=r"^(trabajo|gustos|ashur|privado)$")
+
+    @app.put("/api/memory/{memory_id}/tema", dependencies=[Depends(require_admin)])
+    def memory_tema(memory_id: int, body: TemaIn):
+        if not db.set_memory_tema(memory_id, body.tema):
+            raise HTTPException(404, "no such memory")
+        db.log(clock(), None, "memory_tema", {"id": memory_id, "tema": body.tema})
+        return {"ok": True}
 
     @app.put("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
     def memory_correct(memory_id: int, body: MemoryText):

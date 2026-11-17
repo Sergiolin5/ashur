@@ -237,6 +237,7 @@ class Brain:
         self.s = settings or BrainSettings.from_env()
         self._client = client
         self.local = local                   # (system, messages) -> (reply, device_id)
+        self.extra_tools: Callable[[], dict] = dict      # name -> (schema, handler, _): tools a mounted library adds
 
     # --- plumbing ---------------------------------------------------------
     def client(self):
@@ -435,6 +436,9 @@ class Brain:
                 out["ejecutables"] = [{"ruta": r["path"], "tamaño": r["size"], "aprobado": bool(r["approved"])}
                                       for r in rows]
             return json.dumps(out, ensure_ascii=False)
+        added = self.extra_tools().get(name)
+        if added:
+            return added[1](args)
         return f"Herramienta desconocida: {name}"
 
     # --- conversation -----------------------------------------------------
@@ -454,7 +458,7 @@ class Brain:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
         system = self.guest_persona(guest["name"]) if guest else self._system(voice)
-        extra = {} if guest else {"tools": TOOLS}
+        extra = {} if guest else {"tools": TOOLS + [t[0] for t in self.extra_tools().values()]}
         cost_total, reply_parts, tools_used = 0.0, [], []
         for _ in range(MAX_TOOL_ROUNDS + 1):
             resp = client.messages.create(model=self.s.model, max_tokens=self.s.max_tokens,

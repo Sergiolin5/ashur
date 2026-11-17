@@ -55,12 +55,42 @@ def bootstrap(data_dir: str) -> Path:
     return home
 
 
-def install(operations: dict, data_dir: str) -> bool:
+def doc_text_from(db):
+    """«equipo:ruta», or a path looked up on every device: the text Ashur indexed, None if it has none."""
+    def doc_text(path: str):
+        nodes = [n["id"] for n in db.nodes()]
+        node, _, rest = path.partition(":")
+        candidates = [(node, rest)] if node in nodes else [(n, path) for n in nodes]
+        for n, p in candidates:
+            row = db.doc_info(n, p)
+            if row and row["chunks"] and row["first_rowid"] is not None:
+                return "\n".join(db.doc_texts(n, p))
+        return None
+    return doc_text
+
+
+def install(operations: dict, data_dir: str, db=None, clock=None) -> dict:
     """Called once by create_app. With every flag off: nothing, and openjarvis is never imported. Otherwise the
-    bridge's operation joins Ashur's encargo operations. True when installed."""
+    bridge's operation joins Ashur's encargo operations, and the chat's tools are returned (name → schema, handler,
+    capability); each one is offered only while its flag is on."""
     if not any_enabled():
-        return False
-    bootstrap(data_dir)
+        return {}
+    home = bootstrap(data_dir)
     from core.integrations.openjarvis.bridge import AGENT_OP, OjAgent
+    from core.integrations.openjarvis import chat, skills
     operations.setdefault(AGENT_OP, OjAgent())
-    return True
+    if db is None:
+        return {}
+    skills.configure(home, doc_text_from(db),
+                     lambda: [m["text"] for m in db.memories() if m.get("tier", "claude") == "claude"])
+    return chat.tools(db, clock)
+
+
+def approve_request(action: str, args: dict):
+    """run_request's door for OpenJarvis's own approvals; None when the action is not one of them."""
+    if action != "oj_skill":
+        return None
+    if not enabled("skills_import"):
+        return "not_done", "Importar skills está apagado."
+    from core.integrations.openjarvis import skills
+    return skills.approve(str(args.get("skill", "")))

@@ -3753,7 +3753,11 @@ def create_app(
 
     # --- encargos (0.46.0): text work Claude orders over the indexed documents, one unit at a time on local models ---
     # OpenJarvis (0.61.0): with any ASHUR_OJ_* flag on, its agents join as one more operation whose units are its model calls
-    app.state.openjarvis = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)))
+    oj_tools = oj_adapter.install(OPERATIONS, os.path.dirname(os.path.abspath(db_path)), db=db, clock=clock)
+    app.state.openjarvis = oj_adapter.any_enabled()
+    if oj_tools:
+        from core.integrations.openjarvis.chat import offered as oj_offered
+        brain.extra_tools = lambda: oj_offered(oj_tools)          # each tool only while its capability flag is on
     ENCARGO_UNFINISHED = ("pending_approval", "queued", "running", "paused")
     ENCARGO_WITH_RESULT = ("done", "kept", "released", "failed")
     encargo_lock = threading.Lock()             # one step at a time: a unit is never sent twice by two callers
@@ -4188,6 +4192,9 @@ def create_app(
         true when Claude asked may not be anymore; then nothing runs and the reason comes back as not_done."""
         action, tarea = req["action"], req["args"].get("tarea")
         try:
+            oj = oj_adapter.approve_request(action, req["args"])      # an imported OpenJarvis skill
+            if oj is not None:
+                return oj
             if action == "encargo":
                 eid = req["args"].get("encargo")
                 if not isinstance(eid, int) or not db.encargo_set(eid, expect="pending_approval", status="queued"):

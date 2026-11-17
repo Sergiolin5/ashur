@@ -27,8 +27,9 @@ ACTIONS = {"pausar_cola": "pausar la cola", "reanudar_cola": "reanudar la cola",
            "subir_tarea": "subir la tarea #{tarea}", "bajar_tarea": "bajar la tarea #{tarea}",
            "repasar_inventario": "repasar el inventario", "releer_documentos": "releer los documentos",
            "encargo": "lanzar el encargo #{encargo}", "cancelar_encargo": "cancelar el encargo #{encargo}",
-           "lote": "lanzar el lote #{lote}"}
-OWN_TOOL = ("encargo", "lote")        # asked only through their own tool (ashur_encargar, ashur_lote), never ashur_pedir
+           "lote": "lanzar el lote #{lote}", "oj_skill": "aprobar la skill importada {skill}"}
+OWN_TOOL = ("encargo", "lote", "oj_skill")    # asked only through their own tool (ashur_encargar, ashur_lote, the chat's
+                                              # skills_importar), never ashur_pedir
 MAX_PENDING_REQUESTS = 5
 
 

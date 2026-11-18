@@ -273,6 +273,23 @@ CREATE INDEX IF NOT EXISTS conversations_user ON conversations (user, closed);
 CREATE TABLE IF NOT EXISTS memory_vectors (  -- 0.62.0: a memory's meaning (float32, normalized), from a node's Ollama
     memory_id INTEGER PRIMARY KEY, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_imports (  -- 0.64.0: a WhatsApp chat Sergio uploaded so Ashur learns how he writes
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, name TEXT NOT NULL, file_name TEXT NOT NULL,
+    me TEXT NOT NULL, n_me INTEGER NOT NULL, n_others INTEGER NOT NULL,
+    approved REAL, cursor INTEGER NOT NULL DEFAULT 0, learned REAL
+);
+CREATE TABLE IF NOT EXISTS imported_messages (  -- everyone's lines are kept; only Sergio's (is_me) are ever measured or learned
+    id INTEGER PRIMARY KEY AUTOINCREMENT, import_id INTEGER NOT NULL, ts REAL NOT NULL, sender TEXT NOT NULL,
+    is_me INTEGER NOT NULL, text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS imported_messages_imp ON imported_messages (import_id, id);
+CREATE TABLE IF NOT EXISTS imported_vectors (  -- Sergio's own imported messages only, for picking examples by meaning
+    message_id INTEGER PRIMARY KEY, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS form_answers (  -- 0.64.0: the long form, and the questions Ashur asks itself
+    qid TEXT PRIMARY KEY, section TEXT NOT NULL, question TEXT NOT NULL, answer TEXT, ts REAL NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'form'
+);
 CREATE TABLE IF NOT EXISTS session_log (
     ts          REAL NOT NULL,
     node_id     TEXT,
@@ -394,6 +411,8 @@ class DB:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
         if "temas" not in gcols:                       # 0.63.0: which of Sergio's topics Ashur may share with this guest
             self.conn.execute("ALTER TABLE guests ADD COLUMN temas TEXT NOT NULL DEFAULT '[]'")
+        if "estilo" not in gcols:                      # 0.64.0: «Responde con mi estilo» for this guest
+            self.conn.execute("ALTER TABLE guests ADD COLUMN estilo INTEGER NOT NULL DEFAULT 0")
         ncols2 = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
         if "done_ts" not in ncols2:
             self.conn.execute("ALTER TABLE notes ADD COLUMN done_ts REAL")
@@ -2320,6 +2339,122 @@ class DB:
                 "AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id) ORDER BY last_msg LIMIT ?",
                 (limit,)).fetchall()
         return [dict(r) for r in rows]
+
+    def guest_estilo(self, gid: int) -> bool:
+        with self.lock:
+            r = self.conn.execute("SELECT estilo FROM guests WHERE id = ?", (gid,)).fetchone()
+        return bool(r and r["estilo"])
+
+    def set_guest_estilo(self, gid: int, on: bool) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE guests SET estilo = ? WHERE id = ?", (1 if on else 0, gid))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    # --- imported chats and the form (0.64.0) ---------------------------------------------------------
+    IMP_COLS = "id, ts, name, file_name, me, n_me, n_others, approved, cursor, learned"
+
+    def import_add(self, ts: float, name: str, file_name: str, me: str, messages: list) -> int:
+        n_me = sum(1 for m in messages if m["sender"] == me)
+        with self.lock:
+            iid = self.conn.execute(
+                "INSERT INTO chat_imports (ts, name, file_name, me, n_me, n_others) VALUES (?, ?, ?, ?, ?, ?)",
+                (ts, name, file_name, me, n_me, len(messages) - n_me)).lastrowid
+            self.conn.executemany(
+                "INSERT INTO imported_messages (import_id, ts, sender, is_me, text) VALUES (?, ?, ?, ?, ?)",
+                [(iid, m["ts"], m["sender"], 1 if m["sender"] == me else 0, m["text"]) for m in messages])
+            self.conn.commit()
+        return iid
+
+    def import_get(self, iid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(f"SELECT {self.IMP_COLS} FROM chat_imports WHERE id = ?", (iid,)).fetchone()
+        return dict(r) if r else None
+
+    def imports(self) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(f"SELECT {self.IMP_COLS} FROM chat_imports ORDER BY id DESC")]
+
+    def import_set(self, iid: int, **fields) -> None:
+        if not fields or set(fields) - {"approved", "cursor", "learned"}:
+            raise ValueError("campos no permitidos")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self.lock:
+            self.conn.execute(f"UPDATE chat_imports SET {sets} WHERE id = ?", (*fields.values(), iid))
+            self.conn.commit()
+
+    def imported_mine(self, iid: Optional[int] = None, after_id: int = 0, limit: Optional[int] = None) -> list[dict]:
+        q = "SELECT id, import_id, ts, text FROM imported_messages WHERE is_me = 1 AND id > ?"
+        args: list = [after_id]
+        if iid is not None:
+            q += " AND import_id = ?"
+            args.append(iid)
+        q += " ORDER BY id" + (" LIMIT ?" if limit else "")
+        if limit:
+            args.append(limit)
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(q, args).fetchall()]
+
+    def imported_before(self, message_id: int) -> Optional[dict]:
+        """The other person's message Sergio was answering (local prompts only)."""
+        with self.lock:
+            r = self.conn.execute(
+                "SELECT o.id, o.sender, o.text FROM imported_messages o JOIN imported_messages m ON m.id = ? "
+                "WHERE o.import_id = m.import_id AND o.id < m.id AND o.is_me = 0 ORDER BY o.id DESC LIMIT 1",
+                (message_id,)).fetchone()
+        return dict(r) if r else None
+
+    def imported_without_vector(self, model: str, limit: int) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT m.id, m.text FROM imported_messages m LEFT JOIN imported_vectors v ON v.message_id = m.id "
+                "AND v.model = ? WHERE m.is_me = 1 AND v.message_id IS NULL ORDER BY m.id LIMIT ?",
+                (model, limit)).fetchall()]
+
+    def imported_vector_put(self, message_id: int, model: str, vec: bytes, dim: int) -> None:
+        with self.lock:
+            self.conn.execute("INSERT OR REPLACE INTO imported_vectors (message_id, model, dim, vec) "
+                              "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM imported_messages WHERE id = ?)",
+                              (message_id, model, dim, vec, message_id))
+            self.conn.commit()
+
+    def imported_counts(self, model: str) -> tuple[int, int]:
+        """(Sergio's imported messages, how many of them have a vector): cheap, to know when a cache is stale."""
+        with self.lock:
+            mine = self.conn.execute("SELECT COUNT(*) FROM imported_messages WHERE is_me = 1").fetchone()[0]
+            vec = self.conn.execute("SELECT COUNT(*) FROM imported_vectors WHERE model = ?", (model,)).fetchone()[0]
+        return int(mine), int(vec)
+
+    def imported_vectors(self, model: str) -> dict:
+        with self.lock:
+            rows = self.conn.execute("SELECT message_id, vec FROM imported_vectors WHERE model = ?", (model,)).fetchall()
+        return {r["message_id"]: r["vec"] for r in rows}
+
+    def import_delete(self, iid: int) -> bool:
+        """The chat, everyone's lines, their vectors, and whatever Ashur learned or proposed from it."""
+        src = f"import:{iid}"
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM chat_imports WHERE id = ?", (iid,))
+            self.conn.execute("DELETE FROM imported_vectors WHERE message_id IN "
+                              "(SELECT id FROM imported_messages WHERE import_id = ?)", (iid,))
+            self.conn.execute("DELETE FROM imported_messages WHERE import_id = ?", (iid,))
+            self.conn.execute("DELETE FROM memory_vectors WHERE memory_id IN (SELECT id FROM memory WHERE source = ?)", (src,))
+            self.conn.execute("DELETE FROM memory WHERE source = ?", (src,))
+            self.conn.execute("DELETE FROM memory_proposals WHERE source = ? AND status = 'pending'", (src,))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def form_put(self, qid: str, section: str, question: str, answer: Optional[str], ts: float, origin: str = "form") -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO form_answers (qid, section, question, answer, ts, origin) VALUES (?, ?, ?, ?, ?, ?) "
+                              "ON CONFLICT(qid) DO UPDATE SET answer = excluded.answer, ts = excluded.ts",
+                              (qid, section, question, answer, ts, origin))
+            self.conn.commit()
+
+    def form_answers(self) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT qid, section, question, answer, ts, origin FROM form_answers ORDER BY ts, qid").fetchall()]
 
     def guest_temas(self, gid: int) -> list:
         with self.lock:

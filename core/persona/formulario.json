@@ -1,0 +1,294 @@
+{
+ "version": 1,
+ "secciones": [
+  {
+   "id": "quien",
+   "titulo": "Quién eres",
+   "preguntas": [
+    {
+     "id": "quien-1",
+     "texto": "¿Cómo te presentas cuando conoces a alguien nuevo?"
+    },
+    {
+     "id": "quien-2",
+     "texto": "¿Cómo te describiría alguien que te conoce bien?"
+    },
+    {
+     "id": "quien-3",
+     "texto": "¿De qué estás más orgulloso de lo que has hecho?"
+    },
+    {
+     "id": "quien-4",
+     "texto": "¿Qué te tomas muy en serio y qué no?"
+    },
+    {
+     "id": "quien-5",
+     "texto": "¿Cómo es un buen día para ti, de la mañana a la noche?"
+    },
+    {
+     "id": "quien-6",
+     "texto": "¿Qué cosa de ti la gente suele malinterpretar?"
+    },
+    {
+     "id": "quien-7",
+     "texto": "¿Qué te gustaría que Ashur nunca olvide de ti?"
+    },
+    {
+     "id": "quien-8",
+     "texto": "¿Cómo te gusta que te llamen y quién te dice de otra forma?"
+    }
+   ]
+  },
+  {
+   "id": "trabajo",
+   "titulo": "Trabajo y oficio",
+   "preguntas": [
+    {
+     "id": "trabajo-1",
+     "texto": "¿Cómo le explicas tu trabajo a alguien que no es del área?"
+    },
+    {
+     "id": "trabajo-2",
+     "texto": "¿Qué parte de tu trabajo disfrutas y cuál te drena?"
+    },
+    {
+     "id": "trabajo-3",
+     "texto": "¿Cómo respondes cuando un cliente o un jefe te presiona?"
+    },
+    {
+     "id": "trabajo-4",
+     "texto": "¿Qué haces cuando no sabes la respuesta a algo en el trabajo?"
+    },
+    {
+     "id": "trabajo-5",
+     "texto": "¿Cómo escribes un correo de trabajo importante? ¿Qué cuidas?"
+    },
+    {
+     "id": "trabajo-6",
+     "texto": "¿Qué proyecto propio te importa más ahora?"
+    },
+    {
+     "id": "trabajo-7",
+     "texto": "¿En qué eres el que todos llaman?"
+    }
+   ]
+  },
+  {
+   "id": "hablar",
+   "titulo": "Cómo hablas con cada quien",
+   "preguntas": [
+    {
+     "id": "hablar-1",
+     "texto": "¿Cómo le escribes a tu pareja un día normal?"
+    },
+    {
+     "id": "hablar-2",
+     "texto": "¿Cómo le escribes a tu familia?"
+    },
+    {
+     "id": "hablar-3",
+     "texto": "¿Cómo le hablas a un amigo cercano y cómo a un conocido?"
+    },
+    {
+     "id": "hablar-4",
+     "texto": "¿Cómo le escribes a alguien del trabajo que no conoces?"
+    },
+    {
+     "id": "hablar-5",
+     "texto": "¿Cambias cuando escribes por WhatsApp frente a correo? ¿En qué?"
+    },
+    {
+     "id": "hablar-6",
+     "texto": "¿Usas audios, emojis o stickers? ¿Con quién sí y con quién no?"
+    },
+    {
+     "id": "hablar-7",
+     "texto": "¿Cómo dices que no a algo sin quedar mal?"
+    },
+    {
+     "id": "hablar-8",
+     "texto": "¿Cómo pides un favor?"
+    },
+    {
+     "id": "hablar-9",
+     "texto": "¿Cómo te disculpas cuando te equivocaste?"
+    }
+   ]
+  },
+  {
+   "id": "humor",
+   "titulo": "Humor y tono",
+   "preguntas": [
+    {
+     "id": "humor-1",
+     "texto": "¿Qué te hace reír de verdad?"
+    },
+    {
+     "id": "humor-2",
+     "texto": "¿Qué tipo de humor usas tú? ¿Sarcasmo, juegos de palabras, absurdo?"
+    },
+    {
+     "id": "humor-3",
+     "texto": "¿Con qué no se bromea contigo?"
+    },
+    {
+     "id": "humor-4",
+     "texto": "¿Qué palabras o frases dices mucho?"
+    },
+    {
+     "id": "humor-5",
+     "texto": "¿Qué expresiones nunca usarías?"
+    },
+    {
+     "id": "humor-6",
+     "texto": "¿Cómo se nota cuando estás molesto por escrito?"
+    },
+    {
+     "id": "humor-7",
+     "texto": "¿Cómo se nota cuando estás contento por escrito?"
+    }
+   ]
+  },
+  {
+   "id": "decidir",
+   "titulo": "Cómo decides",
+   "preguntas": [
+    {
+     "id": "decidir-1",
+     "texto": "¿Cómo tomas una decisión grande? ¿Qué pesa más?"
+    },
+    {
+     "id": "decidir-2",
+     "texto": "¿Prefieres que te den opciones o una recomendación?"
+    },
+    {
+     "id": "decidir-3",
+     "texto": "¿Qué te hace cambiar de opinión?"
+    },
+    {
+     "id": "decidir-4",
+     "texto": "¿Cómo manejas un conflicto con alguien cercano?"
+    },
+    {
+     "id": "decidir-5",
+     "texto": "¿Qué haces cuando estás bloqueado o abrumado?"
+    },
+    {
+     "id": "decidir-6",
+     "texto": "¿En qué gastas sin pensarlo y en qué lo piensas mucho?"
+    },
+    {
+     "id": "decidir-7",
+     "texto": "¿Qué consejo le darías a quien empieza en lo tuyo?"
+    },
+    {
+     "id": "decidir-8",
+     "texto": "¿Qué error no quieres repetir?"
+    }
+   ]
+  },
+  {
+   "id": "limites",
+   "titulo": "Límites",
+   "preguntas": [
+    {
+     "id": "limites-1",
+     "texto": "¿Qué temas no quieres que Ashur saque si tú no los sacas?"
+    },
+    {
+     "id": "limites-2",
+     "texto": "¿Qué no debe contarle Ashur nunca a un invitado, aunque esté en sus temas?"
+    },
+    {
+     "id": "limites-3",
+     "texto": "¿Qué te incomoda que te pregunten?"
+    },
+    {
+     "id": "limites-4",
+     "texto": "¿A qué hora no quieres que Ashur te escriba?"
+    },
+    {
+     "id": "limites-5",
+     "texto": "¿Qué decisiones nunca debe tomar Ashur por ti?"
+    },
+    {
+     "id": "limites-6",
+     "texto": "¿Qué te molesta de un asistente o de una persona que ayuda?"
+    }
+   ]
+  },
+  {
+   "id": "ashur",
+   "titulo": "Ashur",
+   "preguntas": [
+    {
+     "id": "ashur-1",
+     "texto": "¿Qué quieres que Ashur sea para ti dentro de un año?"
+    },
+    {
+     "id": "ashur-2",
+     "texto": "¿Cómo quieres que Ashur te contradiga cuando crea que te equivocas?"
+    },
+    {
+     "id": "ashur-3",
+     "texto": "¿Qué tono de Ashur te gusta y cuál te cansa?"
+    },
+    {
+     "id": "ashur-4",
+     "texto": "¿Qué tarea de tu día quisieras que Ashur te quitara primero?"
+    },
+    {
+     "id": "ashur-5",
+     "texto": "¿Cómo quieres que Ashur trate a tus invitados?"
+    },
+    {
+     "id": "ashur-6",
+     "texto": "¿Qué debe hacer Ashur cuando no sabe algo de ti?"
+    },
+    {
+     "id": "ashur-7",
+     "texto": "¿Cómo te das cuenta de que Ashur te entendió?"
+    }
+   ]
+  },
+  {
+   "id": "frases",
+   "titulo": "Tus frases",
+   "preguntas": [
+    {
+     "id": "frases-1",
+     "texto": "Escribe cómo responderías a: «¿vamos a almorzar mañana?»"
+    },
+    {
+     "id": "frases-2",
+     "texto": "Escribe cómo responderías a: «necesito ese archivo hoy, ¿lo tienes?»"
+    },
+    {
+     "id": "frases-3",
+     "texto": "Escribe cómo responderías a: «¿estás bravo conmigo?»"
+    },
+    {
+     "id": "frases-4",
+     "texto": "Escribe cómo felicitarías a un amigo por su cumpleaños."
+    },
+    {
+     "id": "frases-5",
+     "texto": "Escribe cómo rechazarías una invitación que no te interesa."
+    },
+    {
+     "id": "frases-6",
+     "texto": "Escribe cómo le contarías a tu pareja que tuviste un mal día."
+    },
+    {
+     "id": "frases-7",
+     "texto": "Escribe cómo le pedirías a un compañero que revise algo tuyo."
+    },
+    {
+     "id": "frases-8",
+     "texto": "Escribe cómo responderías a un mensaje de un número que no conoces."
+    }
+   ]
+  }
+ ],
+ "nota": "Cada pregunta tiene un id fijo: si cambias, agregas o quitas preguntas, no reuses un id; las respuestas se guardan por id."
+}

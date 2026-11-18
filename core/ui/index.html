@@ -410,6 +410,15 @@
   .perfil { flex: 1 1 100%; font-size: var(--fs-meta); }
   .perfil .pf { display: flex; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid var(--sep, rgba(127,127,127,.2)); }
   .perfil .pf span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  #imports .detail, #estilo-ej { white-space: normal; }
+  .form-sec { margin: 0 0 var(--s3); }
+  .form-sec summary { cursor: pointer; padding: 12px 14px; background: var(--row); border-radius: 12px; display: flex; justify-content: space-between; }
+  .form-sec[open] summary { border-radius: 12px 12px 0 0; }
+  .form-q { padding: 10px 14px; background: var(--row); border-top: 1px solid rgba(127,127,127,.15); }
+  .form-q label { display: block; font-size: var(--fs-meta); color: var(--secondary); margin-bottom: 6px; }
+  .form-q textarea { width: 100%; box-sizing: border-box; }
+  .form-sec .form-save { margin: 0; border-radius: 0 0 12px 12px; }
+  #imp-who label { display: flex; gap: 8px; align-items: center; padding: 6px 0; }
   .mem-tema { font: inherit; font-size: var(--fs-small); color: var(--tint); background: var(--field); border: 0; border-radius: 6px; padding: 5px 6px; }
   #memories .row .main { flex: 1 1 100%; min-width: 0; }
   #memories .row .detail { white-space: normal; }
@@ -798,6 +807,8 @@
         <button type="button" class="menu-item" data-page="map"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4L3 6.5v13L9 17l6 2.5 6-2.5v-13L15 7z"/><path d="M9 4v13M15 7v12.5"/></svg></span><span class="mi-text"><b>Mapa de archivos</b><small>Dónde se va el espacio, carpeta por carpeta</small></span><span class="mi-go" aria-hidden="true">›</span></button>
         <button type="button" class="menu-item" data-page="docs"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span><span class="mi-text"><b>Documentos</b><small>Buscar y releer lo que Ashur ha leído</small></span><span class="mi-go" aria-hidden="true">›</span></button>
         <button type="button" class="menu-item" data-page="memory"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7 4 4 0 0 0 5 5 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 5"/></svg></span><span class="mi-text"><b>Memoria</b><small>Recuerdos, resúmenes e importar</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="estilo"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg></span><span class="mi-text"><b>Tu estilo</b><small>Tus chats de WhatsApp y cómo escribes</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="formulario"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></span><span class="mi-text"><b>Formulario</b><small id="form-sub">Para que Ashur te conozca</small></span><span class="mi-go" aria-hidden="true">›</span></button>
         <button type="button" class="menu-item" data-page="time"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M9.5 3h5"/></svg></span><span class="mi-text"><b>Mi tiempo</b><small id="time-sub">Empiezo, termino y en qué se va la semana</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       </div>
       <h2 class="menu-h">Ashur</h2>
@@ -954,6 +965,42 @@
       </div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="estilo" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Tu estilo</div></div>
+    <section>
+      <h2>Subir un chat</h2>
+      <div class="group signin">
+        <p>En WhatsApp: abre el chat › Más › Exportar chat › Sin archivos. Sube el .txt aquí.</p>
+        <input type="file" id="imp-file" accept=".txt,text/plain" aria-label="Archivo del chat">
+        <input type="text" id="imp-name" class="field" placeholder="Nombre del chat (por ejemplo, Ana)" aria-label="Nombre del chat">
+        <button type="button" id="imp-read">Leer</button>
+        <div id="imp-who" hidden></div>
+        <div id="imp-note" class="note" style="margin:10px 0 0" hidden></div>
+      </div>
+      <div class="note">Se guarda todo el chat en el servidor. De los demás solo queda el contexto de a qué respondías: nunca va a Claude ni se vuelve recuerdo. Ashur aprende solo de tus líneas, y solo cuando lo apruebes en «Por aprobar».</div>
+    </section>
+    <section>
+      <h2>Así escribes</h2>
+      <div class="group"><div class="row"><div class="main"><div class="title" id="estilo-texto" style="white-space:normal">Todavía no hay chats.</div><div class="detail" id="estilo-ej"></div></div></div></div>
+    </section>
+    <section>
+      <h2>Chats subidos</h2>
+      <div class="group" id="imports"></div>
+    </section>
+    </div>
+
+    <div class="page" data-page="formulario" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Formulario</div></div>
+    <section id="form-ashur-sec" hidden>
+      <h2>Preguntas de Ashur</h2>
+      <div class="group" id="form-ashur"></div>
+    </section>
+    <section>
+      <div id="form-secs"></div>
+      <div class="note">Se guarda cada respuesta al salir del campo; puedes dejarlo a medias. «Guardar sección» hace que Ashur aprenda de esas respuestas con el modelo local (lo sensible va a la bandeja).</div>
+    </section>
     </div>
 
     <div class="page" data-page="update" hidden>
@@ -1958,6 +2005,8 @@
   }
   // Ajustes is a menu; each entry opens its own page
   function showPage(name) {
+    if (name === "estilo") loadEstilo();
+    if (name === "formulario") loadForm();
     $("menu").hidden = !!name; $("signout-row").hidden = !!name;
     for (const pg of document.querySelectorAll("#settings .page")) pg.hidden = pg.dataset.page !== name;
     window.scrollTo({ top: 0 });
@@ -2951,6 +3000,94 @@
     save.disabled = false;
   });
 
+  // --- 0.64.0: your style and the form ------------------------------------------------------------------
+  let impText = null;
+  async function loadEstilo() {
+    try {
+      const st = await (await api("api/estilo")).json();
+      $("estilo-texto").textContent = st.texto || "Todavía no hay chats.";
+      $("estilo-ej").textContent = st.medidas.n ? (st.medidas.n + " mensajes tuyos medidos · " + st.ejemplos.listos + " listos como ejemplos") : "";
+      fill("imports", st.imports.map((i) => {
+        const state = i.learned ? "aprendido" : i.approved ? "aprendiendo…" : "espera tu aprobación en «Por aprobar»";
+        const r = row({ title: i.name, detail: i.n_me + " tuyos · " + i.n_others + " de otros · " + state });
+        const b = el("button", "forget", "Borrar"); b.type = "button";
+        twice(b, "¿Borrar todo?", async () => { await api("api/imports/" + i.id, { method: "DELETE" }); loadEstilo(); });
+        r.append(b); return r;
+      }), "Ningún chat todavía.");
+    } catch (e) {}
+  }
+  $("imp-read").addEventListener("click", async () => {
+    const f = $("imp-file").files[0], note = $("imp-note");
+    note.hidden = false;
+    if (!f) { note.textContent = "Elige el archivo .txt del chat."; return; }
+    if (f.size > 8e6) { note.textContent = "El archivo pasa de 8 MB."; return; }
+    impText = await f.text();
+    const name = $("imp-name").value.trim() || f.name.replace(/\.txt$/i, "").replace(/^Chat de WhatsApp con /i, "");
+    $("imp-name").value = name;
+    const r = await api("api/imports", { method: "POST", body: JSON.stringify({ name, file_name: f.name, text: impText }) });
+    const d = await r.json();
+    if (!r.ok) { note.textContent = d.detail || "No pude leerlo."; return; }
+    note.textContent = d.mensajes + " mensajes. ¿Cuál eres tú?";
+    const who = $("imp-who"); who.replaceChildren(); who.hidden = false;
+    for (const sd of d.senders) {
+      const lab = el("label"), rb = el("input"); rb.type = "radio"; rb.name = "imp-me"; rb.value = sd.name;
+      lab.append(rb, el("span", null, sd.name + " (" + sd.n + ")")); who.append(lab);
+    }
+    const go = el("button", null, "Importar"); go.type = "button";
+    go.addEventListener("click", async () => {
+      const me = (who.querySelector("input:checked") || {}).value;
+      if (!me) { note.textContent = "Marca cuál eres tú."; return; }
+      go.disabled = true;
+      const r2 = await api("api/imports/confirm", { method: "POST", body: JSON.stringify({ name, file_name: f.name, text: impText, me }) });
+      const d2 = await r2.json();
+      note.textContent = r2.ok ? "Listo: " + d2.n_me + " mensajes tuyos y " + d2.n_others + " de otros. Aprueba en «Por aprobar» para que Ashur aprenda de los tuyos."
+                               : (d2.detail || "No pude importarlo.");
+      if (r2.ok) { who.hidden = true; impText = null; $("imp-file").value = ""; loadEstilo(); }
+      go.disabled = false;
+    });
+    who.append(go);
+  });
+  function formQuestion(q) {
+    const w = el("div", "form-q"), lab = el("label", null, q.pregunta), ta = el("textarea", "field");
+    ta.rows = 2; ta.maxLength = 4000; ta.value = q.respuesta || ""; ta.setAttribute("aria-label", q.pregunta);
+    let saved = ta.value;
+    ta.addEventListener("blur", async () => {
+      if (ta.value === saved) return;
+      const r = await api("api/formulario/" + q.id, { method: "PUT", body: JSON.stringify({ respuesta: ta.value }) });
+      if (r.ok) saved = ta.value;
+    });
+    w.append(lab, ta); return w;
+  }
+  async function loadForm() {
+    try {
+      const f = await (await api("api/formulario")).json();
+      const box = $("form-secs"); box.replaceChildren();
+      let done = 0, total = 0;
+      for (const s of f.secciones) {
+        done += s.respondidas; total += s.preguntas.length;
+        const d = el("details", "form-sec"), sm = el("summary");
+        sm.append(el("span", null, s.titulo), el("span", "detail", s.respondidas + " de " + s.preguntas.length));
+        d.append(sm);
+        for (const q of s.preguntas) d.append(formQuestion(q));
+        const sv = el("button", "form-save", "Guardar sección"); sv.type = "button";
+        sv.addEventListener("click", async () => {
+          if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+          await new Promise((r) => setTimeout(r, 300));
+          sv.disabled = true;
+          const r = await api("api/formulario/" + s.id + "/aprender", { method: "POST" });
+          sv.textContent = r.ok ? "Guardada: Ashur aprenderá de ella" : "No se pudo guardar";
+          setTimeout(() => { sv.disabled = false; sv.textContent = "Guardar sección"; loadForm(); }, 2000);
+        });
+        d.append(sv); box.append(d);
+      }
+      $("form-sub").textContent = done + " de " + total + " respondidas";
+      const open = f.ashur.filter((q) => !q.respuesta);
+      $("form-ashur-sec").hidden = !open.length;
+      const ab = $("form-ashur"); ab.replaceChildren();
+      for (const q of open) ab.append(formQuestion(q));
+    } catch (e) {}
+  }
+
   async function loadMemories() {
     try {
       const r = await api("api/memory");
@@ -3187,6 +3324,13 @@
         if (!g.is_self) {                                // 0.63.0: what Ashur may tell this guest of you, and what it knows of them
           const chips = el("div", "tema-chips");
           chips.append(el("span", "detail", "Puede contarle de ti:"));
+          const st = el("button", null, "Responde con mi estilo"); st.type = "button";
+          st.setAttribute("aria-pressed", String(!!g.estilo));
+          st.addEventListener("click", async () => {
+            const on = st.getAttribute("aria-pressed") !== "true"; st.disabled = true;
+            try { if ((await api("api/guests/" + g.id + "/estilo", { method: "PUT", body: JSON.stringify({ estilo: on }) })).ok) { g.estilo = on; st.setAttribute("aria-pressed", String(on)); } }
+            finally { st.disabled = false; }
+          });
           for (const [t, label] of [["trabajo", "Trabajo y proyectos"], ["gustos", "Gustos y aficiones"], ["ashur", "Ashur mismo"]]) {
             const c = el("button", null, label); c.type = "button";
             c.setAttribute("aria-pressed", String((g.temas || []).includes(t)));
@@ -3228,7 +3372,8 @@
               it.append(tx, ed, del); box.append(it);
             }
           });
-          r.append(chips, pb, box);
+          const sc = el("div", "tema-chips"); sc.append(el("span", "detail", "Con su estilo (siempre como Ashur):"), st);
+          r.append(chips, sc, pb, box);
         }
         const b = el("button", "forget", "Revocar"); b.type = "button";
         b.setAttribute("aria-label", "Revocar el acceso de " + g.name);

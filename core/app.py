@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
                         looks_like_secret, month_start)
-from core import casa as casa_mod, conversaciones as conv, habits, lotes, signals
+from core import casa as casa_mod, conversaciones as conv, estilo as estilo_mod, habits, lotes, signals
 from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
@@ -253,8 +253,7 @@ def create_app(
                         app.state.propose_due()
                         app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
                         app.state.tema_due()                      # 0.63.0: memories without a topic, one batch
-                        app.state.conversations_due()             # 0.62.0: close idle ones, learn from one
-                        app.state.archive_due()                   # 0.62.0: the old thread, one batch, if approved
+                        app.state.learning_tick()                 # 0.62–0.64: one local learning job per tick
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -275,7 +274,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.63.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.64.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1359,8 +1358,12 @@ def create_app(
     app.state.local_embed = local_embed
 
     def embed_due() -> int:
-        """Embed memories that have no vector of the current model yet, one batch per pass."""
+        """Embed memories that have no vector of the current model yet, one batch per pass; then (0.64.0) Sergio's
+        own imported chat messages, for picking examples of how he writes."""
         todo = db.memories_without_vector(conv.EMBED_MODEL, conv.EMBED_BATCH)
+        put = db.vector_put
+        if not todo:
+            todo, put = db.imported_without_vector(conv.EMBED_MODEL, conv.EMBED_BATCH), db.imported_vector_put
         if not todo:
             return 0
         try:
@@ -1370,7 +1373,7 @@ def create_app(
                 db.log(clock(), getattr(e, "node", None), "embed_failed", {"razon": str(e)[:200]})
             return 0
         for m, v in zip(todo, vectors):
-            db.vector_put(m["id"], conv.EMBED_MODEL, conv.pack(v), len(v))
+            put(m["id"], conv.EMBED_MODEL, conv.pack(v), len(v))
         return len(todo)
 
     app.state.embed_due = embed_due
@@ -2431,6 +2434,212 @@ def create_app(
         keep = ("id", "title", "started", "last_msg", "closed", "archived", "n")
         return [{k: cv[k] for k in keep} for cv in db.conv_list(chat_user(guest)) if cv["n"]]   # an empty «Nueva» is not listed
 
+    # --- 0.64.0: how Sergio writes -------------------------------------------------------------------------
+    class ImportIn(BaseModel):
+        name: str = Field(min_length=1, max_length=80)
+        file_name: str = Field(default="", max_length=200)
+        text: str = Field(min_length=1, max_length=8_000_000)
+        me: Optional[str] = Field(default=None, max_length=120)
+
+    def estilo_refresh() -> dict:
+        medidas = estilo_mod.medir([m["text"] for m in db.imported_mine()])
+        db.set_setting("estilo", json.dumps(medidas, ensure_ascii=False))
+        return medidas
+
+    def estilo_medidas() -> dict:
+        try:
+            return json.loads(db.setting("estilo", "") or '{"n": 0}')
+        except ValueError:
+            return {"n": 0}
+
+    app.state.estilo_medidas = estilo_medidas
+
+    @app.post("/api/imports", dependencies=[Depends(require_admin)])
+    def import_preview(body: ImportIn):
+        msgs = estilo_mod.parse_whatsapp(body.text)
+        if not msgs:
+            raise HTTPException(422, "No encontré mensajes de WhatsApp en ese archivo.")
+        return {"senders": estilo_mod.senders(msgs), "mensajes": len(msgs)}
+
+    @app.get("/api/imports", dependencies=[Depends(require_admin)])
+    def import_list():
+        return db.imports()
+
+    @app.post("/api/imports/confirm", dependencies=[Depends(require_admin)])
+    def import_confirm(body: ImportIn):
+        msgs = estilo_mod.parse_whatsapp(body.text)
+        if not body.me or body.me not in {m["sender"] for m in msgs}:
+            raise HTTPException(422, "Elige cuál de los remitentes eres tú.")
+        iid = db.import_add(clock(), body.name.strip(), body.file_name, body.me, msgs)
+        imp = db.import_get(iid)
+        estilo_refresh()
+        db.claude_request_add(clock(), "aprender_import", {"import": iid, "nombre": imp["name"], "mensajes": imp["n_me"]},
+                              "Leer tus mensajes de ese chat por tandas y guardar lo durable; lo sensible va a la bandeja. "
+                              "Lo que escriben los demás nunca se aprende.")
+        db.log(clock(), None, "chat_imported", {"import": iid, "tuyos": imp["n_me"], "otros": imp["n_others"]})
+        return {"id": iid, "n_me": imp["n_me"], "n_others": imp["n_others"]}
+
+    @app.get("/api/estilo", dependencies=[Depends(require_admin)])
+    def estilo_get():
+        m = estilo_medidas()
+        done = db.imported_counts(conv.EMBED_MODEL)[1]
+        return {"medidas": m, "texto": estilo_mod.describir(m), "imports": db.imports(),
+                "ejemplos": {"listos": done, "total": m.get("n", 0)}}
+
+    @app.delete("/api/imports/{iid}", dependencies=[Depends(require_admin)])
+    def import_delete(iid: int):
+        if not db.import_delete(iid):
+            raise HTTPException(404, "No existe ese chat.")
+        for r in db.claude_requests(limit=1000):
+            if r["action"] == "aprender_import" and r["args"].get("import") == iid and r["status"] == "pending":
+                db.claude_request_decide(r["id"], "rejected", clock(), "El chat se borró.")
+        estilo_refresh()
+        db.log(clock(), None, "chat_import_deleted", {"import": iid})
+        return {"ok": True}
+
+    def import_due() -> int:
+        """One batch of Sergio's lines of an approved imported chat (local model). Returns how many it read."""
+        for imp in db.imports()[::-1]:
+            if not imp["approved"] or imp["learned"]:
+                continue
+            rest = db.imported_mine(imp["id"], after_id=imp["cursor"], limit=400)
+            if not rest:
+                db.import_set(imp["id"], learned=clock())
+                continue
+            piece, last, n = conv.first_chunk([{"id": m["id"], "role": "user", "content": m["text"]} for m in rest])
+            try:
+                text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+            except LocalUnavailable:
+                return 0
+            if not db.import_get(imp["id"]):            # deleted while the model read it: nothing of it stays
+                return 0
+            got = brain.learn_lines(text, f"import:{imp['id']}")
+            db.import_set(imp["id"], cursor=last)
+            if n == len(rest) and not db.imported_mine(imp["id"], after_id=last, limit=1):
+                db.import_set(imp["id"], learned=clock())
+            db.log(clock(), None, "memories_extracted", {"import": imp["id"], "normales": got["normales"],
+                                                          "sensibles": got["sensibles"]})
+            return n
+        return 0
+
+    app.state.import_due = import_due
+
+    # the long form: questions in core/persona/formulario.json, answers in form_answers ----------------------------
+    FORM = json.loads((Path(__file__).parent / "persona" / "formulario.json").read_text(encoding="utf-8"))
+    FORM_Q = {q["id"]: (s["id"], q["texto"]) for s in FORM["secciones"] for q in s["preguntas"]}   # ids fixed in the JSON
+
+    class FormIn(BaseModel):
+        respuesta: str = Field(max_length=4000)
+
+    @app.get("/api/formulario", dependencies=[Depends(require_admin)])
+    def form_get():
+        ans = {a["qid"]: a for a in db.form_answers()}
+        secs = []
+        for s in FORM["secciones"]:
+            qs = [{"id": q["id"], "pregunta": q["texto"], "respuesta": (ans.get(q["id"]) or {}).get("answer")}
+                  for q in s["preguntas"]]
+            secs.append({"id": s["id"], "titulo": s["titulo"], "preguntas": qs,
+                         "respondidas": sum(1 for q in qs if q["respuesta"])})
+        ashur = [{"id": a["qid"], "pregunta": a["question"], "respuesta": a["answer"]}
+                 for a in ans.values() if a["origin"] == "ashur"]
+        return {"secciones": secs, "ashur": ashur}
+
+    @app.put("/api/formulario/{qid}", dependencies=[Depends(require_admin)])
+    def form_put(qid: str, body: FormIn):
+        ans = {a["qid"]: a for a in db.form_answers()}
+        if qid in FORM_Q:
+            section, question = FORM_Q[qid]
+        elif qid in ans and ans[qid]["origin"] == "ashur":
+            section, question = "ashur", ans[qid]["question"]
+        else:
+            raise HTTPException(404, "No existe esa pregunta.")
+        db.form_put(qid, section, question, body.respuesta.strip() or None, clock(),
+                    "ashur" if section == "ashur" else "form")
+        if section == "ashur" and body.respuesta.strip():      # Ashur's own questions are learned as soon as answered
+            pend = set(json.loads(db.setting("form_pending", "[]")))
+            db.set_setting("form_pending", json.dumps(sorted(pend | {"ashur"})))
+        return {"ok": True}
+
+    @app.post("/api/formulario/{section}/aprender", dependencies=[Depends(require_admin)])
+    def form_learn(section: str):
+        if section not in {s["id"] for s in FORM["secciones"]} | {"ashur"}:
+            raise HTTPException(404, "No existe esa sección.")
+        pend = set(json.loads(db.setting("form_pending", "[]")))
+        db.set_setting("form_pending", json.dumps(sorted(pend | {section})))
+        return {"ok": True}
+
+    def form_due() -> int:
+        """Learn one saved section of the form (local model): answers that changed since it was last learned."""
+        pend = json.loads(db.setting("form_pending", "[]"))
+        if not pend:
+            return 0
+        section = pend[0]
+        since, started = float(db.setting(f"form_learned:{section}", "0")), clock()
+        rows = [a for a in db.form_answers() if a["section"] == section and a["answer"] and a["ts"] > since]
+        if rows:
+            text_in = "\n".join(f"Pregunta: {a['question']}\nSergio: {a['answer']}" for a in rows)
+            try:
+                text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": text_in[:conv.EXTRACT_CHARS]}])
+            except LocalUnavailable:
+                return 0
+            brain.learn_lines(text, "form")
+        db.set_setting(f"form_learned:{section}", str(started))   # an answer edited meanwhile is still newer
+        now_pend = json.loads(db.setting("form_pending", "[]"))     # a section saved meanwhile stays pending
+        db.set_setting("form_pending", json.dumps([x for x in now_pend if x != section]))
+        return 1
+
+    app.state.form_due = form_due
+
+    PREGUNTADOR = ("Eres Ashur, el asistente de Sergio. Con lo que sabes de él (abajo) y las preguntas que ya le hiciste, "
+                   "propón hasta 3 preguntas nuevas, cortas y concretas, sobre lo que todavía no sabes de él y te serviría "
+                   "para entenderlo o escribir como él. Nada de salud ni dinero. Una por línea, empezando con «PREGUNTA: ».")
+
+    def preguntas_due() -> int:
+        """Once a day: up to three new questions from Ashur, shown in the form (never interrupting the chat)."""
+        day = dt.datetime.fromtimestamp(clock(), BOGOTA).strftime("%Y-%m-%d")
+        if db.setting("preguntas_dia", "") == day:
+            return 0
+        temas = {}
+        for m in db.memories():
+            temas[m.get("tema") or "sin tema"] = temas.get(m.get("tema") or "sin tema", 0) + 1
+        hechas = [a["question"] for a in db.form_answers()]
+        ctx = (f"Recuerdos por tema: {json.dumps(temas, ensure_ascii=False)}\n"
+               f"Algunos recuerdos: " + "; ".join(m["text"] for m in db.memories()[-20:] if m["tier"] == "claude") +
+               "\nYa preguntado:\n" + "\n".join(hechas[-80:]))
+        try:
+            text, _device = local_complete(PREGUNTADOR, [{"role": "user", "content": ctx[:conv.EXTRACT_CHARS]}])
+        except LocalUnavailable:
+            return 0
+        known = {q.strip().lower() for q in hechas}
+        added = 0
+        for ln in text.splitlines():
+            head, _, body = ln.strip().partition(":")
+            body = body.strip()
+            if head.strip().upper() != "PREGUNTA" or not (5 <= len(body) <= 200) or body.lower() in known:
+                continue
+            if health_split(body)[1]:
+                continue
+            db.form_put(f"ashur-{int(clock())}-{added}", "ashur", body, None, clock() + added * 0.001, "ashur")
+            known.add(body.lower())
+            added += 1
+            if added == 3:
+                break
+        db.set_setting("preguntas_dia", day)
+        return added
+
+    app.state.preguntas_due = preguntas_due
+
+    def learning_tick() -> None:
+        """At most one local learning job per sweep tick, so the sweep never waits on several model calls in a row
+        and Sergio's live local chat keeps the node: close+learn a conversation, else the archive, else an imported
+        chat, else the form, else Ashur's daily questions."""
+        conversations_close_idle()
+        for job in ("conversations_due", "archive_due", "import_due", "form_due", "preguntas_due"):
+            if getattr(app.state, job)():
+                return
+
+    app.state.learning_tick = learning_tick
+
     @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
     def conversation_archive():
         return archive_progress() or {}
@@ -2562,7 +2771,8 @@ def create_app(
         start = month_start(clock())
         return [{**g, "is_self": bool(g["is_self"]),
                  "spent_usd": None if g["is_self"] else round(db.spent_since(start, f"g{g['id']}"), 4),
-                 "temas": db.guest_temas(g["id"]), "perfil": len(db.memories_of(f"g{g['id']}"))}
+                 "temas": db.guest_temas(g["id"]), "perfil": len(db.memories_of(f"g{g['id']}")),
+                 "estilo": db.guest_estilo(g["id"])}
                 for g in db.guests()]
 
     class TemasIn(BaseModel):
@@ -2575,6 +2785,16 @@ def create_app(
         if not db.set_guest_temas(gid, sorted(set(body.temas))):
             raise HTTPException(404, "No existe ese invitado.")
         db.log(clock(), None, "guest_temas", {"guest": gid, "temas": sorted(set(body.temas))})
+        return {"ok": True}
+
+    class EstiloIn(BaseModel):
+        estilo: bool
+
+    @app.put("/api/guests/{gid}/estilo", dependencies=[Depends(require_admin)])
+    def guest_estilo_put(gid: int, body: EstiloIn):
+        if not db.set_guest_estilo(gid, body.estilo):
+            raise HTTPException(404, "No existe ese invitado.")
+        db.log(clock(), None, "guest_estilo", {"guest": gid, "estilo": body.estilo})
         return {"ok": True}
 
     @app.get("/api/guests/{gid}/perfil", dependencies=[Depends(require_admin)])
@@ -4601,6 +4821,12 @@ def create_app(
                                        f"{a.get('invitado', 'invitado')}, conversación {a.get('conv', '?')}, {day}")
                 db.log(clock(), None, "persona_aplicada", {"accion": action})
                 return "approved", "Ashur lo incorporó a su persona."
+            if action == "aprender_import":                  # 0.64.0: Sergio's own lines of an imported chat
+                imp = db.import_get(req["args"].get("import") or -1)
+                if not imp:
+                    return "not_done", "Ese chat ya no existe."
+                db.import_set(imp["id"], approved=clock())
+                return "approved", "Ashur aprenderá de tus mensajes de ese chat por tandas, con el modelo local."
             if action == "aprender_archivo":                 # 0.62.0: the old endless thread, learned once
                 cid = req["args"].get("conversacion")
                 cv = db.conv_get(cid) if isinstance(cid, int) else None

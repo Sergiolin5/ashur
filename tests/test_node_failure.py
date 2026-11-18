@@ -206,3 +206,30 @@ def test_with_one_device_a_unit_still_retries_on_it(tmp_path, fast_local):
     finally:
         node.close()
     assert c.db.encargo_get(eid)["status"] == "kept" and len(node.payloads) == 3
+
+
+def test_a_device_without_the_embedding_model_gets_no_more_embeddings_for_an_hour(tmp_path, fast_local):
+    """2026-11-18: the mac-m1, without bge-m3, failed 68 memory embeddings in a day; each pass handed it another."""
+    import pytest
+    from core.brain import LocalFailed
+    from tests.test_openjarvis_research import FakeToolLLM
+    c = runner_app(tmp_path)
+    mac = FakeLLM(c, lambda p, n: RuntimeError("falta el modelo: ollama pull bge-m3"), device="mac-m1")
+    ryzen = FakeToolLLM(c, lambda p, n: {"vectors": [[0.1, 0.2]] * len(p["embed"])}, device="ryzen9")
+    prefer(c, "mac-m1", 1.0)
+    prefer(c, "ryzen9", 5.0)
+    embed = c.app.state.local_embed
+    try:
+        with pytest.raises(LocalFailed):
+            embed(["hola"])                                       # the mac takes it and says it lacks the model
+        assert embed(["hola"]) == [[0.1, 0.2]] and embed(["chao"]) == [[0.1, 0.2]]
+        assert len(mac.payloads) == 1                             # never again within the hour
+        c.clock.now += 3601
+        for n in (mac, ryzen):                                    # both still alive an hour later
+            c.post(f"/nodes/{n.device}/heartbeat", headers=n.h, json={"mode": "full"})
+        with pytest.raises(LocalFailed):
+            embed(["hola"])                                       # after the hour it is tried again (maybe pulled now)
+    finally:
+        mac.close()
+        ryzen.close()
+    assert [e["node_id"] for e in c.db.log_rows(100) if e["event"] == "embed_sin_modelo"] == ["mac-m1", "mac-m1"]

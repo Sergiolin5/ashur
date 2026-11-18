@@ -277,7 +277,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.67.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.67.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1379,22 +1379,28 @@ def create_app(
 
     app.state.local_vision = local_vision
 
+    # 0.67.2: a device that said it lacks the embedding model gets no embeddings for an hour (the mac-m1 failed 68).
+    EMBED_MISSING_FOR_S = 3600
+    embed_missing: dict = {}
+
     def local_embed(texts: list, timeout_s: Optional[float] = None) -> list:
         """Vectors from a node's Ollama (0.62.0), through the same queue and hand-off as local_complete.
         Raises LocalUnavailable when nobody can do it now; the caller then searches by words."""
         sweep()
-        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
-                 and not is_degraded(n["id"])]
+        able = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
+                and not is_degraded(n["id"])]
+        ready = [n for n in able if embed_missing.get(n["id"], 0) <= clock()]
         if not ready:
             raise NoLocalDevice("Ningún equipo con modelo local está disponible para buscar recuerdos.")
-        target = best_llm_node(ready)
+        stay = len(ready) < len(able)       # a device without the model would claim it after the hand-off
+        target = best_llm_node(ready) or (strongest_llm_node(ready) if stay else None)
         tid = db.add_task("llm", {"embed": [conv.cut(t) for t in texts], "model": conv.EMBED_MODEL},
                           Weight.LIGHT.value, clock(), target=target)
         wait = local_timeout_s if timeout_s is None else timeout_s
         deadline, handoff = time.monotonic() + wait, time.monotonic() + min(10, wait / 2)
         try:
             while time.monotonic() < deadline:
-                if target and time.monotonic() >= handoff:
+                if target and not stay and time.monotonic() >= handoff:
                     db.untarget_if_queued(tid)
                     target = None
                 t = db.get_task(tid)
@@ -1406,6 +1412,9 @@ def create_app(
                     return vectors
                 if t["status"] in ("failed", "cancelled"):
                     err = (t["result"] or {}).get("error") or "sin detalle"
+                    if "falta el modelo" in err and t["node_id"]:
+                        embed_missing[t["node_id"]] = clock() + EMBED_MISSING_FOR_S
+                        db.log(clock(), t["node_id"], "embed_sin_modelo", {"modelo": conv.EMBED_MODEL})
                     raise LocalFailed(f"{t['node_id']}: {err}", t["node_id"])
                 time.sleep(0.05)
             db.cancel_task(tid, "timeout", clock())

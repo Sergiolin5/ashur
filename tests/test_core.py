@@ -1644,3 +1644,12 @@ def test_health_names_the_build_channel(env, monkeypatch):
     assert c.get("/health").json()["channel"] == ""
     monkeypatch.setenv("ASHUR_CHANNEL", "experimental")
     assert c.get("/health").json()["channel"] == "experimental"
+
+
+def test_panel_has_an_app_mode_for_the_ios_app(env):
+    """0.63.2: inside the iOS app the key comes from the app, is never stored, and a 401 goes back to the app."""
+    c, _ = env
+    html = c.get("/").text
+    assert "window.webkit.messageHandlers.ashur" in html and "window.__ASHUR_KEY" in html
+    assert 'tipo: "clave_rechazada"' in html and 'tipo: "abrir"' in html
+    assert "if (!NATIVE) { try { localStorage.setItem(KEY, v)" in html

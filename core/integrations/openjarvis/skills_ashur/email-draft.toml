@@ -1,0 +1,22 @@
+# Ashur's version of OpenJarvis's email-draft (2026-11-18). The bundled one never handed the context or the intent to
+# the step that writes the mail, and its last step returned a review with suggestions instead of the mail.
+[skill]
+name = "email-draft"
+description = "Redacta un correo en español a partir del contexto, la intención y el destinatario (versión de Ashur)"
+version = "1.0.0"
+author = "ashur"
+
+[[skill.steps]]
+tool_name = "think"
+arguments_template = '{"thought": "Analiza este pedido de correo. Contexto: {context}. Intención: {intent}. Destinatario: {recipient}. Di en tres líneas el tono adecuado, los puntos que debe cubrir y qué se busca lograr."}'
+output_key = "analysis"
+
+[[skill.steps]]
+tool_name = "think"
+arguments_template = '{"thought": "Escribe en español el correo completo para {recipient}, con saludo, cuerpo y despedida. Debe cumplir esta intención: {intent}. Usa solo estos datos del contexto, sin inventar otros: {context}. Ten en cuenta este análisis: {analysis}. Devuelve solo el correo."}'
+output_key = "draft"
+
+[[skill.steps]]
+tool_name = "think"
+arguments_template = '{"thought": "Revisa este correo: que cumpla la intención «{intent}», que use solo datos de este contexto «{context}» y que tenga buena ortografía y buen tono. Devuelve solo la versión final del correo, sin comentarios ni sugerencias. Correo: {draft}"}'
+output_key = "final_draft"

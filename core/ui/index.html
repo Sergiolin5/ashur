@@ -173,6 +173,34 @@
   .pres-g { font: 800 26px/1.15 var(--font); letter-spacing: -.015em; color: var(--label); }
   .pres-d { margin-top: 6px; color: var(--secondary); font-size: var(--fs-small); line-height: 1.4; }
   @media (max-width: 380px) { .orb { width: 88px; height: 88px; } .pres-g { font-size: 22px; } }
+  /* 0.68.0: Estado opens on Ashur itself, big and centred; the core beats faster while there is work, and taps lead somewhere */
+  .presence.hero { flex-direction: column; text-align: center; gap: var(--s3); margin: var(--s4) 0 var(--s5); }
+  .hero .orb { width: min(58vw, 232px); height: min(58vw, 232px); padding: 0; border: 0; cursor: pointer; transition: transform .35s var(--ease); }
+  .hero .orb:active { transform: scale(.96); }
+  .hero .orb:focus-visible { outline: 2px solid var(--tint); outline-offset: 6px; }
+  .hero .orb .core { transform-origin: 60px 60px; animation: beat var(--beat, 4s) ease-in-out infinite; }
+  .hero .orb circle.ring { stroke-width: 1.4; }
+  @keyframes beat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+  @media (prefers-reduced-motion: reduce) { .hero .orb .core { animation: none; } }
+  .hero .pres-g { font-size: 24px; }
+  .hero .pres-d { max-width: 34ch; margin-left: auto; margin-right: auto; }
+  .hero .pres-d[hidden] { display: none; }
+  .kpi[data-go] { cursor: pointer; transition: background var(--dur) var(--ease); }
+  .kpi[data-go]:active { background: var(--field); }
+  /* the backup hook, quieter: one line under the strip, its number still red */
+  .hook { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; column-gap: var(--s3); margin: var(--s3) 0 0; }
+  .hook .hk { grid-column: 2; grid-row: 1; font-size: var(--fs-small); color: var(--label); }
+  .hook .hv { grid-column: 1; grid-row: 1 / span 2; margin: 0; font-size: 28px; }
+  .hook .hd { grid-column: 2; grid-row: 2; font-size: var(--fs-meta); color: var(--secondary); }
+  .hook .hgo { grid-column: 3; grid-row: 1 / span 2; align-self: center; margin: 0; font-size: 0; }
+  .hook .hgo::after { content: "›"; font-size: 20px; color: var(--secondary); }
+  /* devices grouped by what they are */
+  .dev-ghead { display: flex; align-items: center; gap: 10px; padding: 10px var(--pad) 6px; color: var(--secondary); font-size: var(--fs-meta); }
+  .dev-ghead svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--tint); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .dev-ghead b { color: var(--label); font-weight: 600; font-size: var(--fs-small); }
+  .dev-ghead span { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .dev-group + .dev-group { border-top: 1px solid var(--separator); }
+  .dev-group .dev { border-top: 1px solid var(--separator); }
   /* the hook: how much of what you own exists only once */
   .hook { display: block; width: 100%; margin: 0 0 var(--s4); padding: var(--s4) var(--pad); text-align: left; border-radius: var(--r-card);
     background: var(--row); border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border)); color: var(--label); font-weight: 400; }
@@ -406,8 +434,10 @@
 
   /* ---- chat ---- */
   #chat { padding-bottom: calc(var(--composer-h, 120px) + 28px); }      /* the writing area is measured, not guessed */
-  .thread { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s4); }
-  .bubble { max-width: 82%; padding: 9px 13px; border-radius: var(--r-bubble); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+  .thread { display: flex; flex-direction: column; gap: 10px; margin-top: var(--s4); padding-bottom: var(--s5); }
+  .bubble.ashur { line-height: 1.5; }
+  .bubble strong { font-weight: 650; } .bubble code { font: .92em var(--mono); background: var(--field); padding: 1px 5px; border-radius: 5px; }
+  .bubble { max-width: 86%; padding: 11px 15px; border-radius: var(--r-bubble); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
   .bubble.me { align-self: flex-end; background: var(--tint); color: var(--on-tint); border-bottom-right-radius: 4px; }
   .bubble.ashur { align-self: flex-start; background: var(--row); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
   .bubble.note { align-self: center; background: none; border: 0; color: var(--secondary); font-size: var(--fs-meta); text-align: center; padding: var(--s1) var(--s2); }
@@ -440,12 +470,23 @@
   /* 0.65.0: Cerebro */
   #cerebro { margin: 0 calc(-1 * var(--s3, 16px)); }
   .cb-top { display: flex; justify-content: space-between; gap: 8px; padding: 0 var(--s3, 16px) 8px; flex-wrap: wrap; }
+  /* 0.68.0: the brain fills the screen; three quiet pills float over it instead of two rows of tabs */
+  #cerebro { position: relative; }
+  .cb-top { position: absolute; top: 10px; left: 0; right: 0; z-index: 2; justify-content: center; padding: 0 var(--s3, 16px); pointer-events: none; flex-wrap: nowrap; }
+  .cb-top .cb-seg { display: none !important; }
+  .cb-pill { pointer-events: auto; width: auto; margin: 0; padding: 7px 14px; border-radius: var(--r-pill, 999px); border: 1px solid rgba(198,194,255,.18);
+             background: rgba(23,21,58,.55); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); color: #d9d7ff; font-size: var(--fs-small, 13px); }
+  .cb-pill:active { background: rgba(88,86,214,.55); }
+  .cb-pill.cb-i { width: 32px; padding: 7px 0; font-style: italic; font-family: Georgia, serif; }
+  .cb-pill[aria-pressed="true"] { background: #5856D6; color: #fff; }
+  #cerebro:not(.ley) .cb-legend { display: none; }
+  #cerebro.ley .cb-count { bottom: 40px; }
   .cb-seg { display: flex; background: var(--row); border-radius: var(--r-pill, 999px); padding: 3px; }
   .cb-seg button { width: auto; margin: 0; padding: 6px 11px; border: 0; border-radius: var(--r-pill, 999px); background: transparent; color: var(--secondary); font-size: var(--fs-small, 13px); }
   .cb-seg button[aria-pressed="true"] { background: #5856D6; color: #fff; }
-  .cb-stage { position: relative; height: calc(100dvh - 300px - var(--safe-b, 0px)); min-height: 340px; background: radial-gradient(ellipse at center, #17153a 0%, #0b0a1f 70%); border-radius: 18px; overflow: hidden; touch-action: none; }
+  .cb-stage { position: relative; height: calc(100dvh - 200px - var(--safe-b, 0px)); min-height: 340px; background: radial-gradient(ellipse at center, #17153a 0%, #0b0a1f 70%); border-radius: 18px; overflow: hidden; touch-action: none; }
   #cb-canvas { width: 100%; height: 100%; display: block; }
-  .cb-count { position: absolute; left: 14px; top: 12px; font-size: 12px; color: #b9b6ea; letter-spacing: .02em; pointer-events: none; }
+  .cb-count { position: absolute; left: 0; right: 0; text-align: center; bottom: 12px; font-size: 12px; color: #b9b6ea; letter-spacing: .02em; pointer-events: none; }
   .cb-legend { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: #9b98c9; pointer-events: none; }
   .cb-legend span::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--c); margin-right: 5px; box-shadow: 0 0 6px var(--c); }
   .cb-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #c9c6f5; font-size: 14px; }
@@ -485,6 +526,14 @@
   .composer .send:disabled svg { stroke: var(--secondary); }
   .composer .mic { background: var(--field); color: var(--label); }
   .composer .send svg, .composer .mic svg { width: 18px; height: 18px; }
+  /* 0.68.0: the writing bar breathes — a translucent shelf, one rounded field holding the mic and the send button */
+  .composer { padding: 10px var(--s3) 10px; background: color-mix(in srgb, var(--bg) 78%, transparent);
+              -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+  .composer form { align-items: flex-end; gap: 0; background: var(--row); border: 1px solid var(--control); border-radius: 24px; padding: 4px; transition: border-color var(--dur) var(--ease); }
+  .composer form:focus-within { border-color: var(--tint); }
+  .composer textarea { background: transparent; border: 0; border-radius: 0; padding: 10px 8px; min-height: 40px; font-size: 16px; line-height: 1.4; outline: none; }
+  .composer .send, .composer .mic { width: 40px; height: 40px; border-radius: 50%; margin: 0; }
+  .composer .mic { background: transparent; color: var(--secondary); }
   .rec { animation: recpulse 1.4s ease-out infinite; background: var(--red) !important; color: #fff !important; }
   @keyframes recpulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 10px transparent; } }
   .spend { margin: 6px 2px 0; color: var(--secondary); font: 12px var(--font); text-align: center; }
@@ -612,7 +661,8 @@
     .composer { bottom: 0; padding-bottom: max(var(--s2), env(safe-area-inset-bottom)); }
 
     #dashboard { display: grid; grid-template-columns: minmax(0, 1fr) 380px; column-gap: 28px; align-items: start;
-                 grid-template-areas: "kpis kpis" "dev work" "dev act" "dev ."; }
+                 grid-template-areas: "hero hero" "kpis kpis" "hook hook" "dev work" "dev act" "dev ."; }
+    .presence.hero { grid-area: hero; } .hook { grid-area: hook; }
     #dashboard section { margin-top: 24px; }
     .kpis { grid-area: kpis; grid-template-columns: repeat(4, 1fr); }
     .kpi { padding: var(--s4) var(--s5); border-bottom: 0 !important; border-right: 1px solid var(--border); }
@@ -747,6 +797,9 @@
 
   <div id="cerebro" hidden>
     <div class="cb-top">
+      <button type="button" class="cb-pill" id="cb-vista" aria-label="Cambiar de vista">Núcleo</button>
+      <button type="button" class="cb-pill" id="cb-filtro" aria-label="Qué mostrar">Todo</button>
+      <button type="button" class="cb-pill cb-i" id="cb-ley" aria-pressed="false" aria-label="Mostrar la leyenda">i</button>
       <div class="cb-seg" role="group" aria-label="Vista"><button type="button" id="cb-nucleo" aria-pressed="true">Núcleo</button><button type="button" id="cb-red" aria-pressed="false">Red</button></div>
       <div class="cb-seg" role="group" aria-label="Filtro" id="cb-filtros"><button type="button" data-f="todo" aria-pressed="true">Todo</button><button type="button" data-f="yo" aria-pressed="false">Tuyos</button><button type="button" data-f="inv" aria-pressed="false">Invitados</button><button type="button" data-f="hoy" aria-pressed="false">Hoy</button></div>
     </div>
@@ -803,9 +856,9 @@
   </div>
 
   <div id="dashboard" hidden>
-    <div class="presence" aria-live="polite">
-      <div class="orb"><svg viewBox="0 0 120 120" id="orb" aria-hidden="true"></svg></div>
-      <div><div class="pres-g" id="pres-g"></div><div class="pres-d" id="pres-d"></div></div>
+    <div class="presence hero" aria-live="polite">
+      <button type="button" class="orb" id="orb-btn" aria-label="Ashur: toca para ver el detalle de los equipos"><svg viewBox="0 0 120 120" id="orb" aria-hidden="true"></svg></button>
+      <div class="pres-txt"><div class="pres-g" id="pres-g"></div><div class="pres-d" id="pres-d"></div></div>
     </div>
     <button type="button" class="hook" id="hook" hidden>
       <div class="hk">Sin respaldo</div>
@@ -814,10 +867,10 @@
       <div class="hgo">Ver qué está en una sola copia ›</div>
     </button>
     <div class="kpis" aria-label="Resumen">
-      <div class="kpi"><div class="k">Trabajando ahora</div><div class="v"><span id="kpi-run">–</span><small>en curso</small></div></div>
-      <div class="kpi"><div class="k">En la fila</div><div class="v"><span id="kpi-queue">–</span><small>esperando</small></div></div>
-      <div class="kpi"><div class="k">Dispositivos conectados</div><div class="v" id="kpi-online">–</div></div>
-      <div class="kpi"><div class="k">Inventario</div><div class="v"><span id="kpi-inv">–</span><small id="kpi-inv-b"></small></div></div>
+      <div class="kpi" data-go="s-work"><div class="k">Trabajando ahora</div><div class="v"><span id="kpi-run">–</span><small>en curso</small></div></div>
+      <div class="kpi" data-go="s-work"><div class="k">En la fila</div><div class="v"><span id="kpi-queue">–</span><small>esperando</small></div></div>
+      <div class="kpi" data-go="s-dev"><div class="k">Equipos</div><div class="v" id="kpi-online">–</div></div>
+      <div class="kpi" data-go="s-dev"><div class="k">Inventario</div><div class="v"><span id="kpi-inv">–</span><small id="kpi-inv-b"></small></div></div>
     </div>
 
     <section class="s-work">
@@ -1463,6 +1516,35 @@
     }
   }
 
+  // 0.68.0: devices grouped by what they are, each group under its own icon
+  const KINDS = [
+    ["servidor", "Servidor", "Servidores", '<rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/><path d="M8 6.5h.01M8 17.5h.01"/>'],
+    ["escritorio", "Escritorio", "Escritorios", '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/>'],
+    ["portatil", "Portátil", "Portátiles", '<rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M3 19h18"/>'],
+    ["mano", "Consola de mano", "Consolas de mano", '<rect x="2" y="7" width="20" height="10" rx="3"/><rect x="8" y="9" width="8" height="6" rx="1"/><path d="M5 12h1M18.5 11v2"/>'],
+    ["telefono", "Teléfono", "Teléfonos", '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>'],
+  ];
+  function devKind(n) {
+    const id = String(n.device_id || "").toLowerCase();
+    if (/iphone|ipad|phone|ios/.test(id) || n.os === "ios") return "telefono";
+    if (/legion|steam|deck|ally|\bgo\b/.test(id)) return "mano";
+    if (/zima|server|servidor|nas/.test(id) || n.os === "linux") return "servidor";
+    if (n.os === "macos" || /mac|book|laptop/.test(id)) return "portatil";
+    return "escritorio";
+  }
+  function groupDevices(nodes, block) {
+    const NS = "http://www.w3.org/2000/svg";
+    return KINDS.map(([k, label, plural, icon]) => {
+      const mine = nodes.filter((n) => devKind(n) === k);
+      if (!mine.length) return null;
+      const g = el("div", "dev-group"), h = el("div", "dev-ghead"), svg = document.createElementNS(NS, "svg");
+      svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true"); svg.innerHTML = icon;   // fixed markup, no data
+      const on = mine.filter((n) => n.mode !== "offline").length;
+      h.append(svg, el("b", null, mine.length > 1 ? plural : label), el("span", null, on + " de " + mine.length + " en línea"));
+      g.append(h, ...mine.map(block));
+      return g;
+    }).filter(Boolean);
+  }
   // where an activity line leads: its page, or the device it happened on
   function whereOf(ev) {
     const e = ev.event, d = ev.detail || {};
@@ -1601,15 +1683,23 @@
     const sorted = [...nodes].sort((a, b) => (a.mode === "offline") - (b.mode === "offline"));
     const on = sorted.filter((n) => n.mode !== "offline");
     drawOrb($("orb"), sorted.map((n) => n.mode !== "offline"));
+    $("orb").style.setProperty("--beat", (lastRunning > 0 ? Math.max(1.2, 3.2 - .4 * lastRunning) : on.length ? 4.5 : 8) + "s");
     $("pres-g").textContent = (nodes.length ? on.length + " de " + nodes.length + (nodes.length === 1 ? " equipo sumando." : " equipos sumando.") : "Aún no hay equipos.");
     const names = on.map((n) => nm(n.device_id));
     const off = sorted.filter((n) => n.mode === "offline").map((n) => nm(n.device_id));
     $("pres-d").textContent = (names.length ? "Encendidos: " + names.join(", ") + "." : "Ninguno encendido.") + (off.length ? " Sin señal: " + off.join(", ") + "." : "");
   }
   drawOrb($("demo-orb"), [true, true, true, false]);
+  let lastRunning = 0;
+  $("pres-d").hidden = true;                             // the sentence says the count; the names come with a tap on Ashur
+  $("orb-btn").addEventListener("click", () => { const d = $("pres-d"); d.hidden = !d.hidden; });
+  for (const k of document.querySelectorAll(".kpi[data-go]")) k.addEventListener("click", () => {
+    const s = document.querySelector("." + k.dataset.go); if (s) s.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   let lastNodes = null;
   function render(data) {
     const now = data.now;
+    lastRunning = Math.max(data.running.length, data.lote && data.lote.status === "running" ? 1 : 0);
     lastNodes = data.status.nodes; connectTick(); presence(lastNodes);
     const nodes = [...data.status.nodes].sort((a, b) => (a.mode === "offline") - (b.mode === "offline") || a.device_id.localeCompare(b.device_id));
     const byId = Object.fromEntries(nodes.map((n) => [n.device_id, n]));
@@ -1688,7 +1778,7 @@
     qp.onclick = async () => { qp.disabled = true; try { await api("api/queue/pause", { method: "POST", body: JSON.stringify({ paused: !data.queue_paused }) }); } catch (e) {} qp.disabled = false; refresh(); };
 
     // figures strip (G, 0.46.1): what is running, waiting, connected and inventoried, from the same overview
-    $("kpi-run").textContent = nf.format(Math.max(data.running.length, data.lote && data.lote.status === "running" ? 1 : 0));   // a lote between two documents is still work
+    $("kpi-run").textContent = nf.format(lastRunning);   // a lote between two documents is still work
     $("kpi-queue").textContent = nf.format(data.queued.length);
     $("kpi-online").textContent = data.status.online + "/" + nodes.length;
     if (data.inventory === null) { $("kpi-inv").textContent = "…"; $("kpi-inv-b").textContent = "calculando"; }
@@ -1699,7 +1789,7 @@
 
     // devices: one block per machine with its gauges and its inventory; its disks are placed under it (placeDisks)
     const invBy = Object.fromEntries((data.inventory || []).map((i) => [i.node_id, i]));
-    fill("devices", nodes.map((n) => deviceBlock(n, data, invBy)), "Aún no hay dispositivos. Se irán sumando cuando los conectes.");
+    fill("devices", groupDevices(nodes, (n) => deviceBlock(n, data, invBy)), "Aún no hay dispositivos. Se irán sumando cuando los conectes.");
     placeDisks();
     placeConfigs();
 
@@ -2315,6 +2405,14 @@
     $("cb-filtros").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; CB.filtro = b.dataset.f;
       for (const x of $("cb-filtros").querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b)); cbBuild(); });
     $("cb-close").addEventListener("click", () => { CB.sel = -1; $("cb-card").hidden = true; });
+    // the pills drive the original controls, which stay as the single source of state
+    const FL = { todo: "Todo", yo: "Tuyos", inv: "Invitados", hoy: "Hoy" };
+    $("cb-vista").addEventListener("click", () => { const red = CB.mode !== "red"; $(red ? "cb-red" : "cb-nucleo").click(); $("cb-vista").textContent = red ? "Red" : "Núcleo"; });
+    $("cb-filtro").addEventListener("click", () => {
+      const bs = [...$("cb-filtros").querySelectorAll("button")], i = bs.findIndex((b) => b.dataset.f === CB.filtro), nx = bs[(i + 1) % bs.length];
+      nx.click(); $("cb-filtro").textContent = FL[nx.dataset.f] || nx.textContent;
+    });
+    $("cb-ley").addEventListener("click", () => { const on = $("cerebro").classList.toggle("ley"); $("cb-ley").setAttribute("aria-pressed", String(on)); });
     $("cb-mem").addEventListener("click", () => { showTab("settings"); showPage("memory"); });
     CB.ready = true;
     return true;

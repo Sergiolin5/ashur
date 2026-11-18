@@ -116,8 +116,11 @@ SECRET_WORDS = re.compile(r"(api[_ ]?key|password|contraseña|token|sk-ant-|enro
 
 SEEDS = Path(__file__).parent / "persona"                     # default.md seeds persona.md once; guest.md is what guests get
 SOURCE_LINE = re.compile(r"^\s*>")                            # «> fuente: …» under a trait: for Sergio, never in a prompt
-DRAFT = re.compile(r"escr[ií]be(le|me|les)|redact|resp[oó]nde(le|les)?\s+a\b|mensaje para|borrador", re.I)   # 0.64.0
+DRAFT = re.compile(r"\b(escr[ií]b(ele|eme|eles|e\s+(a|un|una|algo)\b)|red[aá]ct|cont[eé]st(a|ale|ame|ales|arle)\b|"
+                   r"responder(le|les)\b|resp[oó]nde(le|les)\b|respondo\s+a\b|mensaje\s+para\s+(?!m[ií]\b)|"
+                   r"borrador\s+(de|para)\b|hazme\s+un\s+borrador)", re.I)   # 0.64.0: a request to draft for him
 ESTILO_MAX_CHARS = 1500
+EXAMPLE_SECRET = re.compile(r"\b(clave|contraseña|password|pin|c[oó]digo de verificaci[oó]n|usuario y clave|token)\b", re.I)
 ESTILO_HEADERS = {
     "redactar": "Cuando redactes algo para que Sergio lo envíe, escribe como él. Así escribe:",
     "intermedio": "Toma algo de la forma de escribir de Sergio (largo, muletillas, risa), sin dejar de ser tú:",
@@ -310,8 +313,9 @@ class Brain:
             m = {}
         if not m.get("n"):
             return ""
-        mine = self.db.imported_mine()
-        vectors = self.db.imported_vectors(conv.EMBED_MODEL)
+        if para == "invitado":                          # a guest gets how he writes, never his real messages
+            return "\n".join([ESTILO_HEADERS[para], estilo_mod.describir(m)])[:ESTILO_MAX_CHARS]
+        mine, vectors = self._imported_cache()
         if qvec is not None and vectors:
             ranked = sorted((m2 for m2 in mine if m2["id"] in vectors),
                             key=lambda x: -conv.cosine(qvec, vectors[x["id"]]))
@@ -320,6 +324,8 @@ class Brain:
             ranked = sorted(mine, key=lambda x: (-len(q & conv._words(x["text"])), -x["id"]))
         out = [ESTILO_HEADERS[para], estilo_mod.describir(m), "Mensajes suyos:"]
         size = sum(len(x) + 1 for x in out)
+        ranked = [x for x in ranked if not (health_split(x["text"])[1] or looks_like_secret(x["text"])
+                                            or DIARY_SECRET.search(x["text"]) or EXAMPLE_SECRET.search(x["text"]))]
         for ex in ranked[:5]:
             line = "- " + ex["text"].replace("\n", " / ")[:240]
             if local:
@@ -331,6 +337,15 @@ class Brain:
             out.append(line)
             size += len(line) + 1
         return "\n".join(out)[:ESTILO_MAX_CHARS]
+
+    def _imported_cache(self) -> tuple:
+        """Sergio's imported messages and their vectors, kept in memory until a count changes (an import, a delete,
+        a new batch of vectors), so a chat message never reloads every blob."""
+        key = self.db.imported_counts(conv.EMBED_MODEL)
+        cached = getattr(self, "_imp", None)
+        if not cached or cached[0] != key:
+            self._imp = (key, self.db.imported_mine(), self.db.imported_vectors(conv.EMBED_MODEL))
+        return self._imp[1], self._imp[2]
 
     def _estilo_for_sergio(self, local: bool) -> str:
         query = getattr(self._recall, "query", None)

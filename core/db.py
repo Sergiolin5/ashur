@@ -2418,6 +2418,13 @@ class DB:
                               (message_id, model, dim, vec, message_id))
             self.conn.commit()
 
+    def imported_counts(self, model: str) -> tuple[int, int]:
+        """(Sergio's imported messages, how many of them have a vector): cheap, to know when a cache is stale."""
+        with self.lock:
+            mine = self.conn.execute("SELECT COUNT(*) FROM imported_messages WHERE is_me = 1").fetchone()[0]
+            vec = self.conn.execute("SELECT COUNT(*) FROM imported_vectors WHERE model = ?", (model,)).fetchone()[0]
+        return int(mine), int(vec)
+
     def imported_vectors(self, model: str) -> dict:
         with self.lock:
             rows = self.conn.execute("SELECT message_id, vec FROM imported_vectors WHERE model = ?", (model,)).fetchall()

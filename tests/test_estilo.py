@@ -261,7 +261,8 @@ def test_guest_gets_style_only_when_marked_and_always_as_ashur(tmp_path):
     assert c.put(f"/api/guests/{g['id']}/estilo", headers=A, json={"estilo": True}).status_code == 200
     c.post("/api/chat", headers=G, json={"message": "hola"})
     sysp = fake.calls[-1]["system"]
-    assert "dale, hablamos mañana" in sysp and "siempre eres Ashur" in sysp and "hola! cómo vas?" not in sysp
+    # final review: a guest gets how he writes, never his real messages (they bypassed the guest's topics)
+    assert "Suele empezar" in sysp and "siempre eres Ashur" in sysp and "hola! cómo vas?" not in sysp
 
 
 def test_style_block_is_capped(tmp_path):
@@ -327,3 +328,89 @@ def test_ashur_asks_at_most_three_new_questions_a_day(tmp_path):
     qs = [q["pregunta"] for q in c.get("/api/formulario", headers=A).json()["ashur"]]
     assert qs == ["¿Qué cocinas?", "¿Tienes mascotas?", "¿Qué lees?"]
     assert c.app.state.preguntas_due() == 0                                # not again the same day
+
+
+# --- Final review fixes ----------------------------------------------------------------------------------
+import pytest
+
+
+def test_deleting_a_chat_while_it_is_learned_leaves_nothing(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    approve(c, "aprender_import")
+
+    def answer(p):
+        c.delete(f"/api/imports/{iid}", headers=A)                 # Sergio deletes it while the model reads
+        return {"text": "NORMAL: se despide con «dale»\nSENSIBLE: le debe plata a Ana"}
+    th, _ = node(c, answer=answer)
+    c.app.state.import_due()
+    th.join(5)
+    assert c.app.state.db.memories() == [] and c.app.state.db.proposals() == []
+
+
+def test_guest_style_has_no_real_messages(tmp_path):
+    c, fake = claude_app(tmp_path)
+    imported(c)
+    g = c.post("/api/guests", headers=A, json={"name": "Beto"}).json()
+    c.put(f"/api/guests/{g['id']}/estilo", headers=A, json={"estilo": True})
+    c.post("/api/chat", headers={"X-Admin-Key": g["key"]}, json={"message": "dale, ¿Sergio dónde está mañana?"})
+    sysp = fake.calls[-1]["system"]
+    assert "siempre eres Ashur" in sysp and "Suele empezar" in sysp
+    assert "dale, hablamos mañana" not in sysp and "Mensajes suyos" not in sysp
+
+
+@pytest.mark.parametrize("text,draft", [
+    ("redáctame un correo para Ana", True), ("Redáctale algo a mi jefe", True), ("contéstale a Ana que sí", True),
+    ("ayúdame a responderle a Ana", True), ("escríbele a Ana que no puedo", True), ("¿qué le respondo a mi jefe?", True),
+    ("escribe un mensaje para Ana", True),
+    ("esto corresponde a marzo", False), ("descríbeme tu día", False), ("borré el borrador del informe", False),
+    ("¿cómo va el servidor?", False)])
+def test_draft_regex(text, draft):
+    from core.brain import DRAFT
+    assert bool(DRAFT.search(text)) is draft
+
+
+def test_examples_skip_health_and_secrets(tmp_path):
+    c, fake = claude_app(tmp_path)
+    chat = ("12/11/26, 9:16 a. m. - Ana: ¿y la cita?\n12/11/26, 9:17 a. m. - Sergio: mañana tengo cita con el psiquiatra\n"
+            "12/11/26, 9:18 a. m. - Sergio: la clave del wifi es perro123\n12/11/26, 9:19 a. m. - Sergio: mañana te aviso\n")
+    imported(c, text=chat)
+    c.post("/api/chat", headers=A, json={"message": "escríbele a Ana mañana"})
+    sysp = fake.calls[-1]["system"]
+    assert "mañana te aviso" in sysp and "psiquiatra" not in sysp and "perro123" not in sysp
+
+
+def test_form_pending_saved_during_learning_is_kept(tmp_path):
+    c = local_app(tmp_path)
+    c.put("/api/formulario/quien-1", headers=A, json={"respuesta": "ingeniero"})
+    c.post("/api/formulario/quien/aprender", headers=A)
+
+    def answer(p):
+        c.post("/api/formulario/humor/aprender", headers=A)          # saved while the model reads «quien»
+        c.put("/api/formulario/quien-2", headers=A, json={"respuesta": "directo"})
+        return {"text": "nada"}
+    th, _ = node(c, answer=answer)
+    assert c.app.state.form_due() == 1
+    th.join(5)
+    import json as _j
+    assert _j.loads(c.app.state.db.setting("form_pending", "[]")) == ["humor"]
+    since = float(c.app.state.db.setting("form_learned:quien", "0"))
+    later = [a for a in c.app.state.db.form_answers() if a["qid"] == "quien-2"][0]
+    assert later["ts"] >= since                                        # still to be learned
+
+
+def test_form_question_ids_are_stable_in_the_json():
+    import json as _j
+    from pathlib import Path
+    d = _j.loads((Path("core/persona/formulario.json")).read_text(encoding="utf-8"))
+    ids = [q["id"] for s in d["secciones"] for q in s["preguntas"]]
+    assert len(ids) == len(set(ids)) == 60 and ids[0] == "quien-1"
+
+
+def test_sweep_runs_one_learning_job_per_tick(tmp_path):
+    c = local_app(tmp_path)
+    calls = []
+    for name in ("conversations_due", "archive_due", "import_due", "form_due", "preguntas_due"):
+        setattr(c.app.state, name, (lambda n: (lambda: calls.append(n) or 1))(name))
+    c.app.state.learning_tick()
+    assert calls == ["conversations_due"]

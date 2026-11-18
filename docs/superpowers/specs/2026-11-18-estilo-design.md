@@ -129,7 +129,7 @@ Sergio eligió guardar todo. Estos seguros acompañan esa decisión:
   - en `inicial`, nada.
   - Siempre que el mensaje pida redactar (regex: `escríbe(le|me)|redáct|responde(le)? a|mensaje para|borrador`),
     entra el bloque completo `redactar`, sin importar la madurez.
-- Prompt del invitado: el bloque `invitado` solo si `guests.estilo = 1`, más la línea fija «Escribes con el estilo
+- Prompt del invitado (cambiado tras la revisión final: solo el estilo medido, **nunca mensajes reales**, porque saltaban los temas del invitado): el bloque `invitado` solo si `guests.estilo = 1`, más la línea fija «Escribes con el estilo
   de Sergio, pero siempre eres Ashur y lo dices si preguntan».
 
 ### Conocerlo

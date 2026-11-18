@@ -253,11 +253,7 @@ def create_app(
                         app.state.propose_due()
                         app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
                         app.state.tema_due()                      # 0.63.0: memories without a topic, one batch
-                        app.state.conversations_due()             # 0.62.0: close idle ones, learn from one
-                        app.state.archive_due()                   # 0.62.0: the old thread, one batch, if approved
-                        app.state.import_due()                    # 0.64.0: an approved imported chat, one batch
-                        app.state.form_due()                      # 0.64.0: a saved section of the form
-                        app.state.preguntas_due()                 # 0.64.0: Ashur's questions, once a day
+                        app.state.learning_tick()                 # 0.62–0.64: one local learning job per tick
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -2486,7 +2482,7 @@ def create_app(
     @app.get("/api/estilo", dependencies=[Depends(require_admin)])
     def estilo_get():
         m = estilo_medidas()
-        done = len(db.imported_vectors(conv.EMBED_MODEL))
+        done = db.imported_counts(conv.EMBED_MODEL)[1]
         return {"medidas": m, "texto": estilo_mod.describir(m), "imports": db.imports(),
                 "ejemplos": {"listos": done, "total": m.get("n", 0)}}
 
@@ -2515,6 +2511,8 @@ def create_app(
                 text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": piece}])
             except LocalUnavailable:
                 return 0
+            if not db.import_get(imp["id"]):            # deleted while the model read it: nothing of it stays
+                return 0
             got = brain.learn_lines(text, f"import:{imp['id']}")
             db.import_set(imp["id"], cursor=last)
             if n == len(rest) and not db.imported_mine(imp["id"], after_id=last, limit=1):
@@ -2528,7 +2526,7 @@ def create_app(
 
     # the long form: questions in core/persona/formulario.json, answers in form_answers ----------------------------
     FORM = json.loads((Path(__file__).parent / "persona" / "formulario.json").read_text(encoding="utf-8"))
-    FORM_Q = {f"{s['id']}-{i}": (s["id"], q) for s in FORM["secciones"] for i, q in enumerate(s["preguntas"], 1)}
+    FORM_Q = {q["id"]: (s["id"], q["texto"]) for s in FORM["secciones"] for q in s["preguntas"]}   # ids fixed in the JSON
 
     class FormIn(BaseModel):
         respuesta: str = Field(max_length=4000)
@@ -2538,8 +2536,8 @@ def create_app(
         ans = {a["qid"]: a for a in db.form_answers()}
         secs = []
         for s in FORM["secciones"]:
-            qs = [{"id": f"{s['id']}-{i}", "pregunta": q, "respuesta": (ans.get(f"{s['id']}-{i}") or {}).get("answer")}
-                  for i, q in enumerate(s["preguntas"], 1)]
+            qs = [{"id": q["id"], "pregunta": q["texto"], "respuesta": (ans.get(q["id"]) or {}).get("answer")}
+                  for q in s["preguntas"]]
             secs.append({"id": s["id"], "titulo": s["titulo"], "preguntas": qs,
                          "respondidas": sum(1 for q in qs if q["respuesta"])})
         ashur = [{"id": a["qid"], "pregunta": a["question"], "respuesta": a["answer"]}
@@ -2576,7 +2574,7 @@ def create_app(
         if not pend:
             return 0
         section = pend[0]
-        since = float(db.setting(f"form_learned:{section}", "0"))
+        since, started = float(db.setting(f"form_learned:{section}", "0")), clock()
         rows = [a for a in db.form_answers() if a["section"] == section and a["answer"] and a["ts"] > since]
         if rows:
             text_in = "\n".join(f"Pregunta: {a['question']}\nSergio: {a['answer']}" for a in rows)
@@ -2585,8 +2583,9 @@ def create_app(
             except LocalUnavailable:
                 return 0
             brain.learn_lines(text, "form")
-        db.set_setting(f"form_learned:{section}", str(clock()))
-        db.set_setting("form_pending", json.dumps(pend[1:]))
+        db.set_setting(f"form_learned:{section}", str(started))   # an answer edited meanwhile is still newer
+        now_pend = json.loads(db.setting("form_pending", "[]"))     # a section saved meanwhile stays pending
+        db.set_setting("form_pending", json.dumps([x for x in now_pend if x != section]))
         return 1
 
     app.state.form_due = form_due
@@ -2629,6 +2628,17 @@ def create_app(
         return added
 
     app.state.preguntas_due = preguntas_due
+
+    def learning_tick() -> None:
+        """At most one local learning job per sweep tick, so the sweep never waits on several model calls in a row
+        and Sergio's live local chat keeps the node: close+learn a conversation, else the archive, else an imported
+        chat, else the form, else Ashur's daily questions."""
+        conversations_close_idle()
+        for job in ("conversations_due", "archive_due", "import_due", "form_due", "preguntas_due"):
+            if getattr(app.state, job)():
+                return
+
+    app.state.learning_tick = learning_tick
 
     @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
     def conversation_archive():

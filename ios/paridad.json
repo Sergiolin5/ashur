@@ -11,15 +11,15 @@
   },
   "chat": {
    "estado": "nativo",
-   "nota": "el chat nativo de etapa 3"
+   "nota": "con conversaciones (0.62): nueva, lista, retomar, archivo; compartir documentos/diario; dictado y voz del iPhone; sin foto ni elegir persona (usa la del iPhone)"
   },
   "diary": {
    "estado": "nativo",
    "nota": "dictado con el reconocedor del iPhone (decisión 2026-11-12), no con el nodo; los avisos siguen llegando por la app del panel (Web Push)"
   },
   "settings": {
-   "estado": "parcial",
-   "nota": "menú nativo; páginas nativas en paginas"
+   "estado": "nativo",
+   "nota": "las 17 páginas nativas"
   },
   "status": {
    "estado": "parcial",
@@ -116,10 +116,10 @@
    "estado": "nativo"
   },
   "api/conversations": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/conversations/archivo": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/diagnostics": {
    "estado": "nativo"
@@ -251,16 +251,20 @@
    "estado": "nativo"
   },
   "api/push/check": {
-   "estado": "web"
+   "estado": "web",
+   "nota": "Web Push: los avisos llegan por la app del panel en la pantalla de inicio; la app nativa no recibe avisos (haría falta APNs y cuenta de desarrollador paga)"
   },
   "api/push/key": {
-   "estado": "web"
+   "estado": "web",
+   "nota": "Web Push: los avisos llegan por la app del panel en la pantalla de inicio; la app nativa no recibe avisos (haría falta APNs y cuenta de desarrollador paga)"
   },
   "api/push/subscribe": {
-   "estado": "web"
+   "estado": "web",
+   "nota": "Web Push: los avisos llegan por la app del panel en la pantalla de inicio; la app nativa no recibe avisos (haría falta APNs y cuenta de desarrollador paga)"
   },
   "api/push/test": {
-   "estado": "web"
+   "estado": "web",
+   "nota": "Web Push: los avisos llegan por la app del panel en la pantalla de inicio; la app nativa no recibe avisos (haría falta APNs y cuenta de desarrollador paga)"
   },
   "api/queue/pause": {
    "estado": "nativo"

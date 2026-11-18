@@ -4,6 +4,7 @@ struct ChatView: View {
     @Bindable var model: ChatModel
     @Environment(Session.self) private var session
     @FocusState private var focused: Bool
+    @State private var verConversaciones = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -45,13 +46,20 @@ struct ChatView: View {
         .navigationTitle("Ashur")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Conversaciones", systemImage: "list.bullet") { verConversaciones = true }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("＋ Nueva") { model.nueva() }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Toggle("Leer respuestas en voz alta", systemImage: "speaker.wave.2",
                            isOn: Binding(get: { model.speaker.readAloud }, set: { model.speaker.readAloud = $0 }))
-                    Button("Recargar historial", systemImage: "arrow.clockwise") {
-                        Task { await model.loadHistory() }
-                    }
+                    Toggle("Compartir documentos con Claude en este mensaje", systemImage: "doc.text",
+                           isOn: Binding(get: { model.compartirDocs }, set: { model.compartirDocs = $0 }))
+                    Toggle("Compartir el diario con Claude en este mensaje", systemImage: "book",
+                           isOn: Binding(get: { model.compartirDiario }, set: { model.compartirDiario = $0 }))
                     Button("Olvidar la clave", systemImage: "key.slash", role: .destructive) {
                         session.forgetKey()
                     }
@@ -66,6 +74,9 @@ struct ChatView: View {
             Text(model.error ?? "")
         }
         .task { if model.lines.isEmpty { await model.loadHistory() } }
+        .sheet(isPresented: $verConversaciones) {
+            ListaConversaciones(model: model) { verConversaciones = false }
+        }
     }
 
     private var composer: some View {
@@ -159,5 +170,48 @@ private struct ApprovalCard: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+
+/// La lista de conversaciones (0.62, como el panel): Hoy, Ayer, Anteriores y el Archivo; tocar una la retoma.
+private struct ListaConversaciones: View {
+    let model: ChatModel
+    let cerrar: () -> Void
+    @State private var lista: [Conversacion] = []
+    @State private var archivo: Archivo?
+    @State private var cargado = false
+
+    private func grupo(_ c: Conversacion) -> String {
+        if c.archived == true { return "Archivo" }
+        let cal = Calendar.current, d = Date(timeIntervalSince1970: c.last_msg ?? c.started)
+        if cal.isDateInToday(d) { return "Hoy" }
+        if cal.isDateInYesterday(d) { return "Ayer" }
+        return "Anteriores"
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let a = archivo, (a.total ?? 0) > 0, a.terminado != true, a.aprobado == true {
+                    Text("Aprendiendo del archivo: \(a.done ?? 0) de \(a.total ?? 0) mensajes").font(.caption).foregroundStyle(.secondary)
+                }
+                if cargado && lista.isEmpty { Text("Todavía no hay conversaciones.") }
+                let grupos = lista.reduce(into: [String]()) { if $0.last != grupo($1) { $0.append(grupo($1)) } }
+                ForEach(grupos, id: \.self) { g in
+                    Section(g) {
+                        ForEach(lista.filter { grupo($0) == g }) { c in
+                            Button(c.title ?? Date(timeIntervalSince1970: c.started).formatted(.dateTime.day().month(.abbreviated).hour().minute())) {
+                                Task { await model.abrir(c.id); cerrar() }
+                            }
+                            .fontWeight(c.id == model.convId ? .semibold : .regular)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Conversaciones").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cerrar", action: cerrar) } }
+            .task { (lista, archivo) = await model.conversaciones(); cargado = true }
+        }
     }
 }

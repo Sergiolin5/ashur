@@ -123,13 +123,19 @@ struct MapaView: View {
     }
 
     private func mudanza(_ m: Mudanza) -> some View {
-        let prog = ["en_curso", "hecha", "fallida"].contains(m.estado) && (m.files ?? 0) > 0
-            ? " · \(Textos.n(m.done_files ?? 0)) de \(Textos.n(m.files ?? 0)) archivos (\(Textos.bytes(m.done_bytes ?? 0)))" : ""
+        let archivos: Int = m.files ?? 0
+        var prog = ""
+        if ["en_curso", "hecha", "fallida"].contains(m.estado) && archivos > 0 {
+            prog = " · " + Textos.n(m.done_files ?? 0) + " de " + Textos.n(archivos) + " archivos (" + Textos.bytes(m.done_bytes ?? 0) + ")"
+        }
+        let modo: String = m.modo == "mover" ? "mover" : "copiar"
+        let cuantos: String = Textos.n(archivos) + (archivos == 1 ? " archivo" : " archivos")
+        let estado: String = Self.estadoMudanza[m.estado] ?? m.estado
+        let error: String = m.error.map { " · " + $0 } ?? ""
+        let linea: String = modo + " · " + cuantos + " · → " + (m.dest ?? "") + " · " + estado + prog + error
         return VStack(alignment: .leading, spacing: 4) {
             HStack { Text("\(m.node_id)  \(m.path)").lineLimit(2); Spacer(); Text(Textos.bytes(m.bytes ?? 0)).font(.caption) }
-            Text((m.modo == "mover" ? "mover" : "copiar") + " · \(Textos.n(m.files ?? 0)) " + ((m.files ?? 0) == 1 ? "archivo" : "archivos")
-                 + " · → \(m.dest ?? "") · " + (Self.estadoMudanza[m.estado] ?? m.estado) + prog + (m.error.map { " · " + $0 } ?? ""))
-                .font(.caption).foregroundStyle(.secondary)
+            Text(linea).font(.caption).foregroundStyle(.secondary)
             HStack {
                 if m.estado == "propuesta" { DosToques(titulo: "Aprobar", armado: "¿Seguro?") { await accionMudanza(m.id, "aprobar") } }
                 if m.estado == "propuesta" || m.estado == "aprobada" { DosToques(titulo: "Cancelar", armado: "¿Seguro?", rol: .destructive) { await accionMudanza(m.id, "cancelar") } }

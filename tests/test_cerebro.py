@@ -22,6 +22,8 @@ class FakeClaude:
 
 
 def app(tmp_path):
+    from core import cerebro
+    cerebro._sim_cache.clear()                            # each test starts from a cold similarity cache
     fake = FakeClaude()
     clock = VirtualClock()
     a = create_app(str(tmp_path / "c.db"), "e", "a", clock=clock, sweep_every_s=None,
@@ -159,3 +161,38 @@ def test_revoked_guest_leaves_no_dangling_edges(tmp_path):
     d = c.get("/api/cerebro", headers=A).json()
     ids = {n["id"] for n in d["nodos"]}
     assert all(a in ids and b in ids for a, b, _ in d["aristas"])
+
+
+# --- Final review fixes -------------------------------------------------------------------------------------
+def test_three_passes_the_public_door(tmp_path):
+    a = create_app(str(tmp_path / "p.db"), "e", "a", sweep_every_s=None, public_port=80)
+    c = TestClient(a)
+    assert c.get("/vendor/three.min.js").status_code == 200
+    assert c.get("/vendor/otra.js").status_code == 404
+
+
+def test_similarity_follows_a_changed_vector(tmp_path):
+    from core import cerebro
+    cerebro._sim_cache.clear()
+    v = {1: conv.pack([1, 0, 0]), 2: conv.pack([0.99, 0.05, 0]), 3: conv.pack([0, 0, 1])}
+    assert ("m1", "m2", "parecido") in cerebro.similar_edges(v, {1, 2, 3})
+    v[2] = conv.pack([0, 0.05, 0.99])                     # memory 2 corrected and re-embedded, same id
+    e = cerebro.similar_edges(v, {1, 2, 3})
+    assert ("m2", "m3", "parecido") in e and ("m1", "m2", "parecido") not in e
+
+
+def test_similarity_cache_is_safe_under_threads(tmp_path):
+    import random
+    from core import cerebro
+    cerebro._sim_cache.clear()
+    random.seed(2)
+    v = {i: conv.pack([random.gauss(0, 1) for _ in range(64)]) for i in range(1, 400)}
+    outs = []
+    th = [threading.Thread(target=lambda: outs.append(cerebro.similar_edges(v, set(v)))) for _ in range(4)]
+    for t in th:
+        t.start()
+    for t in th:
+        t.join()
+    for lst in cerebro._sim_cache["best"].values():
+        assert len({j for _, j in lst}) == len(lst)        # no neighbour twice
+    assert all(o == outs[0] for o in outs)

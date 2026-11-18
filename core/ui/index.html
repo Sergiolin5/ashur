@@ -1965,7 +1965,8 @@
     camReset();                                               // cameras: player, peer, timers and the video session end with it
     clearTimeout(epTimer); epOpen = false; epReq++; $("casa-energia").hidden = true; $("casa-main").hidden = false;   // energía too
     try { localStorage.removeItem(KEY); } catch (e) {}
-    for (const id of ["dashboard", "settings", "chat", "diary", "casa", "tabs", "composer", "guest-signout", "greet", "inbox-pill"]) $(id).hidden = true;
+    for (const id of ["dashboard", "settings", "chat", "diary", "casa", "cerebro", "tabs", "composer", "guest-signout", "greet", "inbox-pill"]) $(id).hidden = true;
+    cerebroShow(false); CB.data = null; CB.nodes = null; CB.hasta = null; $("cb-card").hidden = true;   // nothing of the brain outlives the session
     $("thread").replaceChildren(); lastDay = null;
     if (NATIVE) {                                             // the app asks for the key, not the panel
       $("signin").hidden = true; $("demo").hidden = true;
@@ -2079,16 +2080,22 @@
     if (!on) { clearInterval(CB.poll); CB.poll = null; cancelAnimationFrame(CB.raf); return; }
     cbStart();
   }
-  document.addEventListener("visibilitychange", () => { if (CB.on) { if (document.hidden) cerebroShow(false); else { CB.on = true; cbStart(); } } });
+  document.addEventListener("visibilitychange", () => {   // stop when the phone locks; resume if the tab is still the one shown
+    if (document.hidden) { if (CB.on) cerebroShow(false); }
+    else if (document.body.dataset.tab === "cerebro" && key && role === "admin") cerebroShow(true);
+  });
   async function cbStart() {
     const msg = $("cb-msg");
     if (!CB.three) {
-      try { CB.three = await import(new URL("vendor/three.min.js", location.href).href); }
+      try { CB.three = await import(new URL("vendor/three.min.js?v=0.187.0", location.href).href); }
       catch (e) { msg.hidden = false; msg.textContent = "No pude cargar el motor 3D del cerebro."; return; }
     }
+    if (!CB.on) return;
     if (!CB.ready && !cbInit()) return;
     await cbLoad();
+    if (!CB.on) return;
     if (CB.hasta === null) { try { CB.hasta = (await (await api("api/cerebro/actividad")).json()).hasta; } catch (e) {} }
+    if (!CB.on) return;
     clearInterval(CB.poll); CB.poll = setInterval(cbActivity, 2000);
     cancelAnimationFrame(CB.raf); CB.raf = requestAnimationFrame(cbFrame);
   }
@@ -2146,7 +2153,15 @@
   }
   function cbMode(m) { CB.mode = m; $("cb-nucleo").setAttribute("aria-pressed", String(m === "nucleo")); $("cb-red").setAttribute("aria-pressed", String(m === "red")); CB.settle = 0; cbTargets(); }
   async function cbLoad() {
-    try { const r = await api("api/cerebro"); if (!r.ok) return; CB.data = await r.json(); cbBuild(); } catch (e) {}
+    const m = $("cb-msg");
+    if (!CB.data) { m.hidden = false; m.textContent = "Cargando el cerebro…"; }
+    try {
+      const r = await api("api/cerebro");
+      if (!r.ok) throw new Error(String(r.status));
+      CB.data = await r.json(); cbBuild();
+    } catch (e) {
+      if (!CB.data) { m.hidden = false; m.textContent = "No pude cargar el cerebro. Lo intento de nuevo en unos segundos."; setTimeout(() => { if (CB.on && !CB.data) cbLoad(); }, 5000); }
+    }
   }
   function cbVisible(n) {
     const f = CB.filtro;
@@ -2273,6 +2288,7 @@
   function cbPick(e) {
     const T = CB.three, r = $("cb-stage").getBoundingClientRect();
     const m = new T.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    CB.pts.geometry.computeBoundingSphere();          // the layout moves: a stale sphere makes later taps miss
     const rc = new T.Raycaster(); rc.params.Points.threshold = 0.28; rc.setFromCamera(m, CB.cam);
     const hit = rc.intersectObject(CB.pts)[0];
     if (!hit) { CB.sel = -1; $("cb-card").hidden = true; return; }

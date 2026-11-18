@@ -50,7 +50,8 @@ from shared.protocol import (
 )
 
 UI_PAGE = Path(__file__).parent / "ui" / "index.html"
-APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", "/sw.js")   # public: the icon and manifest
+APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", "/sw.js",   # public: the icon and manifest
+             "/vendor/three.min.js")                                                    # and three.js (MIT) for «Cerebro»
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
@@ -254,6 +255,7 @@ def create_app(
                         app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
                         app.state.tema_due()                      # 0.63.0: memories without a topic, one batch
                         app.state.learning_tick()                 # 0.62–0.64: one local learning job per tick
+                        cerebro_mod.similar_edges(db.vectors(conv.EMBED_MODEL), set())   # 0.65.0: warm, incremental
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock

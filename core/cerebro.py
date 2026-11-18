@@ -3,7 +3,9 @@
 Nothing here is invented: the nodes are rows (memories, conversations, guests, persona lines) and the activity
 is the session log. Admin only; imported chat messages are never nodes.
 """
+import hashlib
 import re
+import threading
 
 from core import conversaciones as conv
 
@@ -16,6 +18,7 @@ HEADING = re.compile(r"^\s*#{1,6}\s+(.*)$")
 SOURCE = re.compile(r"^\s*>\s*fuente\s*:\s*(.+)$", re.I)
 
 _sim_cache: dict = {}
+_sim_lock = threading.Lock()
 
 
 def persona_nodes(text: str) -> list:
@@ -57,6 +60,11 @@ def _sig(vec: bytes, planes: list) -> int:
 
 
 def similar_edges(vectors: dict, keep: set) -> list:
+    with _sim_lock:                                       # one builder at a time: the cache is shared across requests
+        return _similar_edges(vectors, keep)
+
+
+def _similar_edges(vectors: dict, keep: set) -> list:
     """Top-2 similar memories per memory (cosine ≥ 0.6). Compared only inside a random-hyperplane bucket (memories
     with the same 7-bit signature, and the buckets one bit away), incrementally: a new vector costs one signature
     and a few comparisons, never a full pass."""
@@ -66,11 +74,17 @@ def similar_edges(vectors: dict, keep: set) -> list:
     dim = len(next(iter(vectors.values()))) // 4
     if c.get("dim") != dim:
         c.clear()
-        c.update(dim=dim, planes=_planes(dim), sig={}, buckets={}, best={})
-    for i in [i for i in c["sig"] if i not in vectors]:              # deleted memories
+        c.update(dim=dim, planes=_planes(dim), sig={}, buckets={}, best={}, hash={})
+    digest = {i: hashlib.blake2b(v, digest_size=8).digest() for i, v in vectors.items()}
+    gone = [i for i in c["sig"] if i not in vectors or c["hash"].get(i) != digest[i]]   # deleted, or re-embedded
+    for i in gone:
         c["buckets"][c["sig"][i]].discard(i)
         del c["sig"][i]
         c["best"].pop(i, None)
+    if gone:
+        g = set(gone)
+        for j in list(c["best"]):
+            c["best"][j] = [(s, k) for s, k in c["best"][j] if k not in g]
     for i in sorted(set(vectors) - set(c["sig"])):
         sg = _sig(vectors[i], c["planes"])
         near = set(c["buckets"].get(sg, ()))
@@ -79,8 +93,10 @@ def similar_edges(vectors: dict, keep: set) -> list:
         scored = sorted(((conv.cosine(vectors[i], vectors[j]), j) for j in near if j in vectors), reverse=True)
         c["best"][i] = [(s, j) for s, j in scored[:SIM_PER_NODE] if s >= SIM_LINK]
         for s, j in c["best"][i]:                                     # the older one may gain a closer neighbour
-            c["best"][j] = sorted(c["best"].get(j, []) + [(s, i)], reverse=True)[:SIM_PER_NODE]
+            others = [(s2, k) for s2, k in c["best"].get(j, []) if k != i]
+            c["best"][j] = sorted(others + [(s, i)], reverse=True)[:SIM_PER_NODE]
         c["sig"][i] = sg
+        c["hash"][i] = digest[i]
         c["buckets"].setdefault(sg, set()).add(i)
     pairs = {(min(i, j), max(i, j)) for i, lst in c["best"].items() for _, j in lst if i in vectors and j in vectors}
     return [(f"m{a}", f"m{b}", "parecido") for a, b in sorted(pairs) if a in keep and b in keep]

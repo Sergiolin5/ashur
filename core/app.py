@@ -255,6 +255,9 @@ def create_app(
                         app.state.tema_due()                      # 0.63.0: memories without a topic, one batch
                         app.state.conversations_due()             # 0.62.0: close idle ones, learn from one
                         app.state.archive_due()                   # 0.62.0: the old thread, one batch, if approved
+                        app.state.import_due()                    # 0.64.0: an approved imported chat, one batch
+                        app.state.form_due()                      # 0.64.0: a saved section of the form
+                        app.state.preguntas_due()                 # 0.64.0: Ashur's questions, once a day
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -2498,6 +2501,135 @@ def create_app(
         db.log(clock(), None, "chat_import_deleted", {"import": iid})
         return {"ok": True}
 
+    def import_due() -> int:
+        """One batch of Sergio's lines of an approved imported chat (local model). Returns how many it read."""
+        for imp in db.imports()[::-1]:
+            if not imp["approved"] or imp["learned"]:
+                continue
+            rest = db.imported_mine(imp["id"], after_id=imp["cursor"], limit=400)
+            if not rest:
+                db.import_set(imp["id"], learned=clock())
+                continue
+            piece, last, n = conv.first_chunk([{"id": m["id"], "role": "user", "content": m["text"]} for m in rest])
+            try:
+                text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+            except LocalUnavailable:
+                return 0
+            got = brain.learn_lines(text, f"import:{imp['id']}")
+            db.import_set(imp["id"], cursor=last)
+            if n == len(rest) and not db.imported_mine(imp["id"], after_id=last, limit=1):
+                db.import_set(imp["id"], learned=clock())
+            db.log(clock(), None, "memories_extracted", {"import": imp["id"], "normales": got["normales"],
+                                                          "sensibles": got["sensibles"]})
+            return n
+        return 0
+
+    app.state.import_due = import_due
+
+    # the long form: questions in core/persona/formulario.json, answers in form_answers ----------------------------
+    FORM = json.loads((Path(__file__).parent / "persona" / "formulario.json").read_text(encoding="utf-8"))
+    FORM_Q = {f"{s['id']}-{i}": (s["id"], q) for s in FORM["secciones"] for i, q in enumerate(s["preguntas"], 1)}
+
+    class FormIn(BaseModel):
+        respuesta: str = Field(max_length=4000)
+
+    @app.get("/api/formulario", dependencies=[Depends(require_admin)])
+    def form_get():
+        ans = {a["qid"]: a for a in db.form_answers()}
+        secs = []
+        for s in FORM["secciones"]:
+            qs = [{"id": f"{s['id']}-{i}", "pregunta": q, "respuesta": (ans.get(f"{s['id']}-{i}") or {}).get("answer")}
+                  for i, q in enumerate(s["preguntas"], 1)]
+            secs.append({"id": s["id"], "titulo": s["titulo"], "preguntas": qs,
+                         "respondidas": sum(1 for q in qs if q["respuesta"])})
+        ashur = [{"id": a["qid"], "pregunta": a["question"], "respuesta": a["answer"]}
+                 for a in ans.values() if a["origin"] == "ashur"]
+        return {"secciones": secs, "ashur": ashur}
+
+    @app.put("/api/formulario/{qid}", dependencies=[Depends(require_admin)])
+    def form_put(qid: str, body: FormIn):
+        ans = {a["qid"]: a for a in db.form_answers()}
+        if qid in FORM_Q:
+            section, question = FORM_Q[qid]
+        elif qid in ans and ans[qid]["origin"] == "ashur":
+            section, question = "ashur", ans[qid]["question"]
+        else:
+            raise HTTPException(404, "No existe esa pregunta.")
+        db.form_put(qid, section, question, body.respuesta.strip() or None, clock(),
+                    "ashur" if section == "ashur" else "form")
+        if section == "ashur" and body.respuesta.strip():      # Ashur's own questions are learned as soon as answered
+            pend = set(json.loads(db.setting("form_pending", "[]")))
+            db.set_setting("form_pending", json.dumps(sorted(pend | {"ashur"})))
+        return {"ok": True}
+
+    @app.post("/api/formulario/{section}/aprender", dependencies=[Depends(require_admin)])
+    def form_learn(section: str):
+        if section not in {s["id"] for s in FORM["secciones"]} | {"ashur"}:
+            raise HTTPException(404, "No existe esa sección.")
+        pend = set(json.loads(db.setting("form_pending", "[]")))
+        db.set_setting("form_pending", json.dumps(sorted(pend | {section})))
+        return {"ok": True}
+
+    def form_due() -> int:
+        """Learn one saved section of the form (local model): answers that changed since it was last learned."""
+        pend = json.loads(db.setting("form_pending", "[]"))
+        if not pend:
+            return 0
+        section = pend[0]
+        since = float(db.setting(f"form_learned:{section}", "0"))
+        rows = [a for a in db.form_answers() if a["section"] == section and a["answer"] and a["ts"] > since]
+        if rows:
+            text_in = "\n".join(f"Pregunta: {a['question']}\nSergio: {a['answer']}" for a in rows)
+            try:
+                text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": text_in[:conv.EXTRACT_CHARS]}])
+            except LocalUnavailable:
+                return 0
+            brain.learn_lines(text, "form")
+        db.set_setting(f"form_learned:{section}", str(clock()))
+        db.set_setting("form_pending", json.dumps(pend[1:]))
+        return 1
+
+    app.state.form_due = form_due
+
+    PREGUNTADOR = ("Eres Ashur, el asistente de Sergio. Con lo que sabes de él (abajo) y las preguntas que ya le hiciste, "
+                   "propón hasta 3 preguntas nuevas, cortas y concretas, sobre lo que todavía no sabes de él y te serviría "
+                   "para entenderlo o escribir como él. Nada de salud ni dinero. Una por línea, empezando con «PREGUNTA: ».")
+
+    def preguntas_due() -> int:
+        """Once a day: up to three new questions from Ashur, shown in the form (never interrupting the chat)."""
+        day = dt.datetime.fromtimestamp(clock(), BOGOTA).strftime("%Y-%m-%d")
+        if db.setting("preguntas_dia", "") == day:
+            return 0
+        temas = {}
+        for m in db.memories():
+            temas[m.get("tema") or "sin tema"] = temas.get(m.get("tema") or "sin tema", 0) + 1
+        hechas = [a["question"] for a in db.form_answers()]
+        ctx = (f"Recuerdos por tema: {json.dumps(temas, ensure_ascii=False)}\n"
+               f"Algunos recuerdos: " + "; ".join(m["text"] for m in db.memories()[-20:] if m["tier"] == "claude") +
+               "\nYa preguntado:\n" + "\n".join(hechas[-80:]))
+        try:
+            text, _device = local_complete(PREGUNTADOR, [{"role": "user", "content": ctx[:conv.EXTRACT_CHARS]}])
+        except LocalUnavailable:
+            return 0
+        known = {q.strip().lower() for q in hechas}
+        added = 0
+        for ln in text.splitlines():
+            head, _, body = ln.strip().partition(":")
+            body = body.strip()
+            if head.strip().upper() != "PREGUNTA" or not (5 <= len(body) <= 200) or body.lower() in known:
+                continue
+            if health_split(body)[1]:
+                continue
+            db.form_put(f"ashur-{int(clock())}-{added}", "ashur", body, None, clock() + added * 0.001, "ashur")
+            known.add(body.lower())
+            added += 1
+            if added == 3:
+                break
+        db.set_setting("preguntas_dia", day)
+        return added
+
+    app.state.preguntas_due = preguntas_due
+
     @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
     def conversation_archive():
         return archive_progress() or {}
@@ -4679,6 +4811,12 @@ def create_app(
                                        f"{a.get('invitado', 'invitado')}, conversación {a.get('conv', '?')}, {day}")
                 db.log(clock(), None, "persona_aplicada", {"accion": action})
                 return "approved", "Ashur lo incorporó a su persona."
+            if action == "aprender_import":                  # 0.64.0: Sergio's own lines of an imported chat
+                imp = db.import_get(req["args"].get("import") or -1)
+                if not imp:
+                    return "not_done", "Ese chat ya no existe."
+                db.import_set(imp["id"], approved=clock())
+                return "approved", "Ashur aprenderá de tus mensajes de ese chat por tandas, con el modelo local."
             if action == "aprender_archivo":                 # 0.62.0: the old endless thread, learned once
                 cid = req["args"].get("conversacion")
                 cv = db.conv_get(cid) if isinstance(cid, int) else None

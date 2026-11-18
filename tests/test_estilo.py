@@ -270,3 +270,60 @@ def test_style_block_is_capped(tmp_path):
     imported(c, text=big)
     block = c.app.state.brain.estilo_block(False, "redactar", "palabra")
     assert 0 < len(block) <= 1500
+
+
+# --- Task 5: learning -----------------------------------------------------------------------------------------
+def approve(c, action):
+    rid = [r for r in c.get("/api/claude-requests", headers=A).json() if r["action"] == action][0]["id"]
+    assert c.post(f"/api/claude-requests/{rid}/approve", headers=A).json()["status"] == "approved"
+
+
+def test_import_waits_for_approval_then_learns_only_sergios_lines(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    assert c.app.state.import_due() == 0
+    approve(c, "aprender_import")
+    th, seen = node(c, answer=lambda p: {"text": "TITULO: x\nNORMAL: se despide con «dale»\nSENSIBLE: le debe plata a Ana"})
+    assert c.app.state.import_due() == 2
+    th.join(5)
+    content = seen[0]["messages"][0]["content"]
+    assert "dale, hablamos mañana" in content and "hola! cómo vas?" not in content and "todo bien" not in content
+    db = c.app.state.db
+    assert [(m["text"], m["source"]) for m in db.memories()] == [("se despide con «dale»", f"import:{iid}")]
+    assert [p["text"] for p in db.proposals()] == ["le debe plata a Ana"]
+    assert db.import_get(iid)["learned"] is not None and c.app.state.import_due() == 0
+
+
+def test_form_lists_sections_and_saves_halfway(tmp_path):
+    c = local_app(tmp_path)
+    f = c.get("/api/formulario", headers=A).json()
+    assert len(f["secciones"]) == 8 and sum(len(s["preguntas"]) for s in f["secciones"]) >= 60
+    q = f["secciones"][0]["preguntas"][0]
+    assert q["respuesta"] is None and q["id"] == "quien-1"
+    assert c.put("/api/formulario/quien-1", headers=A, json={"respuesta": "ingeniero, directo"}).status_code == 200
+    assert c.put("/api/formulario/nada-99", headers=A, json={"respuesta": "x"}).status_code == 404
+    f = c.get("/api/formulario", headers=A).json()
+    assert f["secciones"][0]["preguntas"][0]["respuesta"] == "ingeniero, directo" and f["secciones"][0]["respondidas"] == 1
+
+
+def test_saving_a_section_learns_it_once(tmp_path):
+    c = local_app(tmp_path)
+    c.put("/api/formulario/quien-1", headers=A, json={"respuesta": "me presento como ingeniero"})
+    assert c.post("/api/formulario/quien/aprender", headers=A).status_code == 200
+    th, seen = node(c, answer=lambda p: {"text": "NORMAL: se presenta como ingeniero"})
+    assert c.app.state.form_due() == 1
+    th.join(5)
+    assert "me presento como ingeniero" in seen[0]["messages"][0]["content"]
+    assert [(m["text"], m["source"]) for m in c.app.state.db.memories()] == [("se presenta como ingeniero", "form")]
+    assert c.app.state.form_due() == 0
+
+
+def test_ashur_asks_at_most_three_new_questions_a_day(tmp_path):
+    c = local_app(tmp_path)
+    th, _ = node(c, answer=lambda p: {"text": "PREGUNTA: ¿Qué cocinas?\nPREGUNTA: ¿Qué cocinas?\nPREGUNTA: ¿Tienes mascotas?\n"
+                                                 "PREGUNTA: ¿Qué lees?\nPREGUNTA: ¿Dónde creciste?"})
+    assert c.app.state.preguntas_due() == 3
+    th.join(5)
+    qs = [q["pregunta"] for q in c.get("/api/formulario", headers=A).json()["ashur"]]
+    assert qs == ["¿Qué cocinas?", "¿Tienes mascotas?", "¿Qué lees?"]
+    assert c.app.state.preguntas_due() == 0                                # not again the same day

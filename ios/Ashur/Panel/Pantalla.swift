@@ -57,10 +57,6 @@ enum PestañaPanel: String, CaseIterable, Identifiable {
         case .cerebro: "Cerebro"
         case .casa: "Casa"
         case .status: "Estado"
-        case .diary:
-            Pantalla(p.titulo, ruta: "t=diary", web: web, activa: sel == p, nativa: AnyView(DiarioView()))
-        case .cerebro:
-            Pantalla(p.titulo, ruta: "t=cerebro", web: web, activa: sel == p, nativa: AnyView(CerebroView()))
         case .settings: "Ajustes"
         }
     }
@@ -101,6 +97,10 @@ struct PanelTabs: View {
         case .status:
             Pantalla(p.titulo, ruta: "t=status", web: web, activa: sel == p,
                      nativa: session.estado.map { AnyView(EstadoView(model: $0)) })
+        case .diary:
+            Pantalla(p.titulo, ruta: "t=diary", web: web, activa: sel == p, nativa: AnyView(DiarioView()))
+        case .cerebro:
+            Pantalla(p.titulo, ruta: "t=cerebro", web: web, activa: sel == p, nativa: AnyView(CerebroView()))
         case .settings:
             Pantalla(p.titulo, ruta: "t=settings", web: web, activa: sel == p, nativa: AnyView(AjustesView(web: web)))
         default:

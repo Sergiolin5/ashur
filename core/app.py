@@ -24,6 +24,7 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
+from shared import remote_config
 from shared.codebundle import build_bundle, code_version, has_node_code
 
 from typing import Any
@@ -276,7 +277,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.66.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.67.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -487,6 +488,46 @@ def create_app(
         except ValueError:
             return {}
 
+    # --- a node's configuration edited from the panel (0.67.0) -----------------------------------------------------
+    # Only llm_model, modules, yield_policy and thresholds; the node keeps them in node.remote.yaml next to its own
+    # node.yaml, which wins over it. One settings row per device: no schema change.
+    def node_remote_config(node_id: str) -> Optional[dict]:
+        raw = db.setting(f"node_config:{node_id}", "")
+        if not raw:
+            return None
+        try:
+            return remote_config.validate(json.loads(raw))
+        except ValueError:
+            return None
+
+    @app.get("/api/nodes/{node_id}/config", dependencies=[Depends(require_admin)])
+    def get_node_config(node_id: str):
+        if not db.get_node(node_id):
+            raise HTTPException(404, "No conozco ese equipo.")
+        values = node_remote_config(node_id) or {}
+        rev = remote_config.rev(values)
+        applied = db.setting(f"node_config_applied:{node_id}", "")
+        return {"values": values, "rev": rev, "applied_rev": applied or None,
+                "aplicada": applied == rev or (not values and not applied),
+                "claves": list(remote_config.KEYS), "politicas": list(remote_config.POLICIES),
+                "limites": {k: list(v) for k, v in remote_config.THRESHOLDS.items()},
+                "modulos": sorted(remote_config.known_modules())}
+
+    class NodeConfigIn(BaseModel):
+        values: dict
+
+    @app.put("/api/nodes/{node_id}/config", dependencies=[Depends(require_admin)])
+    def put_node_config(node_id: str, body: NodeConfigIn):
+        if not db.get_node(node_id):
+            raise HTTPException(404, "No conozco ese equipo.")
+        try:
+            values = remote_config.validate(body.values)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        db.set_setting(f"node_config:{node_id}", json.dumps(values))
+        db.log(clock(), node_id, "node_config_set", {"claves": sorted(values), "rev": remote_config.rev(values)})
+        return {"values": values, "rev": remote_config.rev(values), "aplicada": False}
+
     @app.get("/api/names", dependencies=[Depends(require_admin)])
     def names_get():
         return names()
@@ -574,7 +615,13 @@ def create_app(
             db.log(now, node["id"], "back_online", {"mode": hb.mode.value, **({"slept_s": round(hb.slept_s)} if hb.slept_s else {})})
         elif prev != hb.mode.value:
             db.log(now, node["id"], "mode_change", {"from": prev, "to": hb.mode.value, "reason": reason})
-        return {"ok": True, "code_version": node_code()[0]}
+        if hb.config_rev is not None and db.setting(f"node_config_applied:{node['id']}", "") != hb.config_rev:
+            db.set_setting(f"node_config_applied:{node['id']}", hb.config_rev)
+        reply = {"ok": True, "code_version": node_code()[0]}
+        remote = node_remote_config(node["id"])
+        if remote is not None:                    # 0.67.0: what the panel set for this device, with its revision
+            reply["config"] = {"rev": remote_config.rev(remote), "values": remote}
+        return reply
 
     # --- installers, served by the core so the repo can be private (tailnet only) ----
     @app.get("/install/{name}")

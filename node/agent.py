@@ -26,6 +26,7 @@ from node import gpus as gpus_mod
 from node import metrics
 from node.modules import Module, load, this_os
 from node.policy import Policy, Thresholds
+from shared import remote_config
 from shared.protocol import HEARTBEAT_INTERVAL_S, Mode
 
 log = logging.getLogger("ashur.node")
@@ -162,6 +163,32 @@ def load_config(path: Path) -> dict:
     return cfg
 
 
+REMOTE_FILE = "node.remote.yaml"
+
+
+def read_remote(state: Path) -> tuple[dict, Optional[str]]:
+    """The panel's values and their revision; nothing when the file is missing or unreadable."""
+    path = state / REMOTE_FILE
+    if not path.exists():
+        return {}, None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        return remote_config.validate(data.get("values") or {}), data.get("rev")
+    except (ValueError, yaml.YAMLError, AttributeError) as e:
+        log.warning("%s ignorado: %s", path, e)
+        return {}, None
+
+
+def write_remote(state: Path, values: dict, rev: Optional[str]) -> None:
+    path = state / REMOTE_FILE
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("# Lo escribe Ashur con lo que configuraste en el panel. Gana sobre node.yaml.\n"
+                   "# Bórralo para volver a tu node.yaml.\n"
+                   + yaml.safe_dump({"rev": rev, "values": values}, allow_unicode=True, sort_keys=True),
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def enroll_key_from_env() -> Optional[str]:
     if os.environ.get("ASHUR_ENROLL_KEY"):
         return os.environ["ASHUR_ENROLL_KEY"]
@@ -201,10 +228,13 @@ class Agent:
     def __init__(self, config: dict, client: Optional[httpx.Client] = None,
                  policy: Optional[Policy] = None, state: Optional[Path] = None,
                  self_update: Optional[bool] = None, code_version: Optional[str] = None):
-        self.cfg = config
-        self.device_id = config["device_id"]
         self.state = state or state_dir()
         self.state.mkdir(parents=True, exist_ok=True)
+        self.base_cfg = dict(config)          # his node.yaml; 0.67.0: the panel's values go on top (node.remote.yaml)
+        values, self.config_rev = read_remote(self.state)
+        config = remote_config.merge(config, values)
+        self.cfg = config
+        self.device_id = config["device_id"]
         self.token_file = self.state / "node_token"
         self.client = client or httpx.Client(base_url=config["core_url"], timeout=30)
         t = config.get("thresholds", {})
@@ -256,6 +286,32 @@ class Agent:
         r.raise_for_status()
         return r
 
+    # --- the panel's configuration (0.67.0) ------------------------------------------------------------
+    def apply_remote(self, values: dict, rev: Optional[str]) -> None:
+        """What the panel set for this device: kept in node.remote.yaml and applied at once (the model now, the
+        modules reloaded, the yield policy rebuilt). A value the agent cannot accept is logged and skipped, and its
+        revision is not reported, so the panel keeps showing it as pending."""
+        try:
+            values = remote_config.validate(values)
+        except ValueError as e:
+            log.warning("configuración del panel rechazada: %s", e)
+            return
+        before = self.cfg
+        cfg = remote_config.merge(self.base_cfg, values)
+        try:
+            policy = Policy(cfg.get("yield_policy", "always_full"), Thresholds(**cfg.get("thresholds", {})))
+        except (TypeError, ValueError) as e:
+            log.warning("configuración del panel rechazada: %s", e)
+            return
+        write_remote(self.state, values, rev)
+        self.cfg, self.config_rev = cfg, rev
+        if (cfg.get("yield_policy"), cfg.get("thresholds")) != (before.get("yield_policy"), before.get("thresholds")):
+            self.policy = policy
+        if sorted(cfg.get("modules", [])) != sorted(before.get("modules", [])):
+            self.load_modules()
+            self.announced = False               # the next beat tells the core the new modules
+        log.info("configuración del panel aplicada (revisión %s)", rev)
+
     # --- lifecycle -------------------------------------------------------
     def load_modules(self) -> None:
         self.modules = load(self.cfg.get("modules", []))
@@ -303,6 +359,8 @@ class Agent:
             log.info("mode %s -> %s", self.mode.value if self.mode else "-", mode.value)
             self.mode = mode
         beat = {"mode": mode.value, "reason": self.policy.reason}
+        if self.config_rev is not None:
+            beat["config_rev"] = self.config_rev
         beat.update(metrics.read(getattr(self.policy.reader, "last_cpu", None)))
         if not self.announced:
             beat.update(modules=sorted(self.modules), code_version=self.code_version, fresh_start=True)
@@ -330,9 +388,13 @@ class Agent:
         self.announced = True
         self.slept_s = 0.0
         try:
-            target = reply.json().get("code_version")
+            body = reply.json()
         except ValueError:
-            target = None
+            body = {}
+        remote = body.get("config") if isinstance(body, dict) else None
+        if isinstance(remote, dict) and remote.get("rev") != self.config_rev:
+            self.apply_remote(remote.get("values") or {}, remote.get("rev"))
+        target = body.get("code_version") if isinstance(body, dict) else None
         if target:
             self.maybe_update(target)
         if self.stopping.is_set() or (self.worker and self.worker.is_alive()):

@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
                         looks_like_secret, month_start)
-from core import casa as casa_mod, habits, lotes, signals
+from core import casa as casa_mod, conversaciones as conv, habits, lotes, signals
 from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
@@ -245,13 +245,16 @@ def create_app(
                     app.state.maturity_tick()                     # time in «crecimiento pleno», counted on the server
                     app.state.encargos_due()                      # cheap when idle; an approved encargo starts within seconds
                     if due:
-                        app.state.summarize_soon()
                         app.state.inventory_due()
                         app.state.docs_due()
                         app.state.diary_due()
                         app.state.notify_due()
                         app.state.daily_due()
                         app.state.propose_due()
+                        app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
+                        app.state.tema_due()                      # 0.63.0: memories without a topic, one batch
+                        app.state.conversations_due()             # 0.62.0: close idle ones, learn from one
+                        app.state.archive_due()                   # 0.62.0: the old thread, one batch, if approved
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -272,7 +275,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.61.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.63.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1319,34 +1322,89 @@ def create_app(
 
     app.state.local_vision = local_vision
 
+    def local_embed(texts: list, timeout_s: Optional[float] = None) -> list:
+        """Vectors from a node's Ollama (0.62.0), through the same queue and hand-off as local_complete.
+        Raises LocalUnavailable when nobody can do it now; the caller then searches by words."""
+        sweep()
+        ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
+                 and not is_degraded(n["id"])]
+        if not ready:
+            raise NoLocalDevice("Ningún equipo con modelo local está disponible para buscar recuerdos.")
+        target = best_llm_node(ready)
+        tid = db.add_task("llm", {"embed": [conv.cut(t) for t in texts], "model": conv.EMBED_MODEL},
+                          Weight.LIGHT.value, clock(), target=target)
+        wait = local_timeout_s if timeout_s is None else timeout_s
+        deadline, handoff = time.monotonic() + wait, time.monotonic() + min(10, wait / 2)
+        try:
+            while time.monotonic() < deadline:
+                if target and time.monotonic() >= handoff:
+                    db.untarget_if_queued(tid)
+                    target = None
+                t = db.get_task(tid)
+                if t["status"] == "done":
+                    vectors = ((t["result"] or {}).get("result") or {}).get("vectors")
+                    if not isinstance(vectors, list) or len(vectors) != len(texts):
+                        raise LocalFailed(f"{t['node_id']} no devolvió vectores (¿módulo llm de antes de 0.62?).",
+                                          t["node_id"])
+                    return vectors
+                if t["status"] in ("failed", "cancelled"):
+                    err = (t["result"] or {}).get("error") or "sin detalle"
+                    raise LocalFailed(f"{t['node_id']}: {err}", t["node_id"])
+                time.sleep(0.05)
+            db.cancel_task(tid, "timeout", clock())
+            raise LocalUnavailable("El equipo no devolvió los vectores a tiempo.")
+        finally:
+            db.clear_payload(tid)
+
+    app.state.local_embed = local_embed
+
+    def embed_due() -> int:
+        """Embed memories that have no vector of the current model yet, one batch per pass."""
+        todo = db.memories_without_vector(conv.EMBED_MODEL, conv.EMBED_BATCH)
+        if not todo:
+            return 0
+        try:
+            vectors = local_embed([m["text"] for m in todo])
+        except LocalUnavailable as e:
+            if not isinstance(e, NoLocalDevice):
+                db.log(clock(), getattr(e, "node", None), "embed_failed", {"razon": str(e)[:200]})
+            return 0
+        for m, v in zip(todo, vectors):
+            db.vector_put(m["id"], conv.EMBED_MODEL, conv.pack(v), len(v))
+        return len(todo)
+
+    app.state.embed_due = embed_due
+
+    def tema_due() -> int:
+        """0.63.0: give Sergio's memories a topic. Health, secrets and «solo local» are «privado» without asking a
+        model; the rest goes to the local model in batches. Returns how many got a topic."""
+        todo = db.memories_without_tema(conv.TEMA_BATCH)
+        if not todo:
+            return 0
+        safe = [m for m in todo if m["tier"] == "local" or health_split(m["text"])[1] or looks_like_secret(m["text"])]
+        for m in safe:
+            db.set_memory_tema(m["id"], "privado")
+        ask = [m for m in todo if m not in safe]
+        if not ask:
+            return len(safe)
+        lines = "\n".join(f"{i}. {m['text']}" for i, m in enumerate(ask, 1))
+        try:
+            text, _device = local_complete(conv.CLASIFICADOR, [{"role": "user", "content": lines}])
+        except LocalUnavailable:
+            return len(safe)
+        for i, tema in conv.parse_temas(text, len(ask)).items():
+            db.set_memory_tema(ask[i - 1]["id"], tema)
+        db.log(clock(), None, "memory_tema", {"clasificados": len(ask)})
+        return len(safe) + len(ask)
+
+    app.state.tema_due = tema_due
+
     brain = Brain(db, os.path.dirname(os.path.abspath(db_path)), clock, network_for_brain,
-                  settings=brain_settings, client=brain_client, local=local_complete, vision=local_vision)
+                  settings=brain_settings, client=brain_client, local=local_complete, vision=local_vision,
+                  embed=local_embed)
     app.state.brain = brain
 
-    # conversation memory: old messages are summarized in the background, one at a time;
-    # if nobody can think right now (no credit, Mac asleep) it simply tries again later
-    summarizing = threading.Lock()
-    next_try = [0.0]
-
-    def summarize_soon() -> None:
-        if clock() < next_try[0] or not brain.pending_summary() or not summarizing.acquire(blocking=False):
-            return
-
-        def run():
-            try:
-                while brain.pending_summary():
-                    if brain.summarize() is None:
-                        next_try[0] = clock() + 600
-                        break
-            except Exception as e:
-                db.log(clock(), None, "summary_failed", {"error": f"{type(e).__name__}: {e}"[:200]})
-                next_try[0] = clock() + 600
-            finally:
-                summarizing.release()
-
-        threading.Thread(target=run, daemon=True, name="ashur-summary").start()
-
-    app.state.summarize_soon = summarize_soon
+    # 0.63.0: the old window summarizer no longer runs; each conversation is summarized when it closes
 
     def inventory_due() -> list[int]:
         """Rescan each device's files every few days. Heavy: it waits until the device is
@@ -2193,6 +2251,8 @@ def create_app(
         share_diary: bool = False            # ...and diary entries
         imagen: Optional[str] = Field(default=None, max_length=7_200_000)   # a photo from the phone, base64; never stored
         imagen_tipo: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|png|webp|gif)$")
+        conversation_id: Optional[int] = None    # 0.62.0: none = the open conversation, or a new one
+        reopen: bool = False                     # continue a closed conversation he opened from the list
 
     # --- device personas (Sergio only; guests never see them) ---------------
     @app.get("/api/personas")
@@ -2324,15 +2384,16 @@ def create_app(
             if not raw or len(raw) > IMAGE_MAX_BYTES:
                 raise HTTPException(413, "La foto pesa más de 5 MB; mándala más pequeña.")
             image = {"media_type": body.imagen_tipo, "data": body.imagen}
+        cid = conversation_for(chat_user(guest), body.conversation_id, body.reopen)
         try:
             out = brain.chat(body.message, body.channel, guest, body.persona,
                              allow_claude=body.allow_claude and guest is None,
                              share_docs=body.share_docs and guest is None,
-                             share_diary=body.share_diary and guest is None, image=image)
+                             share_diary=body.share_diary and guest is None, image=image, conversation_id=cid)
+            out["conversation_id"] = cid
             if guest:                     # which device answered and which tools ran stay Sergio's business
                 return {k: v for k, v in out.items() if k not in ("device", "tools", "model", "sources", "diary_used")}
-            summarize_soon()
-            return out
+            return out                    # 0.63.0: no summarizer here; each conversation is summarized when it closes
         except (BrainUnavailable, LocalUnavailable) as e:
             raise HTTPException(503, "Ashur no puede responder ahora. Inténtalo más tarde." if guest else str(e))
         except Exception as e:  # API down, bad key, no credit, network: say exactly why
@@ -2341,6 +2402,125 @@ def create_app(
             if guest:
                 raise HTTPException(502, "Ashur no puede responder ahora. Inténtalo más tarde.")
             raise HTTPException(502, f"No pude hablar con Claude ({type(e).__name__}): {reason}")
+
+    # --- conversations (0.62.0): every chat starts clean; Ashur remembers through its memories -------------
+    def chat_user(guest: Optional[dict]) -> str:
+        return f"g{guest['id']}" if guest else "sergio"
+
+    def conversation_for(user: str, cid: Optional[int], reopen: bool = False) -> int:
+        """The conversation a message goes to; anyone else's is a 404. A closed one (or one quiet for 30 min) is
+        continued only when he reopened it from the list; otherwise the message starts a new one."""
+        if cid is None:
+            return db.conv_open(user, clock(), conv.CONV_IDLE_S)
+        cv = db.conv_get(cid)
+        if not cv or cv["user"] != user or cv["archived"]:
+            raise HTTPException(404, "No existe esa conversación.")
+        stale = cv["closed"] is not None or cv["last_msg"] < clock() - conv.CONV_IDLE_S
+        if stale and not reopen:
+            return db.conv_open(user, clock(), conv.CONV_IDLE_S)
+        if cv["closed"] is not None:
+            db.conv_set(cid, closed=None)
+        return cid
+
+    @app.post("/api/conversations")
+    def conversation_new(guest: Optional[dict] = Depends(require_chat)):
+        return {"id": db.conv_new(chat_user(guest), clock())}
+
+    @app.get("/api/conversations")
+    def conversation_list(guest: Optional[dict] = Depends(require_chat)):
+        keep = ("id", "title", "started", "last_msg", "closed", "archived", "n")
+        return [{k: cv[k] for k in keep} for cv in db.conv_list(chat_user(guest)) if cv["n"]]   # an empty «Nueva» is not listed
+
+    @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
+    def conversation_archive():
+        return archive_progress() or {}
+
+    @app.get("/api/conversations/{cid}")
+    def conversation_get(cid: int, guest: Optional[dict] = Depends(require_chat)):
+        cv = db.conv_get(cid)
+        if not cv or cv["user"] != chat_user(guest):
+            raise HTTPException(404, "No existe esa conversación.")
+        return {"conversation": cv, "messages": db.conv_messages(cid)[-500:]}      # the newest 500
+
+    def conversations_close_idle() -> int:
+        idle = db.conv_idle(clock() - conv.CONV_IDLE_S)
+        for cid in idle:
+            db.conv_close(cid, clock())
+            db.log(clock(), None, "conversation_closed", {"id": cid, "mensajes": len(db.conv_messages(cid))})
+        return len(idle)
+
+    app.state.conversations_close_idle = conversations_close_idle
+
+    def conversations_due() -> int:
+        """Close idle conversations, then learn one piece of one closed conversation per pass (local model).
+        0.63.0: guests' conversations too, each into that guest's profile."""
+        conversations_close_idle()
+        for cv in db.conv_due():
+            try:
+                brain.extract_conversation(cv["id"])
+            except LocalUnavailable:
+                return 0
+            return 1
+        return 0
+
+    app.state.conversations_due = conversations_due
+
+    def archive_ask() -> None:
+        """Once: ask Sergio whether Ashur may learn from his old endless thread (one approval, local model only)."""
+        if db.setting("archivo_pedido"):
+            return
+        for cv in db.conv_list("sergio", limit=200):
+            if cv["archived"] and cv["extracted"] is None and cv["n"]:
+                db.claude_request_add(clock(), "aprender_archivo", {"conversacion": cv["id"], "mensajes": cv["n"]},
+                                      "Leer el chat de antes de 0.62 por tandas y guardar lo durable; lo sensible "
+                                      "va a la bandeja.")
+                db.set_setting("archivo_pedido", str(cv["id"]))
+                return
+
+    archive_ask()
+
+    def archive_progress() -> Optional[dict]:
+        cid = db.setting("archivo_aprender") or db.setting("archivo_pedido")
+        cv = db.conv_get(int(cid)) if cid else None
+        if not cv:
+            return None
+        msgs = db.conv_messages(cv["id"])
+        cursor = int(db.setting("archivo_cursor", "0"))
+        done = len(msgs) if cv["extracted"] is not None else sum(1 for m in msgs if m["id"] <= cursor)
+        return {"conversacion": cv["id"], "done": done, "total": len(msgs),
+                "aprobado": bool(db.setting("archivo_aprender")), "terminado": cv["extracted"] is not None}
+
+    def archive_due() -> int:
+        """One batch of the archive, if he approved it. Returns how many messages it read (0 = nothing now)."""
+        cid = db.setting("archivo_aprender")
+        cv = db.conv_get(int(cid)) if cid else None
+        if not cv or cv["extracted"] is not None:
+            return 0
+        cursor = int(db.setting("archivo_cursor", "0"))
+        rest = [m for m in db.conv_messages(cv["id"]) if m["id"] > cursor]
+        if not rest:
+            db.conv_set(cv["id"], extracted=clock())
+            db.log(clock(), None, "archive_learned", {"conv": cv["id"]})
+            return 0
+        piece, last, n = conv.first_chunk([m for m in rest if m["role"] == "user"] or rest[:0])
+        if not n:                                   # only Ashur's lines left: nothing of his to learn
+            db.conv_set(cv["id"], extracted=clock())
+            return 0
+        n = sum(1 for m in rest if m["id"] <= last)
+        try:
+            text, _device = local_complete(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+        except LocalUnavailable:
+            return 0
+        got = brain.learn_lines(text, f"conv:{cv['id']}")
+        db.set_setting("archivo_cursor", str(last))
+        db.log(clock(), None, "memories_extracted", {"conv": cv["id"], "normales": got["normales"],
+                                                      "sensibles": got["sensibles"], "archivo": True})
+        if len(rest) == n:
+            db.conv_set(cv["id"], extracted=clock())
+            db.log(clock(), None, "archive_learned", {"conv": cv["id"]})
+        return n
+
+    app.state.archive_due = archive_due
 
     @app.get("/api/chat/history")
     def chat_history(limit: int = 50, guest: Optional[dict] = Depends(require_chat)):
@@ -2381,8 +2561,27 @@ def create_app(
     def guests_list():
         start = month_start(clock())
         return [{**g, "is_self": bool(g["is_self"]),
-                 "spent_usd": None if g["is_self"] else round(db.spent_since(start, f"g{g['id']}"), 4)}
+                 "spent_usd": None if g["is_self"] else round(db.spent_since(start, f"g{g['id']}"), 4),
+                 "temas": db.guest_temas(g["id"]), "perfil": len(db.memories_of(f"g{g['id']}"))}
                 for g in db.guests()]
+
+    class TemasIn(BaseModel):
+        temas: list[str] = Field(max_length=3)
+
+    @app.put("/api/guests/{gid}/temas", dependencies=[Depends(require_admin)])
+    def guest_temas_put(gid: int, body: TemasIn):
+        if any(t not in conv.TEMAS_COMPARTIBLES for t in body.temas):
+            raise HTTPException(422, "Temas posibles: trabajo, gustos, ashur.")
+        if not db.set_guest_temas(gid, sorted(set(body.temas))):
+            raise HTTPException(404, "No existe ese invitado.")
+        db.log(clock(), None, "guest_temas", {"guest": gid, "temas": sorted(set(body.temas))})
+        return {"ok": True}
+
+    @app.get("/api/guests/{gid}/perfil", dependencies=[Depends(require_admin)])
+    def guest_perfil(gid: int):
+        if not db.guest_get(gid):
+            raise HTTPException(404, "No existe ese invitado.")
+        return db.memories_of(f"g{gid}")
 
     @app.post("/api/guests", dependencies=[Depends(require_admin)])
     def guest_create(body: GuestIn):
@@ -2402,7 +2601,19 @@ def create_app(
 
     @app.get("/api/memory", dependencies=[Depends(require_admin)])
     def memory_list():
-        return db.memories()
+        seen = float(db.setting("memory_seen", "0"))
+        return [dict(m, nuevo=str(m.get("source") or "").startswith("conv:") and m["created"] > seen)
+                for m in db.memories()]
+
+    @app.post("/api/memory/seen", dependencies=[Depends(require_admin)])
+    def memory_seen():
+        db.set_setting("memory_seen", str(clock()))
+        return {"ok": True}
+
+    @app.get("/api/memory/vectors", dependencies=[Depends(require_admin)])
+    def memory_vectors():
+        done, total = db.vector_count(conv.EMBED_MODEL)
+        return {"done": done, "total": total, "model": conv.EMBED_MODEL}
 
     class MemoryImport(BaseModel):
         lines: list[str] = Field(max_length=300)
@@ -2471,8 +2682,12 @@ def create_app(
         p = db.proposal_get(pid)
         if not p or p["status"] != "pending":
             raise HTTPException(404, "No existe esa propuesta.")
-        tier = body.tier or ("local" if p["source"] == "diary" else "claude")
-        mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier)
+        # diary and a conversation's sensitive lines (0.62.0) stay with the local models unless he says otherwise
+        owner = p.get("owner") or "sergio"
+        tier = body.tier or ("local" if p["source"] == "diary" or p["source"].startswith("conv:") else "claude")
+        if owner != "sergio":                            # 0.63.0: a guest's sensitive line stays with the local models
+            tier = "local"
+        mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier, owner=owner)
         db.proposal_set(pid, "accepted")
         db.log(clock(), None, "memory_accepted", {"memory_id": mid, "tier": tier})
         return {"memory_id": mid, "tier": tier}
@@ -2503,6 +2718,26 @@ def create_app(
         return brain.propose_memories()
 
     app.state.propose_due = propose_due
+
+    class MemoryText(BaseModel):
+        text: str = Field(min_length=1, max_length=300)
+
+    class TemaIn(BaseModel):
+        tema: str = Field(pattern=r"^(trabajo|gustos|ashur|privado)$")
+
+    @app.put("/api/memory/{memory_id}/tema", dependencies=[Depends(require_admin)])
+    def memory_tema(memory_id: int, body: TemaIn):
+        if not db.set_memory_tema(memory_id, body.tema):
+            raise HTTPException(404, "no such memory")
+        db.log(clock(), None, "memory_tema", {"id": memory_id, "tema": body.tema})
+        return {"ok": True}
+
+    @app.put("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
+    def memory_correct(memory_id: int, body: MemoryText):
+        if not db.update_memory(memory_id, body.text.strip()):
+            raise HTTPException(404, "no such memory")
+        db.log(clock(), None, "memory_corrected", {"memory_id": memory_id})
+        return {"ok": True}
 
     @app.delete("/api/memory/{memory_id}", dependencies=[Depends(require_admin)])
     def memory_delete(memory_id: int):
@@ -4359,6 +4594,20 @@ def create_app(
                 if not isinstance(lid, int) or not db.lote_set(lid, expect="pending_approval", status="queued"):
                     return "not_done", "El lote ya no espera aprobación."
                 return "approved", f"Lote #{lid} en cola."
+            if action in ("persona_trato", "persona_cambio"):    # 0.63.0: what a guest taught, now part of Ashur
+                a = req["args"]
+                day = dt.datetime.fromtimestamp(req["ts"], BOGOTA).strftime("%Y-%m-%d")
+                brain.add_persona_line("Trato" if action == "persona_trato" else "Correcciones", str(a.get("texto", "")),
+                                       f"{a.get('invitado', 'invitado')}, conversación {a.get('conv', '?')}, {day}")
+                db.log(clock(), None, "persona_aplicada", {"accion": action})
+                return "approved", "Ashur lo incorporó a su persona."
+            if action == "aprender_archivo":                 # 0.62.0: the old endless thread, learned once
+                cid = req["args"].get("conversacion")
+                cv = db.conv_get(cid) if isinstance(cid, int) else None
+                if not cv or not cv["archived"] or cv["extracted"] is not None:
+                    return "not_done", "Ese archivo ya no espera aprender."
+                db.set_setting("archivo_aprender", str(cid))
+                return "approved", "Ashur aprenderá del chat anterior por tandas, con el modelo local."
             if action == "cancelar_encargo":
                 return "approved", cancel_encargo(req["args"].get("encargo"))
             if action in ("pausar_cola", "reanudar_cola"):

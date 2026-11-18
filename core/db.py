@@ -265,6 +265,14 @@ CREATE TABLE IF NOT EXISTS usage (
     output_tokens INTEGER NOT NULL,
     cost_usd      REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS conversations (  -- 0.62.0: every chat starts a new one; Ashur remembers through `memory`
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, started REAL NOT NULL, last_msg REAL NOT NULL,
+    closed REAL, title TEXT NOT NULL DEFAULT '', extracted REAL, archived INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS conversations_user ON conversations (user, closed);
+CREATE TABLE IF NOT EXISTS memory_vectors (  -- 0.62.0: a memory's meaning (float32, normalized), from a node's Ollama
+    memory_id INTEGER PRIMARY KEY, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS session_log (
     ts          REAL NOT NULL,
     node_id     TEXT,
@@ -362,13 +370,30 @@ class DB:
         mem = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory)")}
         if "tier" not in mem:                          # 'claude' = may travel to Claude; 'local' = local models only
             self.conn.execute("ALTER TABLE memory ADD COLUMN tier TEXT NOT NULL DEFAULT 'claude'")
+        if "owner" not in mem:                         # 0.63.0: 'sergio' or a guest's profile, 'g<id>'
+            self.conn.execute("ALTER TABLE memory ADD COLUMN owner TEXT NOT NULL DEFAULT 'sergio'")
+        if "tema" not in mem:                          # 0.63.0: trabajo, gustos, ashur, privado; NULL = not yet classified
+            self.conn.execute("ALTER TABLE memory ADD COLUMN tema TEXT")
+        pcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory_proposals)")}
+        if "owner" not in pcols:
+            self.conn.execute("ALTER TABLE memory_proposals ADD COLUMN owner TEXT NOT NULL DEFAULT 'sergio'")
         # who said it: 'sergio' or 'g<guest id>'; older rows are all Sergio's
         mcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(messages)")}
         if "user" not in mcols:
             self.conn.execute("ALTER TABLE messages ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
+        if "conversation_id" not in mcols:            # 0.62.0: each person's endless thread becomes one archived conversation
+            self.conn.execute("ALTER TABLE messages ADD COLUMN conversation_id INTEGER")
+            for r in self.conn.execute("SELECT user, MIN(ts) a, MAX(ts) b FROM messages GROUP BY user").fetchall():
+                cid = self.conn.execute(
+                    "INSERT INTO conversations (user, started, last_msg, closed, title, archived) VALUES (?, ?, ?, ?, ?, 1)",
+                    (r["user"], r["a"], r["b"], r["b"], "Archivo · antes de 0.62")).lastrowid
+                self.conn.execute("UPDATE messages SET conversation_id = ? WHERE user = ?", (cid, r["user"]))
+        self.conn.execute("CREATE INDEX IF NOT EXISTS messages_conv ON messages (conversation_id, id)")
         gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
+        if "temas" not in gcols:                       # 0.63.0: which of Sergio's topics Ashur may share with this guest
+            self.conn.execute("ALTER TABLE guests ADD COLUMN temas TEXT NOT NULL DEFAULT '[]'")
         ncols2 = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
         if "done_ts" not in ncols2:
             self.conn.execute("ALTER TABLE notes ADD COLUMN done_ts REAL")
@@ -2048,18 +2073,121 @@ class DB:
         return [dict(r) for r in rows]
 
     # --- conversation, memory, usage (the brain) -------------------------------
-    def add_message(self, ts: float, channel: str, role: str, content: str, user: str = "sergio") -> None:
+    def add_message(self, ts: float, channel: str, role: str, content: str, user: str = "sergio",
+                    conversation_id: Optional[int] = None) -> None:
         with self.lock:
-            self.conn.execute("INSERT INTO messages (ts, channel, role, content, user) VALUES (?, ?, ?, ?, ?)",
-                              (ts, channel, role, content, user))
+            self.conn.execute("INSERT INTO messages (ts, channel, role, content, user, conversation_id) VALUES (?, ?, ?, ?, ?, ?)",
+                              (ts, channel, role, content, user, conversation_id))
+            if conversation_id is not None:
+                self.conn.execute("UPDATE conversations SET last_msg = ? WHERE id = ?", (ts, conversation_id))
             self.conn.commit()
 
-    def recent_messages(self, limit: int, user: str = "sergio") -> list[dict]:
+    def recent_messages(self, limit: int, user: str = "sergio", conversation_id: Optional[int] = None) -> list[dict]:
+        with self.lock:
+            if conversation_id is None:
+                rows = self.conn.execute(
+                    "SELECT ts, channel, role, content FROM messages WHERE user = ? ORDER BY id DESC LIMIT ?",
+                    (user, limit)).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT ts, channel, role, content FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                    (conversation_id, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    # --- conversations (0.62.0) ------------------------------------------------
+    CONV_COLS = "id, user, started, last_msg, closed, title, extracted, archived"
+
+    def conv_open(self, user: str, now: float, idle_s: Optional[float] = None) -> int:
+        """The open conversation of `user`, or a new one. With idle_s, an open one quiet for longer is closed
+        first (the sweep may not have run yet)."""
+        with self.lock:
+            r = self.conn.execute("SELECT id, last_msg FROM conversations WHERE user = ? AND closed IS NULL AND archived = 0 "
+                                  "ORDER BY id DESC LIMIT 1", (user,)).fetchone()
+            if r and (idle_s is None or r["last_msg"] >= now - idle_s):
+                return r["id"]
+            if r:
+                self.conn.execute("UPDATE conversations SET closed = ? WHERE id = ?", (now, r["id"]))
+            cid = self.conn.execute("INSERT INTO conversations (user, started, last_msg) VALUES (?, ?, ?)",
+                                    (user, now, now)).lastrowid
+            self.conn.commit()
+            return cid
+
+    def conv_new(self, user: str, now: float) -> int:
+        with self.lock:
+            self.conn.execute("UPDATE conversations SET closed = ? WHERE user = ? AND closed IS NULL", (now, user))
+            cid = self.conn.execute("INSERT INTO conversations (user, started, last_msg) VALUES (?, ?, ?)",
+                                    (user, now, now)).lastrowid
+            self.conn.commit()
+            return cid
+
+    def conv_get(self, cid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute(f"SELECT {self.CONV_COLS} FROM conversations WHERE id = ?", (cid,)).fetchone()
+        return dict(r) if r else None
+
+    def conv_list(self, user: str, limit: int = 50) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(f"SELECT {self.CONV_COLS}, (SELECT COUNT(*) FROM messages WHERE "
+                                     "conversation_id = conversations.id) AS n FROM conversations WHERE user = ? "
+                                     "ORDER BY last_msg DESC, id DESC LIMIT ?", (user, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def conv_idle(self, before: float) -> list[int]:
+        with self.lock:
+            rows = self.conn.execute("SELECT id FROM conversations WHERE closed IS NULL AND last_msg < ? ORDER BY id",
+                                     (before,)).fetchall()
+        return [r["id"] for r in rows]
+
+    def conv_close(self, cid: int, now: float) -> None:
+        self.conv_set(cid, closed=now)
+
+    def conv_set(self, cid: int, **fields) -> None:
+        allowed = {"closed", "title", "extracted"}
+        if not fields or set(fields) - allowed:
+            raise ValueError(f"campos no permitidos: {set(fields) - allowed}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self.lock:
+            self.conn.execute(f"UPDATE conversations SET {sets} WHERE id = ?", (*fields.values(), cid))
+            self.conn.commit()
+
+    def conv_messages(self, cid: int, limit: Optional[int] = None, after_ts: Optional[float] = None) -> list[dict]:
+        q = "SELECT id, ts, role, content FROM messages WHERE conversation_id = ?"
+        args: list = [cid]
+        if after_ts is not None:
+            q += " AND ts > ?"
+            args.append(after_ts)
+        q += " ORDER BY id"
+        if limit is not None:
+            q += " LIMIT ?"
+            args.append(limit)
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(q, args).fetchall()]
+
+    # --- memory vectors (0.62.0) -----------------------------------------------
+    def vector_put(self, memory_id: int, model: str, vec: bytes, dim: int) -> None:
+        with self.lock:
+            self.conn.execute("INSERT OR REPLACE INTO memory_vectors (memory_id, model, dim, vec) VALUES (?, ?, ?, ?)",
+                              (memory_id, model, dim, vec))
+            self.conn.commit()
+
+    def vectors(self, model: str) -> dict:
+        with self.lock:
+            rows = self.conn.execute("SELECT memory_id, vec FROM memory_vectors WHERE model = ?", (model,)).fetchall()
+        return {r["memory_id"]: r["vec"] for r in rows}
+
+    def memories_without_vector(self, model: str, limit: int) -> list[dict]:
         with self.lock:
             rows = self.conn.execute(
-                "SELECT ts, channel, role, content FROM messages WHERE user = ? ORDER BY id DESC LIMIT ?",
-                (user, limit)).fetchall()
-        return [dict(r) for r in reversed(rows)]
+                "SELECT m.id, m.text FROM memory m LEFT JOIN memory_vectors v ON v.memory_id = m.id AND v.model = ? "
+                "WHERE v.memory_id IS NULL ORDER BY m.id LIMIT ?", (model, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def vector_count(self, model: str) -> tuple[int, int]:
+        with self.lock:
+            done = self.conn.execute("SELECT COUNT(*) FROM memory_vectors v JOIN memory m ON m.id = v.memory_id "
+                                     "WHERE v.model = ?", (model,)).fetchone()[0]
+            total = self.conn.execute("SELECT COUNT(*) FROM memory").fetchone()[0]
+        return int(done), int(total)
 
     def user_messages_after(self, after_id: int, limit: int = 40) -> list[dict]:
         with self.lock:
@@ -2133,17 +2261,76 @@ class DB:
             self.conn.commit()
         return cur.rowcount > 0
 
-    def add_memory(self, ts: float, text: str, source: str = "ashur", tier: str = "claude") -> int:
+    def add_memory(self, ts: float, text: str, source: str = "ashur", tier: str = "claude", owner: str = "sergio") -> int:
         with self.lock:
-            cur = self.conn.execute("INSERT INTO memory (created, kind, text, source, tier) VALUES (?, 'note', ?, ?, ?)",
-                                    (ts, text, source, tier))
+            cur = self.conn.execute("INSERT INTO memory (created, kind, text, source, tier, owner) VALUES (?, 'note', ?, ?, ?, ?)",
+                                    (ts, text, source, tier, owner))
             self.conn.commit()
             return cur.lastrowid
 
     def memories(self) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.conn.execute(
-                "SELECT id, created, text, source, tier FROM memory ORDER BY id").fetchall()]
+                "SELECT id, created, text, source, tier, tema FROM memory WHERE owner = 'sergio' ORDER BY id").fetchall()]
+
+    MEM_COLS = "id, created, text, source, tier, tema, owner"
+
+    def memories_of(self, owner: str) -> list[dict]:
+        """A guest's profile (0.63.0)."""
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                f"SELECT {self.MEM_COLS} FROM memory WHERE owner = ? ORDER BY id", (owner,)).fetchall()]
+
+    def memories_shared(self, temas: list) -> list[dict]:
+        """Sergio's memories a guest may hear: an allowed topic, and never «solo local»."""
+        temas = [t for t in temas if t in ("trabajo", "gustos", "ashur")]
+        if not temas:
+            return []
+        marks = ",".join("?" * len(temas))
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                f"SELECT {self.MEM_COLS} FROM memory WHERE owner = 'sergio' AND tier = 'claude' AND tema IN ({marks}) "
+                "ORDER BY id", temas).fetchall()]
+
+    def memories_without_tema(self, limit: int) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                f"SELECT {self.MEM_COLS} FROM memory WHERE owner = 'sergio' AND tema IS NULL ORDER BY id LIMIT ?",
+                (limit,)).fetchall()]
+
+    def set_memory_tema(self, memory_id: int, tema: Optional[str]) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE memory SET tema = ? WHERE id = ? AND owner = 'sergio'", (tema, memory_id))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def guest_get(self, gid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT id, name, revoked FROM guests WHERE id = ?", (gid,)).fetchone()
+        return dict(r) if r else None
+
+    def conv_due(self, limit: int = 50) -> list[dict]:
+        """Closed conversations with something not learned yet: new, or reopened since. Anyone's, guests' archives
+        included (Sergio's choice, 2026-11-17); Sergio's own archive goes through «aprender_archivo»."""
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT {self.CONV_COLS} FROM conversations c WHERE closed IS NOT NULL "
+                "AND (archived = 0 OR user LIKE 'g%') "        # a guest's 0.62 archive too; Sergio's waits for his yes
+                "AND (extracted IS NULL OR last_msg > extracted) "
+                "AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id) ORDER BY last_msg LIMIT ?",
+                (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def guest_temas(self, gid: int) -> list:
+        with self.lock:
+            r = self.conn.execute("SELECT temas FROM guests WHERE id = ?", (gid,)).fetchone()
+        return json.loads(r["temas"]) if r else []
+
+    def set_guest_temas(self, gid: int, temas: list) -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE guests SET temas = ? WHERE id = ?", (json.dumps(list(temas)), gid))
+            self.conn.commit()
+        return cur.rowcount > 0
 
     def set_memory_tier(self, memory_id: int, tier: str) -> bool:
         with self.lock:
@@ -2190,16 +2377,17 @@ class DB:
         return cur.rowcount > 0
 
     # --- proposals: what Ashur thinks is worth remembering, until Sergio decides ---
-    def proposal_add(self, ts: float, text: str, source: str) -> int:
+    def proposal_add(self, ts: float, text: str, source: str, owner: str = "sergio") -> int:
         with self.lock:
-            cur = self.conn.execute("INSERT INTO memory_proposals (ts, text, source) VALUES (?, ?, ?)", (ts, text, source))
+            cur = self.conn.execute("INSERT INTO memory_proposals (ts, text, source, owner) VALUES (?, ?, ?, ?)",
+                                    (ts, text, source, owner))
             self.conn.commit()
             return cur.lastrowid
 
     def proposals(self, status: str = "pending") -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.conn.execute(
-                "SELECT id, ts, text, source, status FROM memory_proposals WHERE status = ? ORDER BY id", (status,)).fetchall()]
+                "SELECT id, ts, text, source, status, owner FROM memory_proposals WHERE status = ? ORDER BY id", (status,)).fetchall()]
 
     def proposal_texts(self) -> set[str]:
         with self.lock:
@@ -2207,7 +2395,7 @@ class DB:
 
     def proposal_get(self, pid: int) -> Optional[dict]:
         with self.lock:
-            r = self.conn.execute("SELECT id, ts, text, source, status FROM memory_proposals WHERE id = ?", (pid,)).fetchone()
+            r = self.conn.execute("SELECT id, ts, text, source, status, owner FROM memory_proposals WHERE id = ?", (pid,)).fetchone()
         return dict(r) if r else None
 
     def proposal_set(self, pid: int, status: str) -> None:
@@ -2241,7 +2429,9 @@ class DB:
 
     def claude_requests_pending_count(self) -> int:
         with self.lock:
-            return self.conn.execute("SELECT COUNT(*) FROM claude_requests WHERE status = 'pending'").fetchone()[0]
+            # 0.63.0: what guests teach has its own cap (core/brain.py) and never takes Claude's slots
+            return self.conn.execute("SELECT COUNT(*) FROM claude_requests WHERE status = 'pending' "
+                                     "AND action NOT IN ('persona_trato', 'persona_cambio')").fetchone()[0]
 
     def claude_request_get(self, rid: int) -> Optional[dict]:
         with self.lock:
@@ -2351,9 +2541,24 @@ class DB:
             c.close()
         return [r[0] for r in rows]
 
-    def delete_memory(self, memory_id: int) -> bool:
+    def update_memory(self, memory_id: int, text: str) -> bool:
+        """Sergio corrects a memory (0.62.0); its old vector goes, so the new text is embedded again."""
         with self.lock:
-            cur = self.conn.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
+            cur = self.conn.execute("UPDATE memory SET text = ?, tema = NULL WHERE id = ?", (text, memory_id))
+            self.conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def delete_memory(self, memory_id: int, owner: Optional[str] = None) -> bool:
+        """owner: only if the memory is that person's (Ashur's own «forget» tool passes 'sergio')."""
+        with self.lock:
+            if owner is None:
+                cur = self.conn.execute("DELETE FROM memory WHERE id = ?", (memory_id,))
+            else:
+                cur = self.conn.execute("DELETE FROM memory WHERE id = ? AND owner = ?", (memory_id, owner))
+            if not cur.rowcount:
+                return False
+            self.conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
             self.conn.commit()
         return cur.rowcount > 0
 

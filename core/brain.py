@@ -11,10 +11,13 @@ import datetime as dt
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+from core import conversaciones as conv
 
 TOOLS = [
     {"name": "remember",
@@ -226,7 +229,10 @@ class Brain:
     def __init__(self, db, data_dir: str, clock: Callable[[], float],
                  network: Callable[[], dict], settings: Optional[BrainSettings] = None,
                  client: Any = None, local: Optional[Callable[[str, list], tuple[str, str]]] = None,
-                 vision: Optional[Callable[..., tuple[str, str]]] = None):
+                 vision: Optional[Callable[..., tuple[str, str]]] = None,
+                 embed: Optional[Callable[..., list]] = None):
+        self.embed = embed                   # (texts, timeout_s) -> vectors, from a node's Ollama (0.62.0)
+        self._recall = threading.local()     # this chat's query, its vector and the memories it used
         self.vision = vision                 # (prompt, image_b64, system) -> (reply, device): the Ryzen's vision model
         self.db = db
         self.persona_path = Path(data_dir) / "persona.md"
@@ -276,6 +282,39 @@ class Brain:
     def guest_persona(self, name: str) -> str:
         return (SEEDS / "guest.md").read_text(encoding="utf-8").strip().format(name=name)
 
+    def persona_section(self, title: str) -> str:
+        """One «## <title>» section of the persona, without its source lines (empty if there is none)."""
+        out, inside = [], False
+        for ln in self.persona_file().splitlines():
+            if HEADING.match(ln):
+                inside = ln.lstrip("#").strip().lower() == title.lower()
+                continue
+            if inside and not SOURCE_LINE.match(ln) and ln.strip():
+                out.append(ln)
+        return "\n".join(out)
+
+    def guest_system(self, guest: dict, local: bool = False) -> str:
+        """0.63.0: what a guest's prompt carries. The guest's seed, the «Trato» section (never the whole persona),
+        what Ashur knows of this guest and what Sergio allowed it to tell this guest, both chosen by meaning."""
+        name = guest["name"]
+        parts = [self.guest_persona(name)]
+        trato = self.persona_section("Trato")
+        if trato:
+            parts.append("Cómo tratas a la gente:\n" + trato)
+        r = self._recall
+        query, vec = getattr(r, "query", None) or "", getattr(r, "vec", None)
+        vectors = self.db.vectors(conv.EMBED_MODEL)
+        profile = [m for m in self.db.memories_of(f"g{guest['id']}") if local or m["tier"] == "claude"]
+        shared = self.db.memories_shared(self.db.guest_temas(guest["id"]))
+        p1, _ = conv.pick_memories(profile, vectors, vec, query, MAX_MEMORY_CHARS // 2 if shared else MAX_MEMORY_CHARS)
+        room = MAX_MEMORY_CHARS - sum(len(m["text"]) + 8 for m in p1)
+        p2, _ = conv.pick_memories(shared, vectors, vec, query, room)
+        parts.append(f"Lo que sabes de {name}:\n" + ("\n".join("- " + m["text"] for m in sorted(p1, key=lambda m: m["id"]))
+                                                   or "(todavía nada)"))
+        parts.append("Lo que puedes contar de Sergio:\n" + ("\n".join("- " + m["text"] for m in sorted(p2, key=lambda m: m["id"]))
+                                                           or "(nada: no compartes nada de él)"))
+        return "\n\n".join(parts)
+
     def save_persona(self, text: str) -> None:
         """The text it replaces is kept first, so a crash or a bad edit never loses a persona."""
         old = self.persona_file()
@@ -287,6 +326,22 @@ class Brain:
             vid = f"{stamp}-{n}"
         (self.versions_dir / f"{vid}.md").write_text(old, encoding="utf-8")
         self.persona_path.write_text(text.strip() + "\n", encoding="utf-8")
+
+    def add_persona_line(self, section: str, text: str, source: str) -> None:
+        """0.63.0: an approved lesson or correction, under «## <section>» (created at the end if missing), with its
+        source line; saved as a new version like any other edit."""
+        lines = self.persona_file().rstrip("\n").splitlines()
+        entry = [f"- {text.strip()}", f"> fuente: {source}"]
+        start = next((i for i, ln in enumerate(lines) if HEADING.match(ln)
+                      and ln.lstrip("#").strip().lower() == section.lower()), None)
+        if start is None:
+            lines += ["", f"## {section}"] + entry
+        else:
+            end = next((i for i in range(start + 1, len(lines)) if HEADING.match(lines[i])), len(lines))
+            while end > start + 1 and not lines[end - 1].strip():
+                end -= 1
+            lines[end:end] = entry
+        self.save_persona("\n".join(lines))
 
     def persona_versions(self) -> list[dict]:
         """Earlier texts, newest first; the id is when each one was replaced (Bogotá)."""
@@ -338,6 +393,14 @@ class Brain:
     def _memory_block(self, local: bool) -> str:
         # memories marked «solo local» never enter a prompt that goes to Claude
         notes = [m for m in self.db.memories() if local or m.get("tier", "claude") == "claude"]
+        query = getattr(self._recall, "query", None)
+        if query is not None:                          # 0.62.0: inside a chat, the memories related to what he wrote
+            picked, mode = conv.pick_memories(notes, self.db.vectors(conv.EMBED_MODEL), self._recall.vec,
+                                              query, MAX_MEMORY_CHARS)
+            self._recall.mode = mode
+            self._recall.used.update({m["id"]: m["text"] for m in picked})
+            picked.sort(key=lambda m: m["id"])
+            return "\n".join(f"[{m['id']}] {m['text']}" for m in picked) or "(todavía no hay recuerdos)"
         lines, size = [], 0
         for m in reversed(notes):                      # newest first until the cap, then restore order
             line = f"[{m['id']}] {m['text']}"
@@ -361,23 +424,15 @@ class Brain:
 
     def _system(self, voice: Optional[str] = None, local: bool = False) -> str:
         memory = self._memory_block(local)
-        past, size = [], 0
-        for sm in reversed(self.db.summaries()):
-            day = dt.datetime.fromtimestamp(sm["ts_to"], BOGOTA).strftime("%Y-%m-%d")
-            block = f"({day})\n{sm['text']}"
-            if size + len(block) > MAX_SUMMARY_CHARS:
-                break
-            past.append(block)
-            size += len(block)
-        talks = "\n".join(reversed(past)) or "(todavía no hay conversaciones resumidas)"
+        # 0.62.0: no summaries of other conversations; a chat starts clean and remembers through `memory`
+        # (search_conversations is how Ashur looks into an earlier talk when it needs to)
         now = dt.datetime.fromtimestamp(self.clock(), BOGOTA)
         text = self.voice(voice)
         layer = (f"\n\nAhora Sergio te habla desde su dispositivo «{voice}». Sigues siendo Ashur, con la misma "
                  f"memoria; en este dispositivo tu voz es así:\n{text}") if text else ""
         return (f"{self.persona().strip()}{layer}\n\n"
                 f"Fecha y hora en Bogotá: {now:%Y-%m-%d %H:%M}.\n\n"
-                f"Tus recuerdos (número entre corchetes):\n{memory}\n\n"
-                f"Resumen de conversaciones anteriores con Sergio:\n{talks}")
+                f"Tus recuerdos (número entre corchetes):\n{memory}")
 
     def _cost(self, usage) -> tuple[int, int, float]:
         tin = int(_get(usage, "input_tokens", 0) or 0) + int(_get(usage, "cache_creation_input_tokens", 0) or 0) \
@@ -396,7 +451,7 @@ class Brain:
             self.db.log(now, None, "memory_saved", {"memory_id": mid, "chars": len(text)})
             return f"Guardado como recuerdo {mid}."
         if name == "forget":
-            ok = self.db.delete_memory(int(args.get("memory_id", -1)))
+            ok = self.db.delete_memory(int(args.get("memory_id", -1)), owner="sergio")
             if ok:
                 self.db.log(now, None, "memory_deleted", {"memory_id": args.get("memory_id")})
             return "Borrado." if ok else "No existe ese recuerdo."
@@ -442,9 +497,9 @@ class Brain:
         return f"Herramienta desconocida: {name}"
 
     # --- conversation -----------------------------------------------------
-    def _history(self, text: str, user: str = "sergio") -> list[dict]:
+    def _history(self, text: str, user: str = "sergio", conversation_id: Optional[int] = None) -> list[dict]:
         history = [{"role": m["role"], "content": m["content"]}
-                   for m in self.db.recent_messages(self.s.history_messages, user)]
+                   for m in self.db.recent_messages(self.s.history_messages, user, conversation_id)]
         while history and history[0]["role"] != "user":   # a conversation must start with Sergio
             history.pop(0)
         return history + [{"role": "user", "content": text}]
@@ -457,7 +512,7 @@ class Brain:
                      share_diary: bool = False) -> tuple[str, float, list[str]]:
         client = self.client()
         # a guest gets no memories, no summaries and no tools: nothing of Sergio's is in reach
-        system = self.guest_persona(guest["name"]) if guest else self._system(voice)
+        system = self.guest_system(guest) if guest else self._system(voice)
         extra = {} if guest else {"tools": TOOLS + [t[0] for t in self.extra_tools().values()]}
         cost_total, reply_parts, tools_used = 0.0, [], []
         for _ in range(MAX_TOOL_ROUNDS + 1):
@@ -568,7 +623,7 @@ class Brain:
     def _local_system(self, guest: Optional[dict] = None, voice: Optional[str] = None,
                       docs_block: str = "", diary_block: str = "") -> str:
         if guest:
-            return self.guest_persona(guest["name"]) + "\n\nAhora respondes con un modelo local pequeño."
+            return self.guest_system(guest, local=True) + "\n\nAhora respondes con un modelo local pequeño."
         net = json.dumps(self.network(), ensure_ascii=False, default=str)
         return (f"{self._system(voice, local=True)}\n\n"
                 "Ahora respondes con un modelo local pequeño que corre en uno de los dispositivos de Sergio. "
@@ -692,6 +747,93 @@ class Brain:
         out = ["## " + h + "\n" + "\n".join(lines) for h, lines in topics.items()]   # all of them: until 0.43.2 a 120-line cap cut the end
         return "\n\n".join(out)
 
+    def learn_lines(self, text: str, source: str) -> dict:
+        """Save what a local model extracted: normal lines straight to memory, sensitive ones to the inbox."""
+        normal, sensitive, title = conv.parse_extraction(text)
+        return {**self._save_learned(normal, sensitive, source, "sergio"), "titulo": title}
+
+    def _save_learned(self, normal: list, sensitive: list, source: str, owner: str) -> dict:
+        mine = self.db.memories() if owner == "sergio" else self.db.memories_of(owner)
+        known = {m["text"].strip().lower() for m in mine} | self.db.proposal_texts()
+        n = s = 0
+        for ln in normal:
+            if ln.lower() not in known:
+                self.db.add_memory(self.clock(), ln, source=source, owner=owner)
+                known.add(ln.lower())
+                n += 1
+        for ln in sensitive:
+            if ln.lower() not in known:
+                self.db.proposal_add(self.clock(), ln, source, owner=owner)
+                known.add(ln.lower())
+                s += 1
+        return {"normales": n, "sensibles": s}
+
+    def _propose_persona(self, action: str, text: str, guest: dict, cid: int) -> bool:
+        """A lesson or correction from a guest, as a request Sergio approves. The same text is never proposed twice."""
+        seen = self.db.claude_requests(limit=1000)
+        for r in seen:
+            if r["action"] == action and str(r["args"].get("texto", "")).strip().lower() == text.strip().lower():
+                return False
+        if sum(1 for r in seen if r["status"] == "pending" and r["action"] in ("persona_trato", "persona_cambio")) \
+                >= conv.MAX_PERSONA_PENDING:
+            self.db.log(self.clock(), None, "persona_propuesta_tope", {"accion": action})
+            return False
+        self.db.claude_request_add(self.clock(), action, {"texto": text, "invitado": guest["name"], "conv": cid},
+                                   f"Lo aprendió en una conversación con {guest['name']}.")
+        self.db.log(self.clock(), None, "persona_propuesta", {"accion": action})
+        return True
+
+    def _learn_guest_piece(self, piece: str, cid: int, owner: str) -> dict:
+        g = self.db.guest_get(int(owner[1:])) or {"id": int(owner[1:]), "name": "invitado"}
+        text, _device = self.local(conv.EXTRACTOR_INVITADO.format(name=g["name"]), [{"role": "user", "content": piece}])
+        got = conv.parse_guest_extraction(text, g["name"])
+        saved = self._save_learned(got["perfil"], got["sensibles"], f"conv:{cid}", owner)
+        trato = sum(self._propose_persona("persona_trato", t, g, cid) for t in got["trato"])
+        cambio = sum(self._propose_persona("persona_cambio", t, g, cid) for t in got["cambio"])
+        self.db.log(self.clock(), None, "guest_memories_extracted",
+                    {"conv": cid, "perfil": saved["normales"], "sensibles": saved["sensibles"], "trato": trato, "cambio": cambio})
+        return {"normales": saved["normales"], "sensibles": saved["sensibles"], "titulo": got["titulo"],
+                "resumen": got["resumen"]}
+
+    def extract_conversation(self, cid: int) -> dict:
+        """0.62.0: what a closed conversation of Sergio's leaves in memory, with a LOCAL model only. Raises
+        LocalUnavailable (and marks nothing) when no device can think now: it is retried later."""
+        if self.local is None or self.s.brain == "claude":
+            raise LocalUnavailable("Este modo de Ashur no usa modelos locales.")
+        cv = self.db.conv_get(cid)
+        cursor = int(self.db.setting(f"conv_cursor:{cid}", "0"))
+        # only Sergio's own lines: Ashur's replies may restate «solo local» memories or the diary
+        rest = [m for m in self.db.conv_messages(cid) if m["id"] > cursor and m["role"] == "user"]
+        if not rest:
+            self.db.conv_set(cid, extracted=self.clock())
+            return {"normales": 0, "sensibles": 0, "terminado": True}
+        speaker = "Sergio"
+        if cv["user"].startswith("g"):
+            speaker = (self.db.guest_get(int(cv["user"][1:])) or {}).get("name") or "Invitado"
+        piece, last, n = conv.first_chunk(rest, speaker=speaker)   # one piece per pass: the sweep never waits long
+        if cv["user"].startswith("g"):                   # 0.63.0: a guest's conversation, into that guest's profile
+            got = self._learn_guest_piece(piece, cid, cv["user"])
+        else:
+            text, _device = self.local(conv.EXTRACTOR, [{"role": "user", "content": piece}])
+            got = {**self.learn_lines(text, f"conv:{cid}"), "resumen": conv.find_resumen(text)}
+        if got.get("resumen"):                           # 0.63.0: one summary per conversation, piece by piece
+            key = f"conv_resumen:{cid}"
+            self.db.set_setting(key, (self.db.setting(key, "") + " " + got["resumen"]).strip())
+        self.db.set_setting(f"conv_cursor:{cid}", str(last))
+        done = n == len(rest)
+        fields = {"title": cv["title"] or got["titulo"]}
+        if done:
+            fields["extracted"] = self.clock()
+            summary = self.db.setting(f"conv_resumen:{cid}", "")
+            msgs = self.db.conv_messages(cid)
+            if summary and msgs:
+                self.db.add_summary(self.clock(), msgs[0], msgs[-1], summary, "local")
+                self.db.set_setting(f"conv_resumen:{cid}", "")
+        self.db.conv_set(cid, **fields)
+        self.db.log(self.clock(), None, "memories_extracted",
+                    {"conv": cid, "normales": got["normales"], "sensibles": got["sensibles"]})
+        return {"normales": got["normales"], "sensibles": got["sensibles"], "terminado": done}
+
     def propose_memories(self) -> int:
         """Read what Sergio wrote since last time (diary and chat) with a LOCAL model only, and put lasting facts
         in the inbox for him to accept or discard. Nothing is saved as a memory without his say-so, and the
@@ -700,8 +842,8 @@ class Brain:
         if self.local is None or self.s.brain == "claude":
             self.propose_reason = "Este modo de Ashur no usa modelos locales."
             return 0
-        d_cur, m_cur = int(self.db.setting("prop_diary_cursor", "0")), int(self.db.setting("prop_msg_cursor", "0"))
-        entries, msgs = self.db.diary_after(d_cur), self.db.user_messages_after(m_cur)
+        d_cur = int(self.db.setting("prop_diary_cursor", "0"))
+        entries, msgs = self.db.diary_after(d_cur), []     # 0.62.0: the chat is learned per conversation instead
         if not entries and not msgs:
             self.propose_reason = "No hay entradas del diario ni mensajes nuevos desde la última búsqueda."
             return 0
@@ -738,14 +880,41 @@ class Brain:
         est = chars / 3.5 * self.s.price_in_per_mtok / 1e6 + 400 * self.s.price_out_per_mtok / 1e6
         return round(max(est, 0.001), 3)
 
-    def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
+    def _prepare_recall(self, text: str) -> None:
+        r = self._recall
+        r.query, r.vec, r.mode, r.used = text, None, None, {}
+        if self.embed is None or not self.db.vectors(conv.EMBED_MODEL):
+            return
+        try:
+            r.vec = conv.pack(self.embed([text], conv.CHAT_EMBED_TIMEOUT_S)[0])
+        except LocalUnavailable:
+            pass                                       # searched by words; the reply says so
+
+    def chat(self, text: str, channel: str = "app", guest: Optional[dict] = None, voice: Optional[str] = None,
+             **kw) -> dict:
+        kw["voice"] = voice
+        try:
+            self._prepare_recall(text.strip())
+            out = self._chat(text, channel, guest, **kw)
+            r = self._recall
+            if guest is None and r.mode and out.get("provider") not in (None, "none"):   # a guest never sees them
+                out["memories_used"] = [{"id": i, "text": t} for i, t in r.used.items()]
+                if r.mode == "palabras" and r.used:
+                    out["note"] = ((out.get("note") or "") + " Busqué recuerdos por palabras.").strip()
+                self.db.log(self.clock(), out.get("device"), "memory_search", {"modo": r.mode, "usados": len(r.used)})
+            return out
+        finally:
+            self._recall.query = None
+
+    def _chat(self, text: str, channel: str = "app", guest: Optional[dict] = None,
              voice: Optional[str] = None, allow_claude: bool = False,
-             share_docs: bool = False, share_diary: bool = False, image: Optional[dict] = None) -> dict:
+             share_docs: bool = False, share_diary: bool = False, image: Optional[dict] = None,
+             conversation_id: Optional[int] = None) -> dict:
         voice = None if guest else (voice if self.voice(voice) else None)     # guests never get a device voice
         text = text.strip()
         now = self.clock()
         user = guest_user(guest)
-        messages = self._history(text, user)
+        messages = self._history(text, user, conversation_id)
         over_budget = self.spent_this_month() >= self.s.monthly_budget_usd or (
             guest is not None and self.spent_this_month(user) >= guest["monthly_cap_usd"])
         want_claude = self.s.brain in ("auto", "claude") and self._has_claude()
@@ -844,8 +1013,8 @@ class Brain:
 
         reply = (reply or "").strip() or "(Sin respuesta.)"
         end = self.clock()
-        self.db.add_message(now, channel, "user", saved, user)
-        self.db.add_message(end, channel, "assistant", reply, user)
+        self.db.add_message(now, channel, "user", saved, user, conversation_id)
+        self.db.add_message(end, channel, "assistant", reply, user, conversation_id)
         # the session log is paper data: lengths, cost and where it ran; never the words,
         # and a guest only as an anonymous number
         detail = {"channel": channel, "provider": provider, "chars_in": len(text),

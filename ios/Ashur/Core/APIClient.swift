@@ -60,6 +60,16 @@ struct APIClient {
         return try await send(req)
     }
 
+    /// Bytes tal cual (imágenes de las notas, que piden la clave en la cabecera).
+    func data(_ path: String) async throws -> Data {
+        let req = request(path, method: "GET")
+        let (d, r) = try await session.data(for: req)
+        let code = (r as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 401 { throw Failure.wrongKey }
+        guard (200..<300).contains(code) else { throw Failure.server(code, "") }
+        return d
+    }
+
     func delete<T: Decodable>(_ path: String) async throws -> T {
         try await send(request(path, method: "DELETE"))
     }

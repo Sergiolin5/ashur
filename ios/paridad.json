@@ -16,7 +16,7 @@
   },
   "settings": {
    "estado": "parcial",
-   "nota": "menú nativo; páginas nativas: claude-requests, encargos, update, diag"
+   "nota": "menú nativo; páginas nativas en paginas"
   },
   "status": {
    "estado": "parcial",
@@ -46,22 +46,22 @@
    "estado": "nativo"
   },
   "estilo": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "formulario": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "habitos": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "map": {
    "estado": "web"
   },
   "memory": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "notes": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "space": {
    "estado": "web"
@@ -73,7 +73,8 @@
    "estado": "nativo"
   },
   "voices": {
-   "estado": "web"
+   "estado": "parcial",
+   "nota": "falta «Abrir en el mapa» en las señales (llega con el mapa nativo, etapa 4)"
   }
  },
  "endpoints": {
@@ -141,31 +142,32 @@
    "estado": "nativo"
   },
   "api/estilo": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/formulario": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/guests": {
-   "estado": "web"
+   "estado": "parcial",
+   "nota": "solo la lista de nombres (Memoria); Acceso llega en la etapa 7"
   },
   "api/guests/limits": {
    "estado": "web"
   },
   "api/habits": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/habits/conteo": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/habits/sugerencias": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/imports": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/imports/confirm": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/inventory/refresh": {
    "estado": "web"
@@ -183,7 +185,7 @@
    "estado": "nativo"
   },
   "api/madurez": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/map/accept": {
    "estado": "web"
@@ -195,16 +197,16 @@
    "estado": "web"
   },
   "api/memory": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/memory/import": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/memory/seen": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/memory/vectors": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/mudanzas": {
    "estado": "web"
@@ -213,7 +215,7 @@
    "estado": "web"
   },
   "api/notes": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/notify": {
    "estado": "web"
@@ -225,25 +227,25 @@
    "estado": "web"
   },
   "api/persona": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/persona/level": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/persona/signals": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/persona/versions": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/personas": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/proposals": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/proposals/run": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/push/check": {
    "estado": "web"
@@ -264,7 +266,7 @@
    "estado": "nativo"
   },
   "api/summaries": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/tasks": {
    "estado": "nativo"

@@ -19,9 +19,27 @@ jobs:
           sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
           xcodebuild -version
           xcodebuild -showsdks | grep -i simulator
+      - name: Parche solo para CI (SDK 26)
+        # Los runners aún no traen Xcode 27: se cambia la única API de iOS 27 (installAudioTap) por la anterior
+        # y se baja el mínimo a 26.0, solo en esta copia. El código del repo no cambia.
+        run: |
+          python3 - <<'PY'
+          p = "ios/Ashur/Voice/Dictation.swift"; s = open(p).read()
+          if "installAudioTap" in s and "${{ runner.os }}" == "macOS":
+              import subprocess
+              sdk = subprocess.run(["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"], capture_output=True, text=True).stdout.strip()
+              if int(sdk.split(".")[0]) < 27:
+                  s = s.replace("try node.installAudioTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 10), format: format) { buffer, _ in\n            request.append(AVAudioPCMBuffer(copying: buffer))",
+                                "node.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in\n            request.append(buffer)")
+                  open(p, "w").write(s); print("parche aplicado (SDK", sdk + ")")
+          PY
       - name: Compilar para el simulador
         run: |
           set -o pipefail
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          EXTRA=""; [ "${SDK%%.*}" -lt 27 ] && EXTRA="IPHONEOS_DEPLOYMENT_TARGET=26.0"
           xcodebuild -project ios/Ashur.xcodeproj -target Ashur -sdk iphonesimulator \
-            -configuration Debug CODE_SIGNING_ALLOWED=NO build 2>&1 | tee build.log | grep -E "error:|warning:|BUILD" || true
-          test "${PIPESTATUS[0]}" -eq 0
+            -configuration Debug CODE_SIGNING_ALLOWED=NO $EXTRA build > build.log 2>&1
+      - name: Errores y avisos
+        if: always()
+        run: grep -E "error:|warning:|BUILD" build.log || true

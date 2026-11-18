@@ -641,6 +641,10 @@
   }
   /* modo app (iOS): sin pestaña Chat ni «olvidar la clave»; la app los tiene */
   html.app #tab-chat, html.app #signout-row, html.app #signout { display: none !important; }
+  .dev-cfg { margin: 4px 0 2px; } .dev-cfg > summary { cursor: pointer; font-size: 12px; opacity: .75; }
+  .cfg-body { display: grid; gap: 6px; padding: 6px 0 4px; } .cfg-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .cfg-row > span { min-width: 190px; font-size: 13px; } .cfg-mods { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+  .cfg-lims { display: grid; gap: 6px; } .cfg-actions { display: flex; gap: 8px; }
 </style>
 
 </head>
@@ -1493,6 +1497,72 @@
     }
   }
 
+  // 0.67.0: each machine's configuration from the panel (chat model, modules, yield policy, limits), carried by its
+  // heartbeat into node.remote.yaml, which wins over its node.yaml. Built once per machine and moved under it after
+  // every redraw, like the disks: what was open stays open.
+  const cfgBoxes = {};
+  const LIM_ES = { idle_for_full_s: "Sin uso para modo completo (s)", other_load_off_pct: "Tu carga máxima (%)",
+                   battery_off_pct: "Batería mínima (%)" };
+  function placeConfigs() {
+    for (const slot of document.querySelectorAll("#devices .dev")) {
+      const id = slot.dataset.node;
+      if (!cfgBoxes[id]) cfgBoxes[id] = configBox(id);
+      if (cfgBoxes[id].parentNode !== slot) slot.append(cfgBoxes[id]);
+    }
+  }
+  function configBox(id) {
+    const d = el("details", "dev-cfg");
+    const body = el("div", "cfg-body");
+    d.append(el("summary", null, "Configurar"), body);
+    d.addEventListener("toggle", () => { if (d.open) loadConfig(id, body); });
+    return d;
+  }
+  async function loadConfig(id, body) {
+    body.replaceChildren(el("div", "note", "Cargando…"));
+    const url = "api/nodes/" + encodeURIComponent(id) + "/config";
+    let c;
+    try { c = await (await api(url)).json(); } catch (e) { body.replaceChildren(el("div", "note", "No pude leer la configuración.")); return; }
+    const v = c.values || {};
+    const row = (label, input) => { const r = el("label", "cfg-row"); r.append(el("span", null, label), input); return r; };
+    const model = el("input"); model.value = v.llm_model || ""; model.placeholder = "automático: el mejor que tenga instalado";
+    const useMods = el("input"); useMods.type = "checkbox"; useMods.checked = Array.isArray(v.modules);
+    const mods = el("div", "cfg-mods"), boxes = {};
+    for (const m of c.modulos) {
+      const l = el("label"), x = el("input"); x.type = "checkbox"; x.checked = (v.modules || []).includes(m);
+      boxes[m] = x; l.append(x, " " + m); mods.append(l);
+    }
+    const pol = el("select"); pol.append(new Option("la de su node.yaml", ""));
+    for (const p of c.politicas) pol.append(new Option(p, p));
+    pol.value = v.yield_policy || "";
+    const lims = {}, limBox = el("div", "cfg-lims");
+    for (const [k, [lo, hi]] of Object.entries(c.limites)) {
+      const x = el("input"); x.type = "number"; x.min = lo; x.max = hi; x.placeholder = lo + "–" + hi;
+      x.value = (v.thresholds || {})[k] ?? ""; lims[k] = x; limBox.append(row(LIM_ES[k] || k, x));
+    }
+    const status = el("div", "note", c.aplicada ? "Aplicada en el equipo." : "Pendiente: el equipo la aplica en su próximo latido.");
+    const send = async (values) => {
+      const r = await api(url, { method: "PUT", body: JSON.stringify({ values }) });
+      status.textContent = r.ok ? "Guardada. El equipo la aplica en su próximo latido (15 s)."
+                                : ((await r.json()).detail || "No se pudo guardar.");
+    };
+    const save = el("button", null, "Guardar"), clear = el("button", null, "Volver a su node.yaml");
+    save.type = clear.type = "button";
+    save.onclick = () => {
+      const values = {};
+      if (model.value.trim()) values.llm_model = model.value.trim();
+      if (useMods.checked) values.modules = Object.keys(boxes).filter((m) => boxes[m].checked);
+      if (pol.value) values.yield_policy = pol.value;
+      const t = {};
+      for (const [k, x] of Object.entries(lims)) if (x.value !== "") t[k] = Number(x.value);
+      if (Object.keys(t).length) values.thresholds = t;
+      send(values);
+    };
+    clear.onclick = () => send({});
+    const modsRow = el("div", "cfg-row"), ml = el("label"); ml.append(useMods, " Cambiar módulos"); modsRow.append(ml, mods);
+    const actions = el("div", "cfg-actions"); actions.append(save, clear);
+    body.replaceChildren(row("Modelo de chat", model), modsRow, row("Política", pol), limBox, actions, status);
+  }
+
   let lastOverviewMs = null;
   const queueArmed = {};          // a cancel waits for a second tap; kept across the panel's redraws
   // draw rings without rebuilding them: a refresh must not restart the breathing (no flicker)
@@ -1615,6 +1685,7 @@
     const invBy = Object.fromEntries((data.inventory || []).map((i) => [i.node_id, i]));
     fill("devices", nodes.map((n) => deviceBlock(n, data, invBy)), "Aún no hay dispositivos. Se irán sumando cuando los conectes.");
     placeDisks();
+    placeConfigs();
 
     // inventory
     if (data.inventory === null) {

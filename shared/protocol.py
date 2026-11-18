@@ -72,6 +72,7 @@ class Heartbeat(BaseModel):
     disks: Optional[list[dict]] = None     # disks and whether the inventory scans them (see node/disks.py), every ~10 min
     gpus: Optional[list[dict]] = None      # GPUs of this machine (see node/gpus.py), every ~10 min
     problems: Optional[list[str]] = None   # warnings/errors the agent logged since the last beat, so the panel can show them
+    config_rev: Optional[str] = None       # 0.67.0: the remote configuration this agent applied (shared/remote_config.py)
 
 
 class NewTask(BaseModel):

@@ -60,6 +60,15 @@ struct APIClient {
         return try await send(req)
     }
 
+    /// Sube bytes tal cual (audio del diario: POST /api/audio?kind=…).
+    func upload<T: Decodable>(_ path: String, query: [URLQueryItem], data: Data) async throws -> T {
+        var req = request(path, method: "POST", query: query)
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        req.timeoutInterval = 600
+        return try await send(req)
+    }
+
     /// Bytes tal cual (imágenes de las notas, que piden la clave en la cabecera).
     func data(_ path: String) async throws -> Data {
         let req = request(path, method: "GET")

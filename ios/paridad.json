@@ -5,14 +5,16 @@
    "estado": "web"
   },
   "cerebro": {
-   "estado": "web"
+   "estado": "parcial",
+   "nota": "SceneKit: vista Núcleo, filtros, ficha y actividad; la vista Red (fuerzas) queda en web"
   },
   "chat": {
    "estado": "nativo",
    "nota": "el chat nativo de etapa 3"
   },
   "diary": {
-   "estado": "web"
+   "estado": "nativo",
+   "nota": "dictado con el reconocedor del iPhone (decisión 2026-11-12), no con el nodo; los avisos siguen llegando por la app del panel (Web Push)"
   },
   "settings": {
    "estado": "parcial",
@@ -78,7 +80,7 @@
  },
  "endpoints": {
   "api/audio": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/backup": {
    "estado": "nativo"
@@ -96,10 +98,10 @@
    "estado": "web"
   },
   "api/cerebro": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/cerebro/actividad": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/chat": {
    "estado": "nativo"
@@ -120,10 +122,10 @@
    "estado": "nativo"
   },
   "api/diary": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/diary/settings": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/disks": {
    "estado": "web"
@@ -217,10 +219,10 @@
    "estado": "nativo"
   },
   "api/notify": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/notify/daily/now": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/owner": {
    "estado": "web"

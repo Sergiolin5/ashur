@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
                         looks_like_secret, month_start)
-from core import casa as casa_mod, conversaciones as conv, estilo as estilo_mod, habits, lotes, signals
+from core import casa as casa_mod, cerebro as cerebro_mod, conversaciones as conv, estilo as estilo_mod, habits, lotes, signals
 from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
@@ -2639,6 +2639,29 @@ def create_app(
                 return
 
     app.state.learning_tick = learning_tick
+
+    # --- 0.65.0: the «Cerebro» tab ----------------------------------------------------------------------
+    @app.get("/api/cerebro", dependencies=[Depends(require_admin)])
+    def cerebro_get():
+        used = set()
+        for e in db.log_rows(400):
+            if e["event"] == "memory_search" and e["ts"] > clock() - 86400:
+                used.update(e["detail"].get("ids") or [])
+        return cerebro_mod.build(db, brain.persona_file(), clock(), used)
+
+    @app.get("/api/cerebro/actividad", dependencies=[Depends(require_admin)])
+    def cerebro_actividad(desde: Optional[int] = None):
+        if desde is None:
+            return {"eventos": [], "hasta": db.log_max_rowid()}
+        rows = db.log_since(desde, limit=500)
+        return {"eventos": cerebro_mod.activity(rows)[-50:], "hasta": rows[-1]["rid"] if rows else desde}
+
+    VENDOR = Path(__file__).parent / "ui" / "vendor"
+
+    @app.get("/vendor/three.min.js")
+    def vendor_three():
+        return FileResponse(VENDOR / "three.min.js", media_type="text/javascript",
+                            headers={"Cache-Control": "public, max-age=604800"})
 
     @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
     def conversation_archive():

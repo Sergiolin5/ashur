@@ -2294,6 +2294,18 @@ class DB:
 
     MEM_COLS = "id, created, text, source, tier, tema, owner"
 
+    def memories_all(self) -> list[dict]:
+        """Everyone's memories (Sergio's and guests' profiles): only for the admin's «Cerebro» view."""
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(f"SELECT {self.MEM_COLS} FROM memory ORDER BY id").fetchall()]
+
+    def conv_recent(self, since: float, limit: int) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                f"SELECT {self.CONV_COLS} FROM conversations c WHERE last_msg >= ? AND archived = 0 "
+                "AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id) ORDER BY last_msg DESC LIMIT ?",
+                (since, limit)).fetchall()]
+
     def memories_of(self, owner: str) -> list[dict]:
         """A guest's profile (0.63.0)."""
         with self.lock:

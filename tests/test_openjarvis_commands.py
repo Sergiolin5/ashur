@@ -81,3 +81,17 @@ def test_an_openjarvis_failure_keeps_its_own_reason(oj, tmp_path, fast_local, mo
     monkeypatch.setenv("ASHUR_OJ_SKILLS", "0")
     c.app.state.encargo_step()
     assert c.db.encargo_get(eid)["error"] == "Esa capacidad de OpenJarvis está apagada."
+
+
+def test_correo_question_is_optional_and_phone_bars_count():
+    """0.67.3: «/correo from:banco» alone answered only the usage line; a phone's look-alike bar did the same."""
+    from core.integrations.openjarvis import commands
+    tool, args = commands.parse("/correo from:banco newer_than:30d")
+    assert tool == "correo_consultar" and args["consulta"] == "from:banco newer_than:30d"
+    assert args["pregunta"] == commands.RESUMEN_CORREO
+    for bar in ("|", "｜", "¦"):
+        assert commands.parse(f"/correo from:banco {bar} ¿qué avisos?")[1] == {
+            "consulta": "from:banco", "pregunta": "¿qué avisos?"}
+    import pytest
+    with pytest.raises(commands.Usage):
+        commands.parse("/correo")

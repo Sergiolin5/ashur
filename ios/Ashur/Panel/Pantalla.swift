@@ -21,13 +21,7 @@ struct Pantalla: View {
         NavigationStack {
             Group {
                 if enWeb {
-                    if activa {
-                        PanelWebView(web: web)
-                            .ignoresSafeArea(edges: .bottom)
-                            .onAppear { web.go(ruta) }
-                    } else {
-                        Color.clear
-                    }
+                    if activa { WebAqui(web: web, ruta: ruta) } else { Color.clear }
                 } else if let nativa {
                     nativa
                 }
@@ -103,6 +97,8 @@ struct PanelTabs: View {
         case .status:
             Pantalla(p.titulo, ruta: "t=status", web: web, activa: sel == p,
                      nativa: session.estado.map { AnyView(EstadoView(model: $0)) })
+        case .settings:
+            Pantalla(p.titulo, ruta: "t=settings", web: web, activa: sel == p, nativa: AnyView(AjustesView(web: web)))
         default:
             Pantalla(p.titulo, ruta: "t=" + p.rawValue, web: web, activa: sel == p)
         }

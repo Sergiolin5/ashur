@@ -40,6 +40,26 @@ struct APIClient {
         try await send(request(path, method: "POST"))
     }
 
+    func post<T: Decodable>(_ path: String, query: [URLQueryItem]) async throws -> T {
+        try await send(request(path, method: "POST", query: query))
+    }
+
+    func put<T: Decodable>(_ path: String, body: some Encodable) async throws -> T {
+        var req = request(path, method: "PUT")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+        return try await send(req)
+    }
+
+    /// POST con cabeceras extra (p. ej. X-Totp al actualizar desde fuera de la tailnet).
+    func post<T: Decodable>(_ path: String, body: some Encodable, headers: [String: String]) async throws -> T {
+        var req = request(path, method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        req.httpBody = try JSONEncoder().encode(body)
+        return try await send(req)
+    }
+
     func delete<T: Decodable>(_ path: String) async throws -> T {
         try await send(request(path, method: "DELETE"))
     }

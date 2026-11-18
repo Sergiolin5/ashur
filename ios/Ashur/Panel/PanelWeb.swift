@@ -103,3 +103,22 @@ struct PanelWebView: UIViewRepresentable {
         }
     }
 }
+
+/// El panel web en una pantalla concreta. Solo hay un WKWebView: se monta cuando esta vista aparece y se suelta al
+/// desaparecer, para que otra pestaña pueda tomarlo y al volver se monte otra vez aquí (docs/ios/NATIVO.md).
+struct WebAqui: View {
+    let web: PanelWeb
+    let ruta: String
+    @State private var visible = false
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            if visible {
+                PanelWebView(web: web).ignoresSafeArea(edges: .bottom)
+            }
+        }
+        .onAppear { visible = true; web.go(ruta) }
+        .onDisappear { visible = false }
+    }
+}

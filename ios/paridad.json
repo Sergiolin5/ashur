@@ -15,7 +15,8 @@
    "estado": "web"
   },
   "settings": {
-   "estado": "web"
+   "estado": "parcial",
+   "nota": "menú nativo; páginas nativas: claude-requests, encargos, update, diag"
   },
   "status": {
    "estado": "parcial",
@@ -27,7 +28,7 @@
    "estado": "web"
   },
   "claude-requests": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "cmds": {
    "estado": "web"
@@ -36,13 +37,13 @@
    "estado": "web"
   },
   "diag": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "docs": {
    "estado": "web"
   },
   "encargos": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "estilo": {
    "estado": "web"
@@ -69,7 +70,7 @@
    "estado": "web"
   },
   "update": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "voices": {
    "estado": "web"
@@ -107,7 +108,7 @@
    "estado": "nativo"
   },
   "api/claude-requests": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/conversations": {
    "estado": "web"
@@ -116,7 +117,7 @@
    "estado": "web"
   },
   "api/diagnostics": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/diary": {
    "estado": "web"
@@ -137,7 +138,7 @@
    "estado": "web"
   },
   "api/encargos": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/estilo": {
    "estado": "web"
@@ -173,13 +174,13 @@
    "estado": "web"
   },
   "api/lotes": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/lotes/autor": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/lotes/config": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/madurez": {
    "estado": "web"
@@ -260,7 +261,7 @@
    "estado": "nativo"
   },
   "api/selftest": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/summaries": {
    "estado": "web"
@@ -281,16 +282,16 @@
    "estado": "web"
   },
   "api/totp": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/totp/confirm": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/totp/setup": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/update": {
-   "estado": "web"
+   "estado": "nativo"
   }
  }
 }

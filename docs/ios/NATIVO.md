@@ -19,13 +19,17 @@ de la app como la mitad «Web» de cada pantalla.
 1. **Base + Estado** — interruptor, pestañas (Chat, Diario, Cerebro, Casa, Estado, Ajustes), lista de paridad y su
    chequeo, núcleo 0.67.3 (rutas). Estado nativo: cifras, en curso, cola (subir, bajar, cancelar con dos toques,
    pausar), equipos, inventario y actividad. Falta en Estado: discos y «Configurar» de cada equipo → `parcial`.
-2. **Ajustes · trabajo:** Pedidos (`claude-requests`, aprobar/rechazar), Trabajo en curso (`encargos`, lotes,
-   reintentar, dudas), Comandos (`cmds`), Actualización (`update`), Diagnóstico (`diag`). Más Estado completo (discos, configurar).
+2. **Ajustes · trabajo** (hecha, 2026-11-18): menú de Ajustes nativo (las 17 páginas, mismo orden y textos; las no
+   nativas abren el panel web en esa página), Pedidos (`claude-requests`), Trabajo en curso (`encargos`: lotes con
+   dudas y reintentos, cómo clasifican, encargos), Actualización y autenticador (`update`), Diagnóstico (`diag`, con la
+   prueba completa). Pasan a la etapa 7: Comandos (`cmds`, son textos fijos del panel: copiarlos duplicaría datos) y
+   Estado completo (discos y «Configurar» de cada equipo).
 3. **Ajustes · memoria y persona:** Memoria, Hábitos, Pendientes (`notes`), Personas (`voices`), Estilo, Formulario.
 4. **Archivos:** Mapa (`map`, Mía/Ruido, mudanzas), Documentos (`docs`), Espacio (`space`).
 5. **Diario y Cerebro.**
 6. **Casa:** dispositivos, energía, cámaras con WebRTC nativo.
-7. **El resto:** Acceso (`access`, invitados, TOTP), Conectar (`connect`), Tiempo (`time`), avisos.
+7. **El resto:** Acceso (`access`, invitados), Conectar (`connect`), Tiempo (`time`), Comandos (`cmds`), avisos y
+   Estado completo (discos, «Configurar»).
 
 ## Reglas
 - Mismos textos, orden y acciones que el panel web; si el panel cambia, se cambia aquí y en `paridad.json`.

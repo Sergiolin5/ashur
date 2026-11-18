@@ -2142,11 +2142,11 @@
       lastOverviewMs = performance.now() - t0;
       render(data);
       flushNotes();
-      if (startHash) { const h = startHash; startHash = ""; openWhere(h); }
       if (tab === "status") loadDisks(); else loadNames();
       $("note-fab").hidden = false; if (role === "admin" && (tab === "settings" || !notesLoaded)) { notesLoaded = true; loadNotes(); }
       showBudget(data.budget);
       unlock();
+      if (startHash) { const h = startHash; startHash = ""; openWhere(h); }   // after unlock: its showTab would reset the page
     } catch (e) {
       failStreak++;
       $("subtitle").classList.add("stale");
@@ -2201,7 +2201,11 @@
                   "#pedidos": ["settings", "claude-requests"], "#encargos": ["settings", "encargos"],
                   "#personas": ["settings", "voices"], "#chat": ["chat"], "#cerebro": ["cerebro"], "#casa": ["casa"] };
   // "#estado/<equipo>" lands on that device's block in Estado (0.67.5: activity rows and notices open where they happened)
+  // 0.68.1: also «#t=<pestaña>&p=<página de Ajustes>», so the iOS app can open the web version of any screen it
+  // shows natively (its Nativo / Web switch). Without p, Ajustes goes back to its menu.
   function openWhere(h) {
+    const q = new URLSearchParams(String(h || "").replace(/^#/, ""));
+    if (q.get("t")) { showTab(q.get("t")); if (q.get("t") === "settings") showPage(q.get("p") || null); return; }
     const [base, node] = String(h || "").split("/");
     const w = WHERE[base]; if (!w) return; showTab(w[0]); if (w[1]) showPage(w[1]);
     if (node) setTimeout(() => {
@@ -5275,6 +5279,7 @@
       note.textContent = j.sent ? "Aviso de prueba enviado a " + j.sent + " dispositivo(s)." : "No hay dispositivos con avisos.";
     } catch (e) { note.textContent = "No se pudo enviar la prueba."; }
   }
+  window.addEventListener("hashchange", () => { if (unlocked) openWhere(location.hash); });   // also without a service worker (iOS app)
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", (ev) => {
       const o = ev.data && ev.data.open;
@@ -5282,7 +5287,6 @@
       const h = o.replace(/^\//, "");
       if (unlocked) openWhere(h); else startHash = h;    // a tap before the key loads waits for it, it is not dropped
     });
-    window.addEventListener("hashchange", () => { if (unlocked) openWhere(location.hash); });
     swReg();
   }
 

@@ -1653,3 +1653,11 @@ def test_panel_has_an_app_mode_for_the_ios_app(env):
     assert "window.webkit.messageHandlers.ashur" in html and "window.__ASHUR_KEY" in html
     assert 'tipo: "clave_rechazada"' in html and 'tipo: "abrir"' in html
     assert "if (!NATIVE) { try { localStorage.setItem(KEY, v)" in html
+
+
+def test_panel_opens_any_screen_from_the_hash(env):
+    """0.68.1: «#t=<tab>&p=<page>» opens a screen (the iOS app's Nativo / Web switch), with or without a service worker."""
+    c, _ = env
+    html = c.get("/").text
+    assert "const q = new URLSearchParams(String(h || \"\").replace(/^#/, \"\"));" in html
+    assert html.index('window.addEventListener("hashchange"') < html.index('if ("serviceWorker" in navigator) {\n    navigator.serviceWorker.addEventListener("message"')

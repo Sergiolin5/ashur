@@ -277,7 +277,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.67.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.67.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -5008,6 +5008,27 @@ def create_app(
             lines.append(f"Ashur v{ov['version']}")
             return "\n".join(lines)
 
+        # 0.67.1: the reason of a failure, but only as fixed words recognised from Ashur's and Ollama's own messages
+        # (a model name or an HTTP code are the only values, each one checked); anything else stays unsaid.
+        MODEL_NAME = r"[A-Za-z0-9._:/-]{1,60}"
+        OLLAMA_WHY = (("does not support tools", "el modelo no acepta herramientas"),
+                      ("does not support chat", "el modelo no es de chat"),
+                      ("requires more system memory", "no le alcanza la memoria"),
+                      ("not found", "no encuentra el modelo"))
+
+        def reason_of(rest: str):
+            t = (rest or "").strip()
+            m = re.fullmatch(r"falta el modelo: ollama pull (" + MODEL_NAME + r")", t)
+            if m:
+                return f"falta el modelo {m.group(1)}"
+            if t.startswith("Ollama no tiene modelos para conversar"):
+                return "no tiene modelos de chat"
+            m = re.match(r"Ollama respondió (\d{3}) en /api/chat", t)
+            if m:
+                why = next((w for k, w in OLLAMA_WHY if k in t), None)
+                return f"Ollama {m.group(1)}" + (f", {why}" if why else "")
+            return None
+
         def diagnostico(_args: dict) -> str:
             now = clock()
             title, body, _k = daily_review(now)
@@ -5023,13 +5044,14 @@ def create_app(
                 head, sep, rest = raw.partition(":") if isinstance(raw, str) else ("", "", "")
                 kind = head if sep and not rest.startswith(("/", "\\")) \
                     and re.fullmatch(r"[A-Z][A-Za-z0-9]*", head) else None      # a class name; «C:/…» is a drive, file names never match
-                g = groups.setdefault((ev["node_id"], ev["event"], module, kind), {"count": 0, "last": ev["ts"]})
+                why = reason_of(rest) if kind else None
+                g = groups.setdefault((ev["node_id"], ev["event"], module, kind, why), {"count": 0, "last": ev["ts"]})
                 g["count"] += 1
                 g["last"] = max(g["last"], ev["ts"])
             if groups:
                 lines.append("Fallas de las últimas 24 h:")
-                for (node, event, module, kind), g in sorted(groups.items(), key=lambda kv: -kv[1]["last"]):
-                    parts = [node or "núcleo", event] + [x for x in (module, kind) if x]
+                for (node, event, module, kind, why), g in sorted(groups.items(), key=lambda kv: -kv[1]["last"]):
+                    parts = [node or "núcleo", event] + [x for x in (module, kind, why) if x]
                     parts += [f"{g['count']} {'vez' if g['count'] == 1 else 'veces'}", f"última {hhmm(g['last'])}"]
                     lines.append(" · ".join(parts))
             return "\n".join(lines)

@@ -15,21 +15,26 @@ de la app como la mitad «Web» de cada pantalla.
 - **Compilación:** GitHub Actions en macOS (SDK 26 de los runners, parche solo en CI). Las pruebas en el Duo, cuando
   Sergio pueda (Mac desbloqueada).
 
-## Etapas (una por push, cada una compilada en CI)
-1. **Base + Estado** — interruptor, pestañas (Chat, Diario, Cerebro, Casa, Estado, Ajustes), lista de paridad y su
-   chequeo, núcleo 0.67.3 (rutas). Estado nativo: cifras, en curso, cola (subir, bajar, cancelar con dos toques,
-   pausar), equipos, inventario y actividad. Falta en Estado: discos y «Configurar» de cada equipo → `parcial`.
-2. **Ajustes · trabajo** (hecha, 2026-11-18): menú de Ajustes nativo (las 17 páginas, mismo orden y textos; las no
-   nativas abren el panel web en esa página), Pedidos (`claude-requests`), Trabajo en curso (`encargos`: lotes con
-   dudas y reintentos, cómo clasifican, encargos), Actualización y autenticador (`update`), Diagnóstico (`diag`, con la
-   prueba completa). Pasan a la etapa 7: Comandos (`cmds`, son textos fijos del panel: copiarlos duplicaría datos) y
-   Estado completo (discos y «Configurar» de cada equipo).
-3. **Ajustes · memoria y persona:** Memoria, Hábitos, Pendientes (`notes`), Personas (`voices`), Estilo, Formulario.
-4. **Archivos:** Mapa (`map`, Mía/Ruido, mudanzas), Documentos (`docs`), Espacio (`space`).
-5. **Diario y Cerebro.**
-6. **Casa:** dispositivos, energía, cámaras con WebRTC nativo.
-7. **El resto:** Acceso (`access`, invitados), Conectar (`connect`), Tiempo (`time`), Comandos (`cmds`), avisos y
-   Estado completo (discos, «Configurar»).
+## Etapas (todas hechas el 2026-11-18, cada una compilada en CI)
+1. **Base + Estado:** interruptor, pestañas, lista de paridad y su chequeo. Estado: cifras, en curso, cola, equipos,
+   inventario, actividad; después discos (Incluido/Fuera), «Configurar», nombres, saludo y «Sin respaldo».
+2. **Ajustes · trabajo:** menú de Ajustes, Pedidos, Trabajo en curso (lotes, dudas, reintentos), Actualización y
+   autenticador, Diagnóstico con la prueba completa.
+3. **Memoria y persona:** Memoria, Hábitos, Notas del panel, Personas (con señales que abren el mapa), Tu estilo
+   (chats de más de 6 MB por partes, como el núcleo 0.67.6), Formulario.
+4. **Archivos:** Mapa de archivos (Mía/Ruido, mudanzas), Documentos, Archivos y espacio.
+5. **Diario y Cerebro:** el diario con borrador, dictado del iPhone, audio, avisos y entradas; el Cerebro en SceneKit.
+6. **Casa:** casas, dispositivos con control y confirmación, organizar, Energía con su gráfica.
+7. **El resto:** Acceso (invitados, límites, conector), Conectar un equipo y Comandos (leen CONNECT y CMDS del propio
+   panel, no los copian), Mi tiempo. Y el chat con conversaciones (0.62).
+
+## Lo que sigue en web (y por qué)
+- **Cámaras en vivo (Casa):** WebRTC nativo necesita un paquete nuevo; falta que Sergio lo elija. Además el panel cuida
+  la sesión de video (renovaciones con tope, el token nunca junto a la clave): portarlo exige copiar esas reglas tal cual.
+- **Cerebro, vista «Red»** (fuerzas): la vista «Núcleo» sí es nativa.
+- **Energía:** nivel por sensor y mini gráficas por sensor.
+- **Avisos (Web Push):** la app nativa no recibe avisos; harían falta APNs y una cuenta de desarrollador paga.
+- **Chat:** foto de la cámara y elegir persona (usa la del iPhone).
 
 ## Reglas
 - Mismos textos, orden y acciones que el panel web; si el panel cambia, se cambia aquí y en `paridad.json`.

@@ -371,6 +371,8 @@ class Brain:
         p1, _ = conv.pick_memories(profile, vectors, vec, query, MAX_MEMORY_CHARS // 2 if shared else MAX_MEMORY_CHARS)
         room = MAX_MEMORY_CHARS - sum(len(m["text"]) + 8 for m in p1)
         p2, _ = conv.pick_memories(shared, vectors, vec, query, room)
+        if getattr(r, "used", None) is not None and query:   # 0.65.0: what it used, for the «Cerebro» tab
+            r.used.update({m["id"]: m["text"] for m in p1 + p2})
         parts.append(f"Lo que sabes de {name}:\n" + ("\n".join("- " + m["text"] for m in sorted(p1, key=lambda m: m["id"]))
                                                    or "(todavía nada)"))
         parts.append("Lo que puedes contar de Sergio:\n" + ("\n".join("- " + m["text"] for m in sorted(p2, key=lambda m: m["id"]))
@@ -968,7 +970,11 @@ class Brain:
                 out["memories_used"] = [{"id": i, "text": t} for i, t in r.used.items()]
                 if r.mode == "palabras" and r.used:
                     out["note"] = ((out.get("note") or "") + " Busqué recuerdos por palabras.").strip()
-                self.db.log(self.clock(), out.get("device"), "memory_search", {"modo": r.mode, "usados": len(r.used)})
+            if out.get("provider") not in (None, "none") and (r.mode or guest is not None):
+                # 0.65.0: ids only (never text), so the «Cerebro» tab lights what it really used
+                self.db.log(self.clock(), out.get("device"), "memory_search",
+                            {"modo": r.mode or "invitado", "usados": len(r.used), "ids": sorted(r.used),
+                             "quien": "yo" if guest is None else f"g{guest['id']}"})
             return out
         finally:
             self._recall.query = None

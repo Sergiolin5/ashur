@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
                         looks_like_secret, month_start)
-from core import casa as casa_mod, conversaciones as conv, estilo as estilo_mod, habits, lotes, signals
+from core import casa as casa_mod, cerebro as cerebro_mod, conversaciones as conv, estilo as estilo_mod, habits, lotes, signals
 from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
@@ -50,7 +50,8 @@ from shared.protocol import (
 )
 
 UI_PAGE = Path(__file__).parent / "ui" / "index.html"
-APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", "/sw.js")   # public: the icon and manifest
+APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", "/sw.js",   # public: the icon and manifest
+             "/vendor/three.min.js")                                                    # and three.js (MIT) for «Cerebro»
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
@@ -254,6 +255,7 @@ def create_app(
                         app.state.embed_due()                     # 0.62.0: memories without a vector, one batch
                         app.state.tema_due()                      # 0.63.0: memories without a topic, one batch
                         app.state.learning_tick()                 # 0.62–0.64: one local learning job per tick
+                        cerebro_mod.similar_edges(db.vectors(conv.EMBED_MODEL), set())   # 0.65.0: warm, incremental
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
@@ -274,7 +276,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.64.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.65.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2639,6 +2641,29 @@ def create_app(
                 return
 
     app.state.learning_tick = learning_tick
+
+    # --- 0.65.0: the «Cerebro» tab ----------------------------------------------------------------------
+    @app.get("/api/cerebro", dependencies=[Depends(require_admin)])
+    def cerebro_get():
+        used = set()
+        for e in db.log_rows(400):
+            if e["event"] == "memory_search" and e["ts"] > clock() - 86400:
+                used.update(e["detail"].get("ids") or [])
+        return cerebro_mod.build(db, brain.persona_file(), clock(), used)
+
+    @app.get("/api/cerebro/actividad", dependencies=[Depends(require_admin)])
+    def cerebro_actividad(desde: Optional[int] = None):
+        if desde is None:
+            return {"eventos": [], "hasta": db.log_max_rowid()}
+        rows = db.log_since(desde, limit=500)
+        return {"eventos": cerebro_mod.activity(rows)[-50:], "hasta": rows[-1]["rid"] if rows else desde}
+
+    VENDOR = Path(__file__).parent / "ui" / "vendor"
+
+    @app.get("/vendor/three.min.js")
+    def vendor_three():
+        return FileResponse(VENDOR / "three.min.js", media_type="text/javascript",
+                            headers={"Cache-Control": "public, max-age=604800"})
 
     @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
     def conversation_archive():

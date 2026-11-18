@@ -437,3 +437,52 @@ def test_retry_a_failed_encargo_is_a_new_one_in_pedidos(tmp_path, fast_local):
     assert new["status"] == "pending_approval" and new["op"] == "resumir" and new["docs"][0]["name"] == "manual.txt"
     assert [q for q in c.db.claude_requests(50) if q["args"] == {"encargo": new["id"]}][0]["status"] == "pending"
     assert t.post(f"/api/encargos/{e1}/retry", headers=A).status_code == 409     # one retry at a time
+
+
+# --- dudas (0.61.3): Sergio corrects who wrote a document, or has the doubtful ones classified again --------------
+def doubtful_lote(tmp_path, unsure=("manual.txt", "b.txt")):
+    c, t = setup(tmp_path)
+    ask(c)
+    node = FakeLLM(t, lambda p, n: "No sé." if any(u in json.dumps(p) for u in unsure) else answer(p, n))
+    try:
+        approve(c, t, 1)
+        run(c)
+    finally:
+        node.close()
+    return c, t
+
+
+def test_a_correction_by_hand_sticks_and_no_redo_writes_over_it(tmp_path, fast_local):
+    c, t = doubtful_lote(tmp_path)
+    got = t.get("/api/lotes/1/muestra?tipo=&n=30", headers=A).json()
+    assert got["total"] == 2
+    b = [x for x in got["muestra"] if x["ruta"].endswith("b.txt")][0]
+    assert t.put("/api/lotes/autor", headers=A, json={"equipo": "mac-m1", "ruta": b["ruta"], "autor": "nadie"}).status_code == 422
+    assert t.put("/api/lotes/autor", headers=A, json={"equipo": "mac-m1", "ruta": "/no/existe.txt", "autor": "otro"}).status_code == 404
+    assert t.put("/api/lotes/autor", headers=A, json={"equipo": "mac-m1", "ruta": b["ruta"], "autor": "sergio"}).status_code == 200
+    v = c.db.signal_get("mac-m1", b["ruta"], "tipo")["value"]
+    assert v["autor"] == "sergio" and v["corregido"] is True
+    assert t.get("/api/lotes/1/muestra?tipo=&n=30", headers=A).json()["total"] == 1
+    assert [d[1] for d in c.db.lote_pending("tipo", 99)] == sorted(p for p in DOCS if not p.endswith("b.txt"))  # «rehacer» skips it
+
+
+def test_reclassify_takes_only_the_doubtful_ones_and_waits_for_approval(tmp_path, fast_local):
+    c, t = doubtful_lote(tmp_path)
+    r = t.post("/api/lotes/1/dudas", headers=A)
+    assert r.status_code == 200 and r.json()["documentos"] == 2
+    assert t.post("/api/lotes/1/dudas", headers=A).status_code == 409                # one at a time
+    assert c.db.lote_get(2)["status"] == "pending_approval" and run(c) == 0
+    assert "(solo dudas)" in t.get("/api/lotes", headers=A).json()[0]["label"]
+    node = FakeLLM(t, answer)
+    try:
+        approve(c, t, 2)
+        c.step()
+        c.app.state.lote_forget()                                                    # restart: never redoes a.txt
+        run(c)
+    finally:
+        node.close()
+    assert sum("a.txt" in json.dumps(p) for p in node.payloads) == 0
+    L = c.db.lote_get(2)
+    assert (L["status"], L["done"]) == ("done", 2)
+    assert {json.loads(v)["autor"] for _, p, v in c.db.signals("tipo")} == {"sergio", "otro"}
+    assert t.post("/api/lotes/2/dudas", headers=A).status_code == 409                # nothing left in doubt

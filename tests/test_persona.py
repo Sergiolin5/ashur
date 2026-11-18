@@ -123,3 +123,25 @@ def test_signals_count_every_document_and_hold_health_folders(tmp_path):
 def test_signals_folder_depth_is_capped():
     assert signals.folder("C:\\a\\b\\c\\d\\e\\f\\g.txt") == "C:/a/b/c/d"
     assert signals.folder("/x.txt") == "/"
+
+
+def test_signals_list_the_biggest_folders_he_has_not_marked_yet(tmp_path):
+    """0.61.4: the panel's summary — folders by documents, without a «Mía» / «Ruido» mark (own or inherited)."""
+    c, _, db = app_at(tmp_path)
+    db.docs_apply("ryzen9", [{"path": f"C:\\Users\\s\\Documents\\Diario\\{i}.docx", "modified": None, "chunks": ["x"]} for i in range(3)]
+                  + [{"path": "C:\\Users\\s\\Documents\\Tesis\\t.docx", "modified": None, "chunks": ["x"]},
+                     {"path": "C:\\Users\\s\\Downloads\\Viejo\\v.pdf", "modified": None, "chunks": ["x"]}], [])
+    db.docs_apply("mac-m1", [{"path": "/Users/s/notas/d.txt", "modified": None, "chunks": ["x"]}], [])
+    u = c.get("/api/persona/signals", headers=A).json()["sin_revisar"]
+    assert (u["carpetas"], u["revisadas"], u["docs_sin_revisar"]) == (4, 0, 6)
+    assert u["top"][0] == {"equipo": "ryzen9", "carpeta": "C:\\Users\\s\\Documents\\Diario\\", "documentos": 3}
+    assert {"equipo": "mac-m1", "carpeta": "/Users/s/notas/", "documentos": 1} in u["top"]
+    assert c.put("/api/map/mark", headers=A, json={"node": "ryzen9", "path": "C:\\Users\\s\\Documents\\", "mark": "mia"}).status_code == 200
+    assert c.put("/api/map/mark", headers=A, json={"node": "ryzen9", "path": "C:\\Users\\s\\Downloads\\Viejo\\", "mark": "ruido"}).status_code == 200
+    u = c.get("/api/persona/signals", headers=A).json()["sin_revisar"]
+    assert (u["revisadas"], u["docs_sin_revisar"]) == (3, 1) and [x["equipo"] for x in u["top"]] == ["mac-m1"]
+
+
+def test_map_folder_keeps_the_devices_separator():
+    assert signals.map_folder("C:\\a\\b\\c\\d\\e\\f\\g.txt") == "C:\\a\\b\\c\\d\\"
+    assert signals.map_folder("/Users/s/x.txt") == "/Users/s/"

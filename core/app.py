@@ -2334,7 +2334,11 @@ def create_app(
     @app.get("/api/persona/signals", dependencies=[Depends(require_admin)])
     def persona_signals():
         """Counts over every indexed document, no model. Plain def: FastAPI runs it off the event loop."""
-        out = signals.profile(db.docs_profile())
+        rows = db.docs_profile()
+        out = signals.profile(rows)
+        marks: dict[str, dict] = {}
+        out["sin_revisar"] = signals.unreviewed(            # panel only: the text for Claude is out["text"], as before
+            rows, lambda n, f: db.mark_under(marks.setdefault(n, db.folder_marks(n)), f)[0])
         db.log(clock(), None, "persona_signals", {"documents": out["documents"]})
         return out
 
@@ -4295,7 +4299,8 @@ def create_app(
                 return False
             if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
                 pending = [d for d in db.lote_pending(L["pase"], lid if L["scope"].get("rehacer") else None,
-                                                      mine_only=L["pase"] == "voz", also_done=tuple(L["scope"].get("sigue", ())))
+                                                      mine_only=L["pase"] == "voz", also_done=tuple(L["scope"].get("sigue", ())),
+                                                      dudas_only=bool(L["scope"].get("dudas")))
                            if lotes.in_scope(d[0], d[1], L["scope"])]
                 kinds = lote_kinds()
                 lote_queue.update(system=lotes.prompt_tipo(lote_names(), kinds), kinds=kinds)
@@ -4390,8 +4395,8 @@ def create_app(
         rows = []
         for node, path, value in db.lote_signals(lid):
             v = json.loads(value)
-            if v.get("tipo") == tipo and v.get("autor") == autor:
-                rows.append({"equipo": node, "ruta": path, "crudo": v.get("crudo")})
+            if (not tipo or v.get("tipo") == tipo) and v.get("autor") == autor:
+                rows.append({"equipo": node, "ruta": path, "tipo": v.get("tipo"), "crudo": v.get("crudo")})
         step = max(1, len(rows) // max(1, min(n, 30)))           # spread over the list, not the first ten of one folder
         return {"total": len(rows), "muestra": rows[::step][:min(n, 30)]}
 
@@ -4415,6 +4420,52 @@ def create_app(
         if p and p["status"] in ("pending_approval", "queued", "running", "paused"):
             raise HTTPException(409, f"Ya hay un reintento sin terminar (#{p['id']}).")
 
+    class AutorFix(BaseModel):
+        equipo: str = Field(min_length=1, max_length=200)
+        ruta: str = Field(min_length=1, max_length=4096)
+        autor: str = Field(pattern="^(sergio|otro)$")
+
+    @app.put("/api/lotes/autor", dependencies=[Depends(require_admin)])
+    def lote_autor_fix(body: AutorFix):
+        """Sergio says who wrote a document the first pass left in «duda» (or got wrong). His word is marked
+        «corregido»: no later lote, «rehacer» included, writes over it."""
+        cur = db.signal_get(body.equipo, body.ruta, "tipo")
+        if not cur:
+            raise HTTPException(404, "Ese documento aún no tiene tipo.")
+        value = dict(cur["value"], autor=body.autor, corregido=True)
+        db.signal_put(body.equipo, body.ruta, "tipo", value, cur["lote"], "sergio", clock())
+        db.log(clock(), None, "lote_autor_corregido", {"autor": body.autor})
+        return {"ok": True}
+
+    @app.post("/api/lotes/{lid}/dudas", dependencies=[Depends(require_admin)])
+    def lote_redo_dudas(lid: int):
+        """A new «rehacer» lote over the documents of this lote's folder still in «duda» (not corrected by hand), on
+        the most powerful model ready, like every lote. Waits in «Por aprobar»."""
+        L = db.lote_get(lid)
+        if not L:
+            raise HTTPException(404, "No existe ese lote.")
+        if L["pase"] != "tipo" or L["status"] not in ("done", "kept", "released"):
+            raise HTTPException(409, "Solo se reclasifican las dudas de un lote de tipo terminado.")
+        scope = {k: v for k, v in L["scope"].items() if k in ("equipo", "carpeta")}
+        scope.update(rehacer=True, dudas=True)
+        todo = [d for d in db.lote_pending("tipo", 0, dudas_only=True) if lotes.in_scope(d[0], d[1], scope)]
+        if not todo:
+            raise HTTPException(409, "No quedan documentos en duda ahí.")
+        reason = f"Reclasificar {len(todo)} documentos en duda del lote #{lid}."
+        with request_lock:
+            retry_open(f"lote_dudas:{lid}", db.lote_get)
+            if db.lote_unfinished_count():
+                raise HTTPException(409, "Ya hay un lote sin terminar; va uno a la vez.")
+            if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                raise HTTPException(409, "Ya hay 5 pedidos esperando; decide alguno primero.")
+            new = db.lote_add(clock(), "tipo", scope, reason)
+            db.lote_set(new, total=len(todo))
+            db.set_setting(f"lote_model:{new}", str(len(todo)))
+            rid = db.claude_request_add(clock(), "lote", {"lote": new}, reason)
+            db.set_setting(f"lote_dudas:{lid}", str(new))
+        db.log(clock(), None, "claude_request", {"id": rid, "action": "lote", "label": action_label("lote", {"lote": new})})
+        return {"lote": new, "pedido": rid, "documentos": len(todo)}
+
     @app.post("/api/lotes/{lid}/retry", dependencies=[Depends(require_admin)])
     def lote_retry(lid: int):
         """A new lote, same pass and folder, over what this one did not finish: its failed documents (they are left
@@ -4429,7 +4480,7 @@ def create_app(
         if scope.get("rehacer"):
             scope["sigue"] = list(scope.get("sigue", ())) + [lid]
         todo = [d for d in db.lote_pending(L["pase"], 0 if scope.get("rehacer") else None, mine_only=L["pase"] == "voz",
-                                           also_done=tuple(scope.get("sigue", ())))
+                                           also_done=tuple(scope.get("sigue", ())), dudas_only=bool(scope.get("dudas")))
                 if lotes.in_scope(d[0], d[1], scope)]
         if not todo:
             raise HTTPException(409, "No queda nada por hacer de ese lote.")

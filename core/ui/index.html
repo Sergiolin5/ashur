@@ -1001,9 +1001,12 @@
     <section>
       <h2>Señales de tus documentos</h2>
       <div class="group signin">
-        <p>Cuenta todos los documentos leídos por carpeta, tipo, hora y día. No usa ningún modelo ni lee su texto. Las carpetas de salud se ven aquí pero no entran en el texto para Claude.</p>
+        <p>Qué carpetas con documentos leídos te faltan por revisar en el mapa. Lo que no marcas «Mía» o «Ruido» se queda fuera de la mudanza. Cuenta sin modelo y sin leer el texto.</p>
         <button type="button" id="signals-run">Contar ahora</button>
-        <button type="button" id="signals-copy" class="link" style="text-align:center" hidden>Copiar para Claude</button>
+        <div id="signals-sum" class="note" hidden></div>
+        <div id="signals-top" class="group" hidden></div>
+        <button type="button" id="signals-raw" class="link" style="text-align:center" hidden>Ver el conteo completo</button>
+        <button type="button" id="signals-copy" class="link" style="text-align:center" hidden>Copiar conteo para Claude</button>
         <pre id="signals-out" class="note" hidden style="white-space:pre-wrap;font-size:12px;user-select:all"></pre>
         <div id="signals-health" class="note" hidden></div>
       </div>
@@ -3512,19 +3515,41 @@
         if (L.salud && L.salud.length) m.append(el("div", "detail wrap", "No va a Claude (salud), " + L.salud.length + (L.salud.length === 1 ? " línea" : " líneas") + "."));
         const a = el("div", "acts");
         if (!open && L.done) {                                   // what the model really said for the «otro / duda» ones
-          const see = el("button", null, "Ver respuestas en duda"), box = el("div", "detail wrap");
+          const see = el("button", null, "Ver las dudas"), box = el("div", "detail wrap");
           see.type = "button";
           see.onclick = async () => {
             see.disabled = true;
             try {
-              const r = await api("api/lotes/" + L.id + "/muestra");
+              const r = await api("api/lotes/" + L.id + "/muestra?tipo=&n=30");
               const d = await r.json();
               const text = d.muestra.map((x) => x.equipo + ": " + x.ruta + "\n  → " + (x.crudo || "(sin respuesta guardada)")).join("\n");
-              box.replaceChildren(el("div", null, d.total + " documentos «otro / duda»; " + d.muestra.length + " de muestra:"), el("pre", "note", text));
-              box.querySelector("pre").style.cssText = "white-space:pre-wrap;font-size:12px;user-select:all";
+              const items = d.muestra.map((x) => {                // Sergio says whose it is: his word is never redone
+                const it = el("div", "row nrow"), mm = el("div", "main"), acts = el("div", "acts");
+                mm.append(el("div", "title wrap", x.ruta.split(/[\\/]/).pop()), el("div", "detail wrap", x.equipo + ": " + x.ruta),
+                          el("div", "detail wrap", "Tipo: " + (x.tipo || "otro") + " · el modelo dijo: " + (x.crudo || "(nada guardado)")));
+                for (const [who, label] of [["sergio", "Mía"], ["otro", "De otro"]]) {
+                  const b = el("button", null, label); b.type = "button";
+                  b.onclick = async () => {
+                    for (const x2 of acts.querySelectorAll("button")) x2.disabled = true;
+                    const res = await api("api/lotes/autor", { method: "PUT", body: JSON.stringify({ equipo: x.equipo, ruta: x.ruta, autor: who }) });
+                    if (res.ok) acts.replaceChildren(el("div", "detail", who === "sergio" ? "Marcado como tuyo." : "Marcado como de otro."));
+                    else { acts.append(el("div", "detail", await detailOf(res, "No pude guardarlo."))); for (const x2 of acts.querySelectorAll("button")) x2.disabled = false; }
+                  };
+                  acts.append(b);
+                }
+                mm.append(acts); it.append(mm); return it;
+              });
+              const redo = el("button", null, "Reclasificar las " + nf.format(d.total) + " dudas"); redo.type = "button";
+              redo.onclick = async () => {
+                redo.disabled = true;
+                const res = await api("api/lotes/" + L.id + "/dudas", { method: "POST" });
+                if (res.ok) { const j = await res.json(); redo.textContent = "Lote #" + j.lote + " (" + nf.format(j.documentos) + " documentos): apruébalo en Pedidos"; loadInbox(); loadLotes(); }
+                else { redo.textContent = await detailOf(res, "No pude crear el lote."); }
+              };
               const cp = el("button", "link", "Copiar para Claude"); cp.type = "button";
               cp.onclick = async () => { try { await navigator.clipboard.writeText(text); cp.textContent = "Copiado"; } catch (e) { showCopy(text); } };
-              box.append(cp);
+              box.replaceChildren(el("div", null, nf.format(d.total) + " documentos en duda" + (d.total > d.muestra.length ? "; " + d.muestra.length + " de muestra" : "") + ". Di de quién es cada uno o reclasifícalos todos con el modelo más fuerte:"),
+                                  ...(d.total ? [redo] : []), ...items, cp);
             } catch (e) { box.textContent = "No pude traer la muestra."; }
             see.disabled = false;
           };
@@ -4044,12 +4069,25 @@
       if (!r.ok) throw new Error(await detailOf(r, "HTTP " + r.status));
       const p = await r.json();
       signalsText = p.text;
-      out.textContent = p.text; out.hidden = false; $("signals-copy").hidden = false;
+      out.textContent = p.text; out.hidden = true; $("signals-raw").hidden = false; $("signals-copy").hidden = false;
+      const u = p.sin_revisar, sum = $("signals-sum"), top = $("signals-top");
+      sum.hidden = false;
+      sum.textContent = nf.format(u.revisadas) + " de " + nf.format(u.carpetas) + " carpetas revisadas" +
+        (u.top.length ? "; faltan " + nf.format(u.docs_sin_revisar) + " documentos. Las que más tienen:" : ". No te falta ninguna.");
+      top.hidden = !u.top.length;
+      top.replaceChildren(...u.top.map((x) => {                // each one opens that folder in the map, where Mía / Ruido are
+        const r = el("div", "row nrow"), m = el("div", "main"), go = el("button", null, "Abrir en el mapa");
+        m.append(el("div", "title wrap", x.carpeta), el("div", "detail", nm(x.equipo) + " · " + nf.format(x.documentos) + " documentos"));
+        go.type = "button";
+        go.onclick = async () => { showPage("map"); loadMoves(); await mapLoad(null, ""); mapLoad(x.equipo, x.carpeta); };
+        const a = el("div", "acts"); a.append(go); m.append(a); r.append(m); return r;
+      }));
       h.hidden = !p.health_folders.length;
       h.textContent = "Solo para ti (salud, no va a Claude): " + p.health_folders.map((f) => f[0] + ": " + f[1] + " (" + f[2] + ")").join(" · ");
     } catch (e) { out.textContent = "No pude contar las señales: " + e.message; out.hidden = false; }
     b.disabled = false; b.textContent = "Contar ahora";
   });
+  $("signals-raw").addEventListener("click", () => { const o = $("signals-out"); o.hidden = !o.hidden; $("signals-raw").textContent = o.hidden ? "Ver el conteo completo" : "Ocultar el conteo"; });
   $("signals-copy").addEventListener("click", async () => {
     const b = $("signals-copy");
     try { await navigator.clipboard.writeText(signalsText); b.textContent = "Copiado: pégalo en el chat"; } catch (e) { b.textContent = "No pude copiar"; showCopy(signalsText); }

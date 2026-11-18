@@ -21,7 +21,8 @@ class FakeOllama:
     def post(self, url, timeout=None, json=None):
         self.bodies.append(json)
         msg = self.message
-        return type("R", (), {"json": lambda s: {"message": msg, "eval_count": 3, "total_duration": 1e9},
+        return type("R", (), {"status_code": 200, "json": lambda s: {"message": msg, "eval_count": 3,
+                                                                     "total_duration": 1e9},
                               "raise_for_status": lambda s: None})()
 
 
@@ -225,3 +226,20 @@ def test_schedule_validation(oj, tmp_path):
     row = schedule.add(db, "deep_research", "x", "07:30", None, {"pregunta": "x"})
     assert schedule.describe(row).endswith("07:30 · todos los días")
     assert schedule.remove(db, row["id"]) and not schedule.remove(db, row["id"])
+
+
+class FakeOllama400(FakeOllama):
+    def post(self, url, timeout=None, json=None):
+        self.bodies.append(json)
+        return type("R", (), {"status_code": 400, "text": "",
+                              "json": lambda s: {"error": "registry.ollama.ai/library/qwen2.5:7b does not support tools"}})()
+
+
+def test_an_ollama_rejection_says_why():
+    """0.63.3: the ryzen9 answered 400 thirty times and the panel only said «400 Bad Request»."""
+    from modules.llm import action
+    tools = [{"type": "function", "function": {"name": "web_search"}}]
+    with pytest.raises(RuntimeError) as e:
+        action.run({"system": "s", "messages": [], "tools": tools}, Ctx(), client=FakeOllama400(None))
+    assert str(e.value) == ("Ollama respondió 400 en /api/chat: registry.ollama.ai/library/qwen2.5:7b does not support "
+                            "tools (con herramientas)")

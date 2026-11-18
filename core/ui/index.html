@@ -312,6 +312,10 @@
   #activity .row { min-height: 0; padding: 9px var(--pad); align-items: flex-start; }
   #activity .title { font-size: var(--fs-small); font-weight: 400; white-space: normal; }
   #activity .detail { font: 12px var(--mono); margin-top: 1px; }
+  #activity .row.tap { cursor: pointer; }
+  #activity .row.tap:active { background: var(--row-press, rgba(127,127,127,.12)); }
+  #activity .row .mi-go { align-self: center; color: var(--secondary); padding-left: var(--s2, 8px); }
+  .dev.flash { outline: 2px solid var(--tint); outline-offset: 2px; border-radius: 12px; transition: outline-color .6s; }
 
   /* ---- Ajustes: one divided list; each entry opens its own page ---- */
   .menu { margin-top: var(--s5); background: var(--row); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
@@ -1459,6 +1463,18 @@
     }
   }
 
+  // where an activity line leads: its page, or the device it happened on
+  function whereOf(ev) {
+    const e = ev.event, d = ev.detail || {};
+    if (e === "notified" && d.url) return String(d.url).replace(/^\//, "");
+    if (e.startsWith("chat")) return "#chat";
+    if (e.startsWith("memory") || e.startsWith("memories") || e.startsWith("summary") || e === "conversation_summarized") return "#memoria";
+    if (e === "diary_saved" || e.startsWith("audio")) return "#diario";
+    if (e === "feedback_received") return "#pendientes";
+    if (e === "push_failed" || e === "notified") return "#diagnostico";
+    if (ev.node_id) return "#estado/" + encodeURIComponent(ev.node_id);
+    return "";
+  }
   function deviceBlock(n, data, invBy) {
     const b = el("div", "dev" + (n.mode === "offline" ? " offline" : "")); b.dataset.node = n.device_id;
     const r = el("div", "dev-row");
@@ -1698,10 +1714,16 @@
     })), "Todavía no hay inventario. Aparecerá cuando un equipo termine su primer repaso.");
 
     // activity
-    fill("activity", data.activity.map((ev) => row({
-      title: describe(ev),
-      detail: (ev.node_id || "Núcleo") + " · " + clock(ev.ts)
-    })), "Todo en calma por ahora.", 5);
+    fill("activity", data.activity.map((ev) => {
+      const r = row({ title: describe(ev), detail: (ev.node_id || "Núcleo") + " · " + clock(ev.ts) }), go = whereOf(ev);
+      if (go) {
+        r.classList.add("tap"); r.tabIndex = 0; r.setAttribute("role", "link");
+        r.append(el("span", "mi-go", "›"));
+        r.onclick = () => openWhere(go);
+        r.onkeydown = (e) => { if (e.key === "Enter") openWhere(go); };
+      }
+      return r;
+    }), "Todo en calma por ahora.", 5);
 
     const online = data.status.online;
     $("subtitle").classList.remove("stale", "locked");
@@ -2087,8 +2109,16 @@
   const WHERE = { "#diario": ["diary"], "#estado": ["status"], "#memoria": ["settings", "memory"], "#diagnostico": ["settings", "diag"],
                   "#actualizacion": ["settings", "update"], "#pendientes": ["settings", "notes"],
                   "#pedidos": ["settings", "claude-requests"], "#encargos": ["settings", "encargos"],
-                  "#personas": ["settings", "voices"] };
-  function openWhere(h) { const w = WHERE[h]; if (!w) return; showTab(w[0]); if (w[1]) showPage(w[1]); }
+                  "#personas": ["settings", "voices"], "#chat": ["chat"], "#cerebro": ["cerebro"], "#casa": ["casa"] };
+  // "#estado/<equipo>" lands on that device's block in Estado (0.67.5: activity rows and notices open where they happened)
+  function openWhere(h) {
+    const [base, node] = String(h || "").split("/");
+    const w = WHERE[base]; if (!w) return; showTab(w[0]); if (w[1]) showPage(w[1]);
+    if (node) setTimeout(() => {
+      const b = document.querySelector('.dev[data-node="' + CSS.escape(decodeURIComponent(node)) + '"]');
+      if (b) { b.scrollIntoView({ behavior: "smooth", block: "center" }); b.classList.add("flash"); setTimeout(() => b.classList.remove("flash"), 1600); }
+    }, 60);
+  }
   let startHash = location.hash;
   // --- tabs ---------------------------------------------------------------
   let tab = "chat";
@@ -5133,7 +5163,9 @@
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", (ev) => {
       const o = ev.data && ev.data.open;
-      if (unlocked && o) openWhere(o.replace("/", ""));
+      if (!o) return;
+      const h = o.replace(/^\//, "");
+      if (unlocked) openWhere(h); else startHash = h;    // a tap before the key loads waits for it, it is not dropped
     });
     window.addEventListener("hashchange", () => { if (unlocked) openWhere(location.hash); });
     swReg();

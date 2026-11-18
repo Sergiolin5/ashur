@@ -277,7 +277,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.67.4", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.67.5", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -3988,7 +3988,7 @@ def create_app(
             _push_all(payload)
         else:
             threading.Thread(target=_push_all, args=(payload,), daemon=True, name="notify-push").start()
-        db.log(now, None, "notified", {"items": len(lines)})
+        db.log(now, None, "notified", {"items": len(lines), "url": where})   # 0.67.5: the activity row opens the same page
         return [t for _, t, _ in items]
 
     app.state.notify_due = notify_due

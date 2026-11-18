@@ -209,3 +209,14 @@ def test_a_long_task_on_a_calm_device_or_after_a_restart_is_not_news(tmp_path):
         clock2.now += 30
         c2.post("/nodes/ryzen9/heartbeat", headers=h, json={"mode": "full", "cpu_pct": 95})
     assert app2.state.notify_due(sync=True) == []
+
+
+def test_the_notified_line_keeps_where_the_notice_leads(tmp_path):
+    """0.67.5: an activity row «Te mandó un aviso» opens the same page the push opened."""
+    import json
+    c, clock, sent, app = make(tmp_path)
+    app.state.notify_due(sync=True)
+    app.state.db.log(clock(), "mac-m1", "task_failed", {"module": "docs", "error": "x"})
+    app.state.notify_due(sync=True)
+    row = app.state.db.conn.execute("SELECT detail FROM session_log WHERE event='notified' ORDER BY rowid DESC LIMIT 1").fetchone()
+    assert json.loads(row[0])["url"] == "/#diagnostico"

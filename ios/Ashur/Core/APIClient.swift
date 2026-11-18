@@ -40,6 +40,10 @@ struct APIClient {
         try await send(request(path, method: "POST"))
     }
 
+    func delete<T: Decodable>(_ path: String) async throws -> T {
+        try await send(request(path, method: "DELETE"))
+    }
+
     private func request(_ path: String, method: String, query: [URLQueryItem] = []) -> URLRequest {
         var comps = URLComponents(url: Self.baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { comps.queryItems = query }

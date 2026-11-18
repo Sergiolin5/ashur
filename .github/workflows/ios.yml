@@ -4,10 +4,21 @@ name: ios
 # Repo público: los minutos de macOS no cuestan. Solo corre si cambia ios/ o a mano.
 on:
   push:
-    paths: ["ios/**", ".github/workflows/ios.yml"]
+    paths: ["ios/**", "core/ui/index.html", ".github/workflows/ios.yml"]
   workflow_dispatch:
 
 jobs:
+  paridad:
+    # docs/ios/NATIVO.md: el panel de main contra ios/paridad.json. Falla si el panel tiene una pestaña, página o
+    # endpoint que la lista no tiene (entra como «web» hasta portarlo).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Panel de main contra la lista
+        run: |
+          git fetch --depth=1 origin main
+          git show origin/main:core/ui/index.html > /tmp/panel.html
+          python3 ios/paridad.py /tmp/panel.html ios/paridad.json
   build:
     runs-on: macos-latest
     timeout-minutes: 30

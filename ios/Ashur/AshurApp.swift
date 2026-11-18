@@ -31,14 +31,18 @@ final class Session {
             web = PanelWeb(key: api.key) { [weak self] detail in
                 Task { await self?.panelRejectedKey(detail) }
             }
-            if let chat {
+            if let chat, let estado {
                 chat.api = api
+                estado.api = api
             } else {
                 chat = ChatModel(api: api)
+                estado = EstadoModel(api: api)
             }
         }
     }
     private(set) var chat: ChatModel?
+    /// Pantallas nativas del panel (docs/ios/NATIVO.md); como el chat, sobreviven al bloqueo sin la clave.
+    private(set) var estado: EstadoModel?
     /// El panel web (docs/ios/HIBRIDO.md). Uno por desbloqueo: se crea con el cliente y se suelta con él.
     private(set) var web: PanelWeb?
     /// Hay clave en el Keychain pero todavía no se abrió con biometría en esta ejecución.
@@ -79,6 +83,7 @@ final class Session {
         chat?.dictation.stop()
         chat?.speaker.stop()
         chat?.api = nil
+        estado?.api = nil
         api = nil
         problem = nil
         locked = true
@@ -120,6 +125,7 @@ final class Session {
         KeyStore.delete()
         api = nil
         chat = nil
+        estado = nil
         locked = false
     }
 }
@@ -131,22 +137,23 @@ struct RootView: View {
         if session.locked {
             UnlockView()
         } else if session.api != nil, let chat = session.chat, let web = session.web {
-            AdaptiveRoot(chat: chat, web: web)
+            AdaptiveRoot(session: session, chat: chat, web: web)
         } else {
             KeySetupView()
         }
     }
 }
 
-/// Funcionalidad (b), híbrida desde docs/ios/HIBRIDO.md. Se decide por size class, no por orientación:
-/// pantalla externa del Duo (cerrado) → compacto: el chat, y «Panel» abre el panel web a pantalla completa;
-/// pantalla interna (abierto) → regular: chat nativo | panel web.
+/// Funcionalidad (b), con el panel entero (docs/ios/NATIVO.md). Se decide por size class, no por orientación:
+/// pantalla externa del Duo (cerrado) → compacto: pestañas, con el chat como la primera;
+/// pantalla interna (abierto) → regular: chat nativo | pestañas del panel.
+/// Cada pantalla del panel tiene su interruptor Nativo / Web.
 struct AdaptiveRoot: View {
+    let session: Session
     let chat: ChatModel
     let web: PanelWeb
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var columns: NavigationSplitViewVisibility = .all
-    @State private var panelOpen = false
 
     var body: some View {
         if sizeClass == .regular {
@@ -154,31 +161,11 @@ struct AdaptiveRoot: View {
                 ChatView(model: chat)
                     .navigationSplitViewColumnWidth(min: 320, ideal: 420)
             } detail: {
-                PanelWebView(web: web).ignoresSafeArea(edges: .bottom)
+                PanelTabs(session: session, web: web, conChat: false)
             }
             .navigationSplitViewStyle(.balanced)
         } else {
-            NavigationStack {
-                ChatView(model: chat)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Panel", systemImage: "square.grid.2x2") { panelOpen = true }
-                        }
-                    }
-            }
-            .fullScreenCover(isPresented: $panelOpen) {
-                NavigationStack {
-                    PanelWebView(web: web)
-                        .ignoresSafeArea(edges: .bottom)
-                        .navigationTitle("Panel")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button("Chat", systemImage: "chevron.left") { panelOpen = false }
-                            }
-                        }
-                }
-            }
+            PanelTabs(session: session, web: web, conChat: true)
         }
     }
 }

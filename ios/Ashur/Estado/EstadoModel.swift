@@ -1,0 +1,58 @@
+import Foundation
+
+/// La pestaña Estado en nativo. Vive en Session, como el chat: abrir o cerrar el Duo no la vacía.
+@Observable
+final class EstadoModel {
+    var api: APIClient?
+    private(set) var data: Overview?
+    private(set) var ms: Double?                 // cuánto tardó el núcleo, como el subtítulo del panel
+    private(set) var problem: String?
+    var note: String?                            // avisos de la cola (p. ej. «esa tarea ya no está en espera»)
+    var armed: Set<Int> = []                     // «Cancelar» pide un segundo toque, como en el panel
+
+    init(api: APIClient) { self.api = api }
+
+    func load() async {
+        guard let api else { return }
+        let t0 = Date()
+        do {
+            data = try await api.get("/api/overview")
+            ms = Date().timeIntervalSince(t0) * 1000
+            problem = nil
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+
+    func move(_ id: Int, _ to: String) async {
+        guard let api else { return }
+        let _: Ignorado? = try? await api.post("/api/tasks/\(id)/move", body: ["to": to])
+        await load()
+    }
+
+    /// Primer toque arma, segundo cancela; a los 3 s se desarma solo.
+    func cancel(_ id: Int) async {
+        guard let api else { return }
+        if !armed.contains(id) {
+            armed.insert(id)
+            try? await Task.sleep(for: .seconds(3))
+            armed.remove(id)
+            return
+        }
+        armed.remove(id)
+        do {
+            let _: Ignorado = try await api.delete("/api/tasks/\(id)")
+        } catch APIClient.Failure.server(409, let detail) {
+            note = detail.isEmpty ? "Esa tarea ya no está en espera." : detail
+        } catch {
+            note = error.localizedDescription
+        }
+        await load()
+    }
+
+    func setPaused(_ paused: Bool) async {
+        guard let api else { return }
+        let _: Ignorado? = try? await api.post("/api/queue/pause", body: ["paused": paused])
+        await load()
+    }
+}

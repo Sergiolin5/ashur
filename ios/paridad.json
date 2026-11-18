@@ -1,0 +1,296 @@
+{
+ "_": "Paridad panel web ↔ app iOS. estado: nativo | parcial | web (en la app se ve con el panel web). docs/ios/NATIVO.md",
+ "pestañas": {
+  "casa": {
+   "estado": "web"
+  },
+  "cerebro": {
+   "estado": "web"
+  },
+  "chat": {
+   "estado": "nativo",
+   "nota": "el chat nativo de etapa 3"
+  },
+  "diary": {
+   "estado": "web"
+  },
+  "settings": {
+   "estado": "web"
+  },
+  "status": {
+   "estado": "parcial",
+   "nota": "0.E1: cifras, en curso, cola (mover, cancelar, pausar), equipos, inventario y actividad; faltan los discos y «Configurar» de cada equipo"
+  }
+ },
+ "paginas": {
+  "access": {
+   "estado": "web"
+  },
+  "claude-requests": {
+   "estado": "web"
+  },
+  "cmds": {
+   "estado": "web"
+  },
+  "connect": {
+   "estado": "web"
+  },
+  "diag": {
+   "estado": "web"
+  },
+  "docs": {
+   "estado": "web"
+  },
+  "encargos": {
+   "estado": "web"
+  },
+  "estilo": {
+   "estado": "web"
+  },
+  "formulario": {
+   "estado": "web"
+  },
+  "habitos": {
+   "estado": "web"
+  },
+  "map": {
+   "estado": "web"
+  },
+  "memory": {
+   "estado": "web"
+  },
+  "notes": {
+   "estado": "web"
+  },
+  "space": {
+   "estado": "web"
+  },
+  "time": {
+   "estado": "web"
+  },
+  "update": {
+   "estado": "web"
+  },
+  "voices": {
+   "estado": "web"
+  }
+ },
+ "endpoints": {
+  "api/audio": {
+   "estado": "web"
+  },
+  "api/backup": {
+   "estado": "web"
+  },
+  "api/backup/refresh": {
+   "estado": "web"
+  },
+  "api/casa": {
+   "estado": "web"
+  },
+  "api/casa/camaras": {
+   "estado": "web"
+  },
+  "api/casa/camaras/sesion": {
+   "estado": "web"
+  },
+  "api/cerebro": {
+   "estado": "web"
+  },
+  "api/cerebro/actividad": {
+   "estado": "web"
+  },
+  "api/chat": {
+   "estado": "nativo"
+  },
+  "api/chat/history": {
+   "estado": "nativo"
+  },
+  "api/claude-requests": {
+   "estado": "web"
+  },
+  "api/conversations": {
+   "estado": "web"
+  },
+  "api/conversations/archivo": {
+   "estado": "web"
+  },
+  "api/diagnostics": {
+   "estado": "web"
+  },
+  "api/diary": {
+   "estado": "web"
+  },
+  "api/diary/settings": {
+   "estado": "web"
+  },
+  "api/disks": {
+   "estado": "web"
+  },
+  "api/disks/scan": {
+   "estado": "web"
+  },
+  "api/docs": {
+   "estado": "web"
+  },
+  "api/docs/refresh": {
+   "estado": "web"
+  },
+  "api/encargos": {
+   "estado": "web"
+  },
+  "api/estilo": {
+   "estado": "web"
+  },
+  "api/formulario": {
+   "estado": "web"
+  },
+  "api/guests": {
+   "estado": "web"
+  },
+  "api/guests/limits": {
+   "estado": "web"
+  },
+  "api/habits": {
+   "estado": "web"
+  },
+  "api/habits/conteo": {
+   "estado": "web"
+  },
+  "api/habits/sugerencias": {
+   "estado": "web"
+  },
+  "api/imports": {
+   "estado": "web"
+  },
+  "api/imports/confirm": {
+   "estado": "web"
+  },
+  "api/inventory/refresh": {
+   "estado": "web"
+  },
+  "api/inventory/report": {
+   "estado": "web"
+  },
+  "api/lotes": {
+   "estado": "web"
+  },
+  "api/lotes/autor": {
+   "estado": "web"
+  },
+  "api/lotes/config": {
+   "estado": "web"
+  },
+  "api/madurez": {
+   "estado": "web"
+  },
+  "api/map/accept": {
+   "estado": "web"
+  },
+  "api/map/mark": {
+   "estado": "web"
+  },
+  "api/mcp/key": {
+   "estado": "web"
+  },
+  "api/memory": {
+   "estado": "web"
+  },
+  "api/memory/import": {
+   "estado": "web"
+  },
+  "api/memory/seen": {
+   "estado": "web"
+  },
+  "api/memory/vectors": {
+   "estado": "web"
+  },
+  "api/mudanzas": {
+   "estado": "web"
+  },
+  "api/names": {
+   "estado": "web"
+  },
+  "api/notes": {
+   "estado": "web"
+  },
+  "api/notify": {
+   "estado": "web"
+  },
+  "api/notify/daily/now": {
+   "estado": "web"
+  },
+  "api/owner": {
+   "estado": "web"
+  },
+  "api/persona": {
+   "estado": "web"
+  },
+  "api/persona/level": {
+   "estado": "web"
+  },
+  "api/persona/signals": {
+   "estado": "web"
+  },
+  "api/persona/versions": {
+   "estado": "web"
+  },
+  "api/personas": {
+   "estado": "web"
+  },
+  "api/proposals": {
+   "estado": "web"
+  },
+  "api/proposals/run": {
+   "estado": "web"
+  },
+  "api/push/check": {
+   "estado": "web"
+  },
+  "api/push/key": {
+   "estado": "web"
+  },
+  "api/push/subscribe": {
+   "estado": "web"
+  },
+  "api/push/test": {
+   "estado": "web"
+  },
+  "api/queue/pause": {
+   "estado": "nativo"
+  },
+  "api/selftest": {
+   "estado": "web"
+  },
+  "api/summaries": {
+   "estado": "web"
+  },
+  "api/tasks": {
+   "estado": "nativo"
+  },
+  "api/time": {
+   "estado": "web"
+  },
+  "api/time/export": {
+   "estado": "web"
+  },
+  "api/time/start": {
+   "estado": "web"
+  },
+  "api/time/stop": {
+   "estado": "web"
+  },
+  "api/totp": {
+   "estado": "web"
+  },
+  "api/totp/confirm": {
+   "estado": "web"
+  },
+  "api/totp/setup": {
+   "estado": "web"
+  },
+  "api/update": {
+   "estado": "web"
+  }
+ }
+}

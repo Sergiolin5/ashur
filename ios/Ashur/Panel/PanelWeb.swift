@@ -28,6 +28,22 @@ final class PanelWeb: NSObject, WKNavigationDelegate {
         view.load(URLRequest(url: APIClient.baseURL))
     }
 
+    private var loaded = false
+    private var pending: String?
+
+    /// Lleva el panel a una pantalla («t=status», «t=settings&p=encargos»; núcleo 0.67.3). Si aún no terminó de
+    /// cargar, se aplica al terminar.
+    func go(_ route: String) {
+        guard loaded else { pending = route; return }
+        let literal = (try? JSONEncoder().encode(route)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+        view.evaluateJavaScript("location.hash = \(literal);")
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        loaded = true
+        if let r = pending { pending = nil; go(r) }
+    }
+
     /// Al bloquear: corta la carga y suelta el puente, para que la vista (y su almacén) se libere.
     func close() {
         view.stopLoading()

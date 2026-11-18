@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from core.brain import (IMAGE_MAX_BYTES, health_split, NOTES_RETRY_WAIT_S, NOTES_TRIES, SECRET_WORDS, BOGOTA, Brain, BrainSettings, BrainUnavailable, LocalFailed,
                         LocalUnavailable, NoLocalDevice, NodeDegraded, api_error_reason, is_transport_error,
                         looks_like_secret, month_start)
-from core import casa as casa_mod, conversaciones as conv, habits, lotes, signals
+from core import casa as casa_mod, conversaciones as conv, estilo as estilo_mod, habits, lotes, signals
 from core.integrations import openjarvis as oj_adapter
 from core.casa import HAClient, HAError
 from core import camaras as cam_mod
@@ -1359,8 +1359,12 @@ def create_app(
     app.state.local_embed = local_embed
 
     def embed_due() -> int:
-        """Embed memories that have no vector of the current model yet, one batch per pass."""
+        """Embed memories that have no vector of the current model yet, one batch per pass; then (0.64.0) Sergio's
+        own imported chat messages, for picking examples of how he writes."""
         todo = db.memories_without_vector(conv.EMBED_MODEL, conv.EMBED_BATCH)
+        put = db.vector_put
+        if not todo:
+            todo, put = db.imported_without_vector(conv.EMBED_MODEL, conv.EMBED_BATCH), db.imported_vector_put
         if not todo:
             return 0
         try:
@@ -1370,7 +1374,7 @@ def create_app(
                 db.log(clock(), getattr(e, "node", None), "embed_failed", {"razon": str(e)[:200]})
             return 0
         for m, v in zip(todo, vectors):
-            db.vector_put(m["id"], conv.EMBED_MODEL, conv.pack(v), len(v))
+            put(m["id"], conv.EMBED_MODEL, conv.pack(v), len(v))
         return len(todo)
 
     app.state.embed_due = embed_due
@@ -2430,6 +2434,69 @@ def create_app(
     def conversation_list(guest: Optional[dict] = Depends(require_chat)):
         keep = ("id", "title", "started", "last_msg", "closed", "archived", "n")
         return [{k: cv[k] for k in keep} for cv in db.conv_list(chat_user(guest)) if cv["n"]]   # an empty «Nueva» is not listed
+
+    # --- 0.64.0: how Sergio writes -------------------------------------------------------------------------
+    class ImportIn(BaseModel):
+        name: str = Field(min_length=1, max_length=80)
+        file_name: str = Field(default="", max_length=200)
+        text: str = Field(min_length=1, max_length=8_000_000)
+        me: Optional[str] = Field(default=None, max_length=120)
+
+    def estilo_refresh() -> dict:
+        medidas = estilo_mod.medir([m["text"] for m in db.imported_mine()])
+        db.set_setting("estilo", json.dumps(medidas, ensure_ascii=False))
+        return medidas
+
+    def estilo_medidas() -> dict:
+        try:
+            return json.loads(db.setting("estilo", "") or '{"n": 0}')
+        except ValueError:
+            return {"n": 0}
+
+    app.state.estilo_medidas = estilo_medidas
+
+    @app.post("/api/imports", dependencies=[Depends(require_admin)])
+    def import_preview(body: ImportIn):
+        msgs = estilo_mod.parse_whatsapp(body.text)
+        if not msgs:
+            raise HTTPException(422, "No encontré mensajes de WhatsApp en ese archivo.")
+        return {"senders": estilo_mod.senders(msgs), "mensajes": len(msgs)}
+
+    @app.get("/api/imports", dependencies=[Depends(require_admin)])
+    def import_list():
+        return db.imports()
+
+    @app.post("/api/imports/confirm", dependencies=[Depends(require_admin)])
+    def import_confirm(body: ImportIn):
+        msgs = estilo_mod.parse_whatsapp(body.text)
+        if not body.me or body.me not in {m["sender"] for m in msgs}:
+            raise HTTPException(422, "Elige cuál de los remitentes eres tú.")
+        iid = db.import_add(clock(), body.name.strip(), body.file_name, body.me, msgs)
+        imp = db.import_get(iid)
+        estilo_refresh()
+        db.claude_request_add(clock(), "aprender_import", {"import": iid, "nombre": imp["name"], "mensajes": imp["n_me"]},
+                              "Leer tus mensajes de ese chat por tandas y guardar lo durable; lo sensible va a la bandeja. "
+                              "Lo que escriben los demás nunca se aprende.")
+        db.log(clock(), None, "chat_imported", {"import": iid, "tuyos": imp["n_me"], "otros": imp["n_others"]})
+        return {"id": iid, "n_me": imp["n_me"], "n_others": imp["n_others"]}
+
+    @app.get("/api/estilo", dependencies=[Depends(require_admin)])
+    def estilo_get():
+        m = estilo_medidas()
+        done = len(db.imported_vectors(conv.EMBED_MODEL))
+        return {"medidas": m, "texto": estilo_mod.describir(m), "imports": db.imports(),
+                "ejemplos": {"listos": done, "total": m.get("n", 0)}}
+
+    @app.delete("/api/imports/{iid}", dependencies=[Depends(require_admin)])
+    def import_delete(iid: int):
+        if not db.import_delete(iid):
+            raise HTTPException(404, "No existe ese chat.")
+        for r in db.claude_requests(limit=1000):
+            if r["action"] == "aprender_import" and r["args"].get("import") == iid and r["status"] == "pending":
+                db.claude_request_decide(r["id"], "rejected", clock(), "El chat se borró.")
+        estilo_refresh()
+        db.log(clock(), None, "chat_import_deleted", {"import": iid})
+        return {"ok": True}
 
     @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
     def conversation_archive():

@@ -96,3 +96,100 @@ def test_guest_estilo_flag(tmp_path):
     assert db.guest_estilo(1) is False
     db.set_guest_estilo(1, True)
     assert db.guest_estilo(1) is True
+
+
+# --- Task 3: importing ----------------------------------------------------------------------------------
+import threading
+
+from fastapi.testclient import TestClient
+
+from core import conversaciones as conv
+from core.app import create_app
+from core.brain import BrainSettings
+from sim.scenario import VirtualClock
+
+A = {"X-Admin-Key": "a"}
+
+
+def node(c, device="sm-rtx", answer=None, rounds=1):
+    token = c.post("/nodes/register", headers={"X-Enroll-Key": "e"},
+                   json={"device_id": device, "os": "windows", "modules": ["llm"], "simulated": True}).json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+    c.post(f"/nodes/{device}/heartbeat", headers=h, json={"mode": "full"})
+    seen = []
+
+    def serve():
+        for _ in range(rounds):
+            t = c.get(f"/nodes/{device}/tasks/next", headers=h, params={"wait": 5, "modules": "llm"}).json()
+            if not t:
+                return
+            seen.append(t["payload"])
+            c.post(f"/tasks/{t['id']}/result", headers=h, json={"ok": True, "result": answer(t["payload"])})
+    th = threading.Thread(target=serve, daemon=True)
+    th.start()
+    return th, seen
+
+
+def local_app(tmp_path, brain="local-first", client=None):
+    clock = VirtualClock()
+    app = create_app(str(tmp_path / "l.db"), "e", "a", clock=clock, sweep_every_s=None,
+                     brain_settings=BrainSettings(monthly_budget_usd=10, brain=brain), brain_client=client)
+    c = TestClient(app)
+    c.clock = clock
+    return c
+
+
+def imported(c, text=ANDROID, me="Sergio"):
+    r = c.post("/api/imports/confirm", headers=A, json={"name": "Ana", "file_name": "chat.txt", "text": text, "me": me})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_preview_lists_senders_and_saves_nothing(tmp_path):
+    c = local_app(tmp_path)
+    r = c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "chat.txt", "text": ANDROID}).json()
+    assert r["senders"] == [{"name": "Ana", "n": 2}, {"name": "Sergio", "n": 2}]
+    assert c.get("/api/imports", headers=A).json() == []
+
+
+def test_confirm_requires_a_real_sender(tmp_path):
+    c = local_app(tmp_path)
+    r = c.post("/api/imports/confirm", headers=A, json={"name": "Ana", "file_name": "c.txt", "text": ANDROID, "me": "Pepe"})
+    assert r.status_code == 422
+
+
+def test_confirm_measures_style_and_asks_to_learn(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    st = c.get("/api/estilo", headers=A).json()
+    assert st["medidas"]["n"] == 2 and "dale" in st["texto"]
+    assert [i["id"] for i in st["imports"]] == [iid]
+    reqs = [r for r in c.get("/api/claude-requests", headers=A).json() if r["action"] == "aprender_import"]
+    assert len(reqs) == 1 and reqs[0]["args"]["import"] == iid and reqs[0]["status"] == "pending"
+
+
+def test_only_admin_imports(tmp_path):
+    c = local_app(tmp_path)
+    g = c.post("/api/guests", headers=A, json={"name": "Ana"}).json()
+    G = {"X-Admin-Key": g["key"]}
+    assert c.post("/api/imports", headers=G, json={"name": "x", "file_name": "x", "text": ANDROID}).status_code == 401
+    assert c.get("/api/estilo", headers=G).status_code == 401
+
+
+def test_delete_import_drops_everything_and_its_request(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    assert c.delete(f"/api/imports/{iid}", headers=A).status_code == 200
+    assert c.get("/api/estilo", headers=A).json()["medidas"] == {"n": 0}
+    reqs = [r for r in c.get("/api/claude-requests", headers=A).json() if r["action"] == "aprender_import"]
+    assert reqs[0]["status"] != "pending"
+
+
+def test_embed_due_also_embeds_sergios_imported_messages(tmp_path):
+    c = local_app(tmp_path)
+    imported(c)
+    th, seen = node(c, answer=lambda p: {"vectors": [[1.0, 0.0] for _ in p["embed"]], "model": "bge-m3", "dim": 2})
+    assert c.app.state.embed_due() == 2
+    th.join(5)
+    assert seen[0]["embed"] == ["bien jaja\ny tú?", "dale, hablamos mañana 👍"]
+    assert len(c.app.state.db.imported_vectors("bge-m3")) == 2

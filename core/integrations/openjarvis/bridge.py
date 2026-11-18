@@ -25,6 +25,7 @@ FIRST_ASK_TIMEOUT_S = 60    # building the agent and its first call
 Ask = Callable[..., str]                         # (system, messages, tools=None) -> the device's answer
 KINDS: dict[str, tuple[str, Callable[[dict], Callable[[Ask], str]]]] = {}   # kind -> (capability, factory)
 RUNS: dict[str, "AgentRun"] = {}
+EARLY: dict = {}          # the answer of a run that finished without asking the model (0.68.2)
 
 
 class AgentAbandoned(Exception):
@@ -126,7 +127,9 @@ class OjAgent(Operation):
         state: dict = {}
         units = self._next(run_id, run, state, FIRST_ASK_TIMEOUT_S)
         if not units:
-            raise EncargoError("El agente terminó sin consultar el modelo.")
+            # 0.68.2: it answered without the model («No encontré correos…»). With no units the runner renders right
+            # after this, in the same serial step, so the answer waits here instead of failing the encargo.
+            EARLY["result"] = state.get("result", "")
         return units
 
     def after(self, unit, answer, state):
@@ -137,4 +140,4 @@ class OjAgent(Operation):
         return self._next(unit["run"], run, state, run.answer_timeout_s)
 
     def render(self, state, docs, devices):
-        return state.get("result", "")
+        return state.get("result") or EARLY.pop("result", "")

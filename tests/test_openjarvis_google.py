@@ -190,3 +190,18 @@ def test_a_flag_off_refuses_its_approval_and_hides_its_tools(g, tmp_path, monkey
     assert "correo_consultar" not in names and "correo_enviar" not in names and "agenda" in names
     from core.integrations.openjarvis import approve_request
     assert approve_request("oj_correo", {"para": "x"}) == ("not_done", "La capacidad «gmail» está apagada.")
+
+
+def test_a_search_with_no_mail_finishes_with_that_answer(g, tmp_path, fast_local, monkeypatch):
+    """2026-11-18: «/correo from:banco» found nothing and the encargo failed with «terminó sin consultar el modelo»."""
+    google, _ = g
+    c, _claude = app(tmp_path, [], g)
+    connect(google)
+    monkeypatch.setattr(google, "mail_search", lambda q, n=5: [])
+    r = c.post("/api/chat", headers=A, json={"message": "/correo from:banco"}).json()
+    assert "#1" in r["reply"]
+    c.app.state.encargo_retry_wait_s = 0
+    while c.app.state.encargo_step():
+        pass
+    e = c.db.encargo_get(1)
+    assert e["status"] == "kept" and "No encontré correos" in e["result"]

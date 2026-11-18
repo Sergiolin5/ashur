@@ -295,6 +295,9 @@
   },
   "api/update": {
    "estado": "nativo"
+  },
+  "api/imports/parte": {
+   "estado": "nativo"
   }
  }
 }

@@ -14,11 +14,13 @@ struct EstiloView: View {
     }
     struct Leido: Decodable { let mensajes: Int; let senders: [Remitente]; struct Remitente: Decodable { let name: String; let n: Int } }
     struct Hecho: Decodable { let n_me: Int; let n_others: Int }
-    private struct Subida: Encodable { let name: String; let file_name: String; let text: String; var me: String? = nil }
+    private struct Subida: Encodable { let name: String; let file_name: String; var text: String? = nil; var upload: String? = nil; var me: String? = nil }
+    private struct Parte: Encodable { let upload: String; let i: Int; let text: String }
 
     @State private var estilo: Estilo?
     @State private var eligiendo = false
     @State private var archivo: (nombre: String, texto: String)?
+    @State private var subida: String?                       // 0.67.6: un chat de más de 6 MB va por partes
     @State private var nombreChat = ""
     @State private var leido: Leido?
     @State private var yo = ""
@@ -73,9 +75,9 @@ struct EstiloView: View {
             let ok = url.startAccessingSecurityScopedResource()
             defer { if ok { url.stopAccessingSecurityScopedResource() } }
             guard let d = try? Data(contentsOf: url) else { nota = "No pude abrir el archivo."; return }
-            if d.count > 8_000_000 { nota = "El archivo pasa de 8 MB."; return }
+            if d.count > 64 * 1_048_576 { nota = "El chat pasa de 64 MB."; return }
             archivo = (url.lastPathComponent, String(decoding: d, as: UTF8.self))
-            leido = nil
+            leido = nil; subida = nil
         }
         .refreshable { await cargar() }
         .task { await cargar() }
@@ -97,7 +99,22 @@ struct EstiloView: View {
         guard let a = archivo else { nota = "Elige el archivo .txt del chat."; return }
         nombreChat = nombreFinal()
         do {
-            let l: Leido = try await api.post("/api/imports", body: Subida(name: nombreChat, file_name: a.nombre, text: a.texto))
+            subida = nil
+            if a.texto.utf8.count > 6_000_000 {                  // por partes de 1,5 MB: el núcleo las guarda en disco
+                let up = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+                var resto = Substring(a.texto), i = 0
+                let total = a.texto.count
+                while !resto.isEmpty {
+                    let trozo = resto.prefix(1_500_000)
+                    nota = "Subiendo el chat… \(Int(100 * Double(total - resto.count) / Double(total))) %"
+                    let _: Ignorado = try await api.post("/api/imports/parte", body: Parte(upload: up, i: i, text: String(trozo)))
+                    resto = resto.dropFirst(trozo.count); i += 1
+                }
+                subida = up
+            }
+            nota = "Leyendo el chat…"
+            let l: Leido = try await api.post("/api/imports", body: subida.map { Subida(name: nombreChat, file_name: a.nombre, upload: $0) }
+                                              ?? Subida(name: nombreChat, file_name: a.nombre, text: a.texto))
             leido = l; yo = ""
             nota = "\(l.mensajes) mensajes. ¿Cuál eres tú?"
         } catch { nota = detalle(error, "No pude leerlo.") }
@@ -107,7 +124,8 @@ struct EstiloView: View {
         guard let api = session.api, let a = archivo else { return }
         guard !yo.isEmpty else { nota = "Marca cuál eres tú."; return }
         do {
-            let h: Hecho = try await api.post("/api/imports/confirm", body: Subida(name: nombreChat, file_name: a.nombre, text: a.texto, me: yo))
+            let h: Hecho = try await api.post("/api/imports/confirm", body: subida.map { Subida(name: nombreChat, file_name: a.nombre, upload: $0, me: yo) }
+                                              ?? Subida(name: nombreChat, file_name: a.nombre, text: a.texto, me: yo))
             nota = "Listo: \(h.n_me) mensajes tuyos y \(h.n_others) de otros. Aprueba en «Por aprobar» para que Ashur aprenda de los tuyos."
             leido = nil; archivo = nil
             await cargar()

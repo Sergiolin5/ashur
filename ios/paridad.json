@@ -40,7 +40,7 @@
    "estado": "nativo"
   },
   "docs": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "encargos": {
    "estado": "nativo"
@@ -55,7 +55,7 @@
    "estado": "nativo"
   },
   "map": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "memory": {
    "estado": "nativo"
@@ -64,7 +64,7 @@
    "estado": "nativo"
   },
   "space": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "time": {
    "estado": "web"
@@ -73,8 +73,7 @@
    "estado": "nativo"
   },
   "voices": {
-   "estado": "parcial",
-   "nota": "falta «Abrir en el mapa» en las señales (llega con el mapa nativo, etapa 4)"
+   "estado": "nativo"
   }
  },
  "endpoints": {
@@ -82,10 +81,10 @@
    "estado": "web"
   },
   "api/backup": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/backup/refresh": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/casa": {
    "estado": "web"
@@ -133,10 +132,10 @@
    "estado": "web"
   },
   "api/docs": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/docs/refresh": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/encargos": {
    "estado": "nativo"
@@ -170,10 +169,10 @@
    "estado": "nativo"
   },
   "api/inventory/refresh": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/inventory/report": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/lotes": {
    "estado": "nativo"
@@ -188,10 +187,10 @@
    "estado": "nativo"
   },
   "api/map/accept": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/map/mark": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/mcp/key": {
    "estado": "web"
@@ -209,7 +208,7 @@
    "estado": "nativo"
   },
   "api/mudanzas": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/names": {
    "estado": "web"

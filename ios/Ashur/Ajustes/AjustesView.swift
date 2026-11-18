@@ -56,11 +56,15 @@ struct AjustesView: View {
         case "voices": PersonasView()
         case "estilo": EstiloView()
         case "formulario": FormularioView()
+        case "space": EspacioView()
+        case "map": MapaView()
+        case "docs": DocumentosView()
         default: EmptyView()
         }
     }
     static let nativas: Set<String> = ["claude-requests", "encargos", "update", "diag",
-                                       "memory", "habitos", "notes", "voices", "estilo", "formulario"]
+                                       "memory", "habitos", "notes", "voices", "estilo", "formulario",
+                                       "space", "map", "docs"]
 }
 
 /// Una página de Ajustes con su interruptor Nativo / Web (recordado por página).

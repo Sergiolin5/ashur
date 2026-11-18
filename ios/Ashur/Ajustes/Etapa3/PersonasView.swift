@@ -78,9 +78,13 @@ struct PersonasView: View {
                     let u = s.sin_revisar
                     Nota(texto: "\(Textos.n(u.revisadas)) de \(Textos.n(u.carpetas)) carpetas revisadas" + (u.top.isEmpty ? ". No te falta ninguna." : "; faltan \(Textos.n(u.docs_sin_revisar)) documentos. Las que más tienen:"))
                     ForEach(u.top) { x in
-                        VStack(alignment: .leading) {
-                            Text(x.carpeta)
-                            Text("\(x.equipo) · \(Textos.n(x.documentos)) documentos").font(.caption).foregroundStyle(.secondary)
+                        NavigationLink {                       // como el panel: abre esa carpeta en el mapa, donde están Mía / Ruido
+                            MapaView(inicio: (x.equipo, x.carpeta)).navigationTitle("Mapa de archivos")
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(x.carpeta)
+                                Text("\(x.equipo) · \(Textos.n(x.documentos)) documentos · Abrir en el mapa").font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                     Button(verCrudo ? "Ocultar el conteo" : "Ver el conteo completo") { verCrudo.toggle() }

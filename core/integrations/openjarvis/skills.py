@@ -18,6 +18,7 @@ import json
 import re
 import shutil
 import tarfile
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -44,6 +45,8 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 _deps: dict = {"home": None, "doc_text": None, "memories": None}
+ASHUR_DIR = Path(__file__).parent / "skills_ashur"     # Ashur's own versions; one hides the bundled skill of its name
+_run = threading.local()                                # .bench: this agent thread runs on the benchmark's samples only
 
 
 def configure(home: Path, doc_text: Callable[[str], Optional[str]], memories: Callable[[], list[str]]) -> None:
@@ -94,7 +97,10 @@ def _load_dir(path: Path):
 
 def _manifests() -> list[tuple[str, object, str]]:
     from openjarvis.skills.loader import discover_skills
-    out = [(f"incluida/{m.name}", m, "lista") for m in discover_skills(_bundled_dir())]
+    own = discover_skills(ASHUR_DIR) if ASHUR_DIR.exists() else []
+    names = {m.name for m in own}
+    out = [(f"ashur/{m.name}", m, "lista") for m in own]
+    out += [(f"incluida/{m.name}", m, "lista") for m in discover_skills(_bundled_dir()) if m.name not in names]
     for kind, state in (("aprobadas", "lista"), ("pendientes", "pendiente")):
         root = _root(kind)
         if root.exists():
@@ -138,6 +144,9 @@ def render(template: str, ctx: dict) -> dict:
 
 
 def _doc(path: str) -> str:
+    if getattr(_run, "bench", False):                  # the benchmark never reads Sergio's documents
+        from core.integrations.openjarvis.bench import sample_doc
+        return sample_doc(path or "")[:DOC_CHARS]
     text = _deps["doc_text"](path or "")
     if text is None:
         raise EncargoError("Un documento que pide la skill no está entre los documentos leídos de Ashur.")
@@ -165,7 +174,11 @@ def step(tool: str, args: dict, ask: bridge.Ask) -> str:
         return _doc(str(args.get("path", "")))
     if tool in MEMORY_TOOLS:
         words = [w for w in re.findall(r"\w+", str(args.get("query", "")).lower()) if len(w) > 3]
-        hits = [m for m in _deps["memories"]() if any(w in m.lower() for w in words)]
+        if getattr(_run, "bench", False):
+            from core.integrations.openjarvis.bench import SAMPLE_MEMORIES as pool
+        else:
+            pool = _deps["memories"]()
+        hits = [m for m in pool if any(w in m.lower() for w in words)]
         return "\n".join(f"- {m}" for m in hits[:20]) or "(sin recuerdos que coincidan)"
     if tool in WEB_TOOLS:
         return _web(tool, args)
@@ -175,6 +188,7 @@ def step(tool: str, args: dict, ask: bridge.Ask) -> str:
 def runner(params: dict) -> Callable[[bridge.Ask], str]:
     """bridge factory for kind «skill»: params {skill, entradas}."""
     def run(ask: bridge.Ask) -> str:
+        _run.bench = bool(params.get("bench"))
         row, m = find(params["skill"])
         if row["estado"] != "lista":
             raise EncargoError(f"La skill está {row['estado']}.")

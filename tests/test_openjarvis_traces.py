@@ -59,7 +59,7 @@ def test_openjarvis_runs_leave_a_trace_without_text(oj, tmp_path, fast_local):
     c = runner_app(tmp_path)
     node = FakeLLM(c, lambda p, n: f"paso {n}", device="ryzen9")
     try:
-        bridge.queue_run(c.db, c.clock, "skill", "Skill email-draft", skill="incluida/email-draft",
+        bridge.queue_run(c.db, c.clock, "skill", "Skill email-draft", skill="ashur/email-draft",
                          entradas={"context": "secreto", "intent": "x", "recipient": "Ana"})
         c.app.state.encargo_retry_wait_s = 0
         while c.app.state.encargo_step():

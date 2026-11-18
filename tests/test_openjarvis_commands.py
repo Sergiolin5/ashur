@@ -28,9 +28,9 @@ def test_commands_never_call_a_model(oj, tmp_path, fast_local):
     c.db = c.app.state.db
     out = say(c, "/skills")
     assert out["provider"] == "ashur" and out["note"].startswith("Comando de OpenJarvis")
-    assert "- incluida/email-draft [lista] · entradas: context, intent, recipient" in out["reply"]
+    assert "- ashur/email-draft [lista] · entradas: context, intent, recipient" in out["reply"]
     assert "- incluida/backup-files [bloqueada]" in out["reply"]
-    out = say(c, '/skill incluida/email-draft context="reunión del jueves" intent=confirmar recipient=Ana')
+    out = say(c, '/skill ashur/email-draft context="reunión del jueves" intent=confirmar recipient=Ana')
     assert out["reply"] == "Encargo #1 en cola: Skill email-draft."
     node = FakeLLM(c, lambda p, n: f"paso {n}", device="ryzen9")
     try:
@@ -64,7 +64,7 @@ def test_flags_usage_and_plain_messages(oj, tmp_path, monkeypatch):
     assert say(c, "/bench")["reply"] == "Esa capacidad de OpenJarvis está apagada."
     assert say(c, "/skill")["reply"] == "Usa: /skill <id> clave=valor …"
     assert say(c, '/skill x a="sin cerrar')["reply"] == "Una comilla quedó sin cerrar."
-    assert say(c, "/skill incluida/email-draft context=x")["reply"] == "Faltan entradas: intent, recipient."
+    assert say(c, "/skill ashur/email-draft context=x")["reply"] == "Faltan entradas: intent, recipient."
     help_ = say(c, "/oj")["reply"]
     assert "/investigar" in help_ and "/bench" not in help_ and "/correo" not in help_
     assert say(c, "/otra-cosa hola")["reply"] == "hola desde el modelo"      # not ours: the chat as always
@@ -76,7 +76,7 @@ def test_an_openjarvis_failure_keeps_its_own_reason(oj, tmp_path, fast_local, mo
     from core.integrations.openjarvis import bridge
     c, _, _ = brain_app(tmp_path, [])
     c.db = c.app.state.db
-    eid = bridge.queue_run(c.db, c.app.state.brain.clock, "skill", "x", skill="incluida/email-draft",
+    eid = bridge.queue_run(c.db, c.app.state.brain.clock, "skill", "x", skill="ashur/email-draft",
                            entradas={"context": "a", "intent": "b", "recipient": "c"})
     monkeypatch.setenv("ASHUR_OJ_SKILLS", "0")
     c.app.state.encargo_step()

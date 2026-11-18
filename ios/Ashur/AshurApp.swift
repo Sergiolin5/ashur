@@ -31,19 +31,16 @@ final class Session {
             web = PanelWeb(key: api.key) { [weak self] detail in
                 Task { await self?.panelRejectedKey(detail) }
             }
-            if let chat, let panel {
+            if let chat {
                 chat.api = api
-                panel.api = api
             } else {
                 chat = ChatModel(api: api)
-                panel = PanelModel(api: api)
             }
         }
     }
     private(set) var chat: ChatModel?
     /// El panel web (docs/ios/HIBRIDO.md). Uno por desbloqueo: se crea con el cliente y se suelta con él.
     private(set) var web: PanelWeb?
-    private(set) var panel: PanelModel?
     /// Hay clave en el Keychain pero todavía no se abrió con biometría en esta ejecución.
     private(set) var locked: Bool
     private(set) var unlocking = false
@@ -54,7 +51,7 @@ final class Session {
     }
 
     /// Lee la clave una vez con Touch ID al abrir la app y la deja solo en memoria para el chat.
-    /// Aprobar un pedido vuelve a pedir biometría (PanelModel.approve).
+    /// Las aprobaciones se hacen en el panel web, sin otra huella (decisión de Sergio, docs/ios/HIBRIDO.md).
     func unlock() async {
         guard locked, !unlocking else { return }
         unlocking = true
@@ -82,7 +79,6 @@ final class Session {
         chat?.dictation.stop()
         chat?.speaker.stop()
         chat?.api = nil
-        panel?.api = nil
         api = nil
         problem = nil
         locked = true
@@ -124,7 +120,6 @@ final class Session {
         KeyStore.delete()
         api = nil
         chat = nil
-        panel = nil
         locked = false
     }
 }

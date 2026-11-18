@@ -2629,7 +2629,8 @@ def create_app(
         start = month_start(clock())
         return [{**g, "is_self": bool(g["is_self"]),
                  "spent_usd": None if g["is_self"] else round(db.spent_since(start, f"g{g['id']}"), 4),
-                 "temas": db.guest_temas(g["id"]), "perfil": len(db.memories_of(f"g{g['id']}"))}
+                 "temas": db.guest_temas(g["id"]), "perfil": len(db.memories_of(f"g{g['id']}")),
+                 "estilo": db.guest_estilo(g["id"])}
                 for g in db.guests()]
 
     class TemasIn(BaseModel):
@@ -2642,6 +2643,16 @@ def create_app(
         if not db.set_guest_temas(gid, sorted(set(body.temas))):
             raise HTTPException(404, "No existe ese invitado.")
         db.log(clock(), None, "guest_temas", {"guest": gid, "temas": sorted(set(body.temas))})
+        return {"ok": True}
+
+    class EstiloIn(BaseModel):
+        estilo: bool
+
+    @app.put("/api/guests/{gid}/estilo", dependencies=[Depends(require_admin)])
+    def guest_estilo_put(gid: int, body: EstiloIn):
+        if not db.set_guest_estilo(gid, body.estilo):
+            raise HTTPException(404, "No existe ese invitado.")
+        db.log(clock(), None, "guest_estilo", {"guest": gid, "estilo": body.estilo})
         return {"ok": True}
 
     @app.get("/api/guests/{gid}/perfil", dependencies=[Depends(require_admin)])

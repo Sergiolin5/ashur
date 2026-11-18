@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from core import conversaciones as conv
+from core import conversaciones as conv, estilo as estilo_mod
 
 TOOLS = [
     {"name": "remember",
@@ -116,6 +116,14 @@ SECRET_WORDS = re.compile(r"(api[_ ]?key|password|contraseña|token|sk-ant-|enro
 
 SEEDS = Path(__file__).parent / "persona"                     # default.md seeds persona.md once; guest.md is what guests get
 SOURCE_LINE = re.compile(r"^\s*>")                            # «> fuente: …» under a trait: for Sergio, never in a prompt
+DRAFT = re.compile(r"escr[ií]be(le|me|les)|redact|resp[oó]nde(le|les)?\s+a\b|mensaje para|borrador", re.I)   # 0.64.0
+ESTILO_MAX_CHARS = 1500
+ESTILO_HEADERS = {
+    "redactar": "Cuando redactes algo para que Sergio lo envíe, escribe como él. Así escribe:",
+    "intermedio": "Toma algo de la forma de escribir de Sergio (largo, muletillas, risa), sin dejar de ser tú:",
+    "pleno": "Habla como él: con Sergio usas su propia forma de escribir.",
+    "invitado": "Escribes con el estilo de Sergio, pero siempre eres Ashur y lo dices si preguntan. Así escribe él:",
+}
 MATURITY = re.compile(r"^##\s*Madurez\s*:\s*(.+?)\s*$", re.I)   # one section per level; only the chosen one is spoken from
 HEADING = re.compile(r"^#{1,2}\s")
 VERSION_ID = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
@@ -293,6 +301,45 @@ class Brain:
                 out.append(ln)
         return "\n".join(out)
 
+    def estilo_block(self, local: bool, para: str, query: str = "", qvec: Optional[bytes] = None) -> str:
+        """0.64.0: how Sergio writes, measured, plus his most similar real messages. The other person's line he was
+        answering goes only into a local prompt; into Claude's, only Sergio's own words."""
+        try:
+            m = json.loads(self.db.setting("estilo", "") or "{}")
+        except ValueError:
+            m = {}
+        if not m.get("n"):
+            return ""
+        mine = self.db.imported_mine()
+        vectors = self.db.imported_vectors(conv.EMBED_MODEL)
+        if qvec is not None and vectors:
+            ranked = sorted((m2 for m2 in mine if m2["id"] in vectors),
+                            key=lambda x: -conv.cosine(qvec, vectors[x["id"]]))
+        else:
+            q = conv._words(query)
+            ranked = sorted(mine, key=lambda x: (-len(q & conv._words(x["text"])), -x["id"]))
+        out = [ESTILO_HEADERS[para], estilo_mod.describir(m), "Mensajes suyos:"]
+        size = sum(len(x) + 1 for x in out)
+        for ex in ranked[:5]:
+            line = "- " + ex["text"].replace("\n", " / ")[:240]
+            if local:
+                before = self.db.imported_before(ex["id"])
+                if before:
+                    line = f"- (respondías a: {before['text'][:120]}) " + line[2:]
+            if size + len(line) + 1 > ESTILO_MAX_CHARS:
+                break
+            out.append(line)
+            size += len(line) + 1
+        return "\n".join(out)[:ESTILO_MAX_CHARS]
+
+    def _estilo_for_sergio(self, local: bool) -> str:
+        query = getattr(self._recall, "query", None)
+        if query is None:
+            return ""
+        level = self.db.setting("persona_maturity", "")
+        para = "redactar" if DRAFT.search(query) else level if level in ("intermedio", "pleno") else None
+        return self.estilo_block(local, para, query, getattr(self._recall, "vec", None)) if para else ""
+
     def guest_system(self, guest: dict, local: bool = False) -> str:
         """0.63.0: what a guest's prompt carries. The guest's seed, the «Trato» section (never the whole persona),
         what Ashur knows of this guest and what Sergio allowed it to tell this guest, both chosen by meaning."""
@@ -313,6 +360,10 @@ class Brain:
                                                    or "(todavía nada)"))
         parts.append("Lo que puedes contar de Sergio:\n" + ("\n".join("- " + m["text"] for m in sorted(p2, key=lambda m: m["id"]))
                                                            or "(nada: no compartes nada de él)"))
+        if self.db.guest_estilo(guest["id"]):         # 0.64.0: «Responde con mi estilo» for this guest
+            block = self.estilo_block(local, "invitado", query, vec)
+            if block:
+                parts.append(block)
         return "\n\n".join(parts)
 
     def save_persona(self, text: str) -> None:
@@ -430,9 +481,10 @@ class Brain:
         text = self.voice(voice)
         layer = (f"\n\nAhora Sergio te habla desde su dispositivo «{voice}». Sigues siendo Ashur, con la misma "
                  f"memoria; en este dispositivo tu voz es así:\n{text}") if text else ""
+        style = self._estilo_for_sergio(local)
         return (f"{self.persona().strip()}{layer}\n\n"
                 f"Fecha y hora en Bogotá: {now:%Y-%m-%d %H:%M}.\n\n"
-                f"Tus recuerdos (número entre corchetes):\n{memory}")
+                f"Tus recuerdos (número entre corchetes):\n{memory}" + (f"\n\n{style}" if style else ""))
 
     def _cost(self, usage) -> tuple[int, int, float]:
         tin = int(_get(usage, "input_tokens", 0) or 0) + int(_get(usage, "cache_creation_input_tokens", 0) or 0) \
@@ -883,7 +935,7 @@ class Brain:
     def _prepare_recall(self, text: str) -> None:
         r = self._recall
         r.query, r.vec, r.mode, r.used = text, None, None, {}
-        if self.embed is None or not self.db.vectors(conv.EMBED_MODEL):
+        if self.embed is None or not (self.db.vectors(conv.EMBED_MODEL) or self.db.imported_vectors(conv.EMBED_MODEL)):
             return
         try:
             r.vec = conv.pack(self.embed([text], conv.CHAT_EMBED_TIMEOUT_S)[0])

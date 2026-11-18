@@ -193,3 +193,80 @@ def test_embed_due_also_embeds_sergios_imported_messages(tmp_path):
     th.join(5)
     assert seen[0]["embed"] == ["bien jaja\ny tú?", "dale, hablamos mañana 👍"]
     assert len(c.app.state.db.imported_vectors("bge-m3")) == 2
+
+
+# --- Task 4: the style block and where it goes ----------------------------------------------------------------
+from types import SimpleNamespace as NS
+
+
+class FakeClaude:
+    def __init__(self):
+        self.calls, self.messages = [], self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return NS(content=[NS(type="text", text="ok")], stop_reason="end_turn", usage=NS(input_tokens=1, output_tokens=1))
+
+
+def claude_app(tmp_path):
+    fake = FakeClaude()
+    return local_app(tmp_path, brain="auto", client=fake), fake
+
+
+def test_draft_request_gets_the_style_but_never_the_others_lines(tmp_path):
+    c, fake = claude_app(tmp_path)
+    imported(c)
+    c.post("/api/chat", headers=A, json={"message": "escríbele a Ana que mañana no puedo"})
+    sysp = fake.calls[-1]["system"]
+    assert "dale, hablamos mañana" in sysp and "Suele empezar" in sysp
+    for no in ("hola! cómo vas?", "todo bien", "respondías a"):
+        assert no not in sysp
+
+
+def test_inicial_maturity_does_not_imitate_when_just_talking(tmp_path):
+    c, fake = claude_app(tmp_path)
+    imported(c)
+    c.app.state.db.set_setting("persona_maturity", "inicial")
+    c.post("/api/chat", headers=A, json={"message": "¿cómo va el servidor?"})
+    assert "dale, hablamos mañana" not in fake.calls[-1]["system"]
+
+
+def test_pleno_maturity_talks_like_sergio(tmp_path):
+    c, fake = claude_app(tmp_path)
+    imported(c)
+    c.app.state.db.set_setting("persona_maturity", "pleno")
+    c.post("/api/chat", headers=A, json={"message": "¿cómo va el servidor?"})
+    sysp = fake.calls[-1]["system"]
+    assert "Habla como él" in sysp and "dale, hablamos mañana" in sysp
+
+
+def test_local_prompt_may_show_what_he_was_answering(tmp_path):
+    c = local_app(tmp_path)
+    imported(c)
+    th, seen = node(c, answer=lambda p: {"text": "listo"} if "embed" not in p else
+                    {"vectors": [[1.0, 0.0]], "model": "bge-m3", "dim": 2})
+    c.post("/api/chat", headers=A, json={"message": "redáctame un mensaje para Ana"})
+    th.join(5)
+    chat = [p for p in seen if "embed" not in p][0]
+    assert "respondías a: hola! cómo vas?" in chat["system"]
+
+
+def test_guest_gets_style_only_when_marked_and_always_as_ashur(tmp_path):
+    c, fake = claude_app(tmp_path)
+    imported(c)
+    g = c.post("/api/guests", headers=A, json={"name": "Beto"}).json()
+    G = {"X-Admin-Key": g["key"]}
+    c.post("/api/chat", headers=G, json={"message": "hola"})
+    assert "dale, hablamos mañana" not in fake.calls[-1]["system"]
+    assert c.put(f"/api/guests/{g['id']}/estilo", headers=A, json={"estilo": True}).status_code == 200
+    c.post("/api/chat", headers=G, json={"message": "hola"})
+    sysp = fake.calls[-1]["system"]
+    assert "dale, hablamos mañana" in sysp and "siempre eres Ashur" in sysp and "hola! cómo vas?" not in sysp
+
+
+def test_style_block_is_capped(tmp_path):
+    c, fake = claude_app(tmp_path)
+    big = "".join(f"12/11/26, 9:{i % 60:02d} a. m. - Sergio: {'palabra ' * 40}{i}\n" for i in range(50))
+    imported(c, text=big)
+    block = c.app.state.brain.estilo_block(False, "redactar", "palabra")
+    assert 0 < len(block) <= 1500

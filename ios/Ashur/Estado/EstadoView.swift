@@ -156,7 +156,7 @@ struct EstadoView: View {
             ForEach(nodos) { n in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text(n.device_id).font(.headline)
+                        Text(model.nombres["node:" + n.device_id] ?? n.device_id).font(.headline)
                         Spacer()
                         Text(Textos.modo[n.mode] ?? n.mode).font(.caption.weight(.medium))
                             .padding(.horizontal, 8).padding(.vertical, 2)
@@ -177,9 +177,11 @@ struct EstadoView: View {
                         Spacer()
                         Text(Textos.hace(n.last_seen_s_ago))
                     }.font(.caption2).foregroundStyle(.secondary)
+                    EquipoExtra(nodo: n.device_id, discos: model.discos[n.device_id], nombres: model.nombres, recargar: model.load)
                 }
                 .opacity(n.mode == "offline" ? 0.6 : 1)
             }
+            NavigationLink("Conectar otro equipo") { ConectarView().navigationTitle("Conectar un equipo") }
         }
     }
 

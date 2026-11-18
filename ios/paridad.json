@@ -23,21 +23,23 @@
   },
   "status": {
    "estado": "parcial",
-   "nota": "0.E1: cifras, en curso, cola (mover, cancelar, pausar), equipos, inventario y actividad; faltan los discos y «Configurar» de cada equipo"
+   "nota": "incluye discos, Configurar, renombrar y Conectar; falta el saludo con el orbe y el aviso «Sin respaldo» de arriba"
   }
  },
  "paginas": {
   "access": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "claude-requests": {
    "estado": "nativo"
   },
   "cmds": {
-   "estado": "web"
+   "estado": "nativo",
+   "nota": "lee CMDS del panel en vivo; no duplica los comandos"
   },
   "connect": {
-   "estado": "web"
+   "estado": "nativo",
+   "nota": "lee CONNECT del panel en vivo"
   },
   "diag": {
    "estado": "nativo"
@@ -70,7 +72,7 @@
    "estado": "nativo"
   },
   "time": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "update": {
    "estado": "nativo"
@@ -129,10 +131,10 @@
    "estado": "nativo"
   },
   "api/disks": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/disks/scan": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/docs": {
    "estado": "nativo"
@@ -150,11 +152,10 @@
    "estado": "nativo"
   },
   "api/guests": {
-   "estado": "parcial",
-   "nota": "solo la lista de nombres (Memoria); Acceso llega en la etapa 7"
+   "estado": "nativo"
   },
   "api/guests/limits": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/habits": {
    "estado": "nativo"
@@ -196,7 +197,7 @@
    "estado": "nativo"
   },
   "api/mcp/key": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/memory": {
    "estado": "nativo"
@@ -214,7 +215,7 @@
    "estado": "nativo"
   },
   "api/names": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/notes": {
    "estado": "nativo"
@@ -226,7 +227,7 @@
    "estado": "nativo"
   },
   "api/owner": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/persona": {
    "estado": "nativo"
@@ -274,16 +275,16 @@
    "estado": "nativo"
   },
   "api/time": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/time/export": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/time/start": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/time/stop": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/totp": {
    "estado": "nativo"

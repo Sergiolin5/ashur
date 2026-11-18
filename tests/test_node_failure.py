@@ -173,3 +173,36 @@ def test_local_and_connector_prompts_forbid_invented_figures(tmp_path):
     brain = c.app.state.brain
     for prompt in (brain._local_system(), brain.connector_system()):
         assert NET_RULE in prompt and '"estado": "ryzen9: en línea"' in prompt
+
+
+def test_a_unit_that_fails_on_a_device_retries_on_another(tmp_path, fast_local):
+    """2026-11-18: the Legion Go answered every research turn with an Ollama rejection (RuntimeError, not transport),
+    and each retry went back to it (still the preferred device) while the Ryzen 9 sat free."""
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, TWO))
+    approve(c, rid)
+    legion = FakeLLM(c, lambda p, n: RuntimeError("Ollama respondió 400 en /api/chat: no tools"), device="legion-go")
+    ryzen = FakeLLM(c, lambda p, n: "- idea", device="ryzen9")
+    prefer(c, "legion-go", 1.0)
+    prefer(c, "ryzen9", 5.0)
+    try:
+        run_all(c)
+    finally:
+        legion.close()
+        ryzen.close()
+    e = c.db.encargo_get(eid)
+    assert e["status"] == "kept", e["error"]
+    assert e["devices"] == {"ryzen9": 2} and len(legion.payloads) == 2      # one failed try per unit, then elsewhere
+    assert not c.app.state.is_degraded("legion-go")                       # a model error does not set it aside
+
+
+def test_with_one_device_a_unit_still_retries_on_it(tmp_path, fast_local):
+    c = runner_app(tmp_path)
+    eid, rid = order(c, seed(c, TWO))
+    approve(c, rid)
+    node = FakeLLM(c, lambda p, n: RuntimeError("modelo raro") if n == 1 else "- idea", device="ryzen9")
+    try:
+        run_all(c)
+    finally:
+        node.close()
+    assert c.db.encargo_get(eid)["status"] == "kept" and len(node.payloads) == 3

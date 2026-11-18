@@ -1255,26 +1255,35 @@ def create_app(
 
     app.state.is_degraded = is_degraded
 
-    def local_complete(system: str, messages: list, pin: bool = False, tools: Optional[list] = None) -> tuple[str, str]:
+    def local_complete(system: str, messages: list, pin: bool = False, tools: Optional[list] = None,
+                       avoid: frozenset = frozenset()) -> tuple[str, str]:
         """Ask a node with a local model (module 'llm') and wait for its answer. pin (lotes): only the most powerful
         device ready now may answer; while it is busy the question waits, and if it never takes it nobody weaker does
         (NoLocalDevice, which is «try later», not a failure of the document). A device that fails at the transport
         level is set aside (NodeDegraded): the caller may ask again at once and another device answers. tools (an
-        OpenJarvis agent's turn): the answer is then JSON {"text", "tool_calls"}."""
+        OpenJarvis agent's turn): the answer is then JSON {"text", "tool_calls"}. avoid (0.65.1): devices this
+        question already failed on; while another one is ready it goes there and stays there (no hand-off, or the
+        device that failed would take it back)."""
         sweep()
         ready = [n for n in db.nodes() if "llm" in n["modules"] and n["mode"] in ("full", "light")
                  and not is_degraded(n["id"])]
         if not ready:
             raise NoLocalDevice("Ningún dispositivo con modelo local está disponible ahora: la Mac puede "
                                    "estar dormida y el Ryzen 9 apagado o en uso. Inténtalo cuando uno esté libre.")
+        elsewhere = [n for n in ready if n["id"] not in avoid]
+        stay = bool(avoid) and bool(elsewhere)
+        if stay:
+            ready = elsewhere
         target = strongest_llm_node(ready) if pin else best_llm_node(ready)
+        if stay and not target:
+            target = ready[0]["id"]
         payload = {"system": system, "messages": messages, **({"tools": tools} if tools else {})}
         tid = db.add_task("llm", payload, Weight.LIGHT.value, clock(), target=target)
         deadline = time.monotonic() + local_timeout_s
         handoff = time.monotonic() + 10           # the preferred device is busy or asleep: after 10 s, any device may take it
         try:
             while time.monotonic() < deadline:
-                if target and not pin and time.monotonic() >= handoff:
+                if target and not pin and not stay and time.monotonic() >= handoff:
                     db.untarget_if_queued(tid)
                     target = None
                 t = db.get_task(tid)
@@ -4331,6 +4340,7 @@ def create_app(
         device is ready or the queue got paused between tries: neither uses up the unit's tries."""
         node = None
         attempt = 0
+        failed_on: set = set()                    # 0.65.1: a try that fails on a device sends the next one elsewhere
         while attempt < NOTES_TRIES:
             attempt += 1
             if attempt > 1:
@@ -4339,7 +4349,8 @@ def create_app(
                     return "wait", None, None
             try:
                 messages = unit.get("messages") or [{"role": "user", "content": unit["text"]}]   # an agent's turn: its history
-                answer, node = local_complete(unit["system"], messages, pin=pin, tools=unit.get("tools"))
+                answer, node = local_complete(unit["system"], messages, pin=pin, tools=unit.get("tools"),
+                                              avoid=frozenset(failed_on))
                 return "ok", answer, node
             except NoLocalDevice:
                 return "wait", None, None
@@ -4348,6 +4359,8 @@ def create_app(
                 attempt -= 1
             except LocalFailed as ex:
                 node = ex.node
+                if ex.node:
+                    failed_on.add(ex.node)
             except LocalUnavailable:              # timed out: a try
                 pass
         return "failed", None, node

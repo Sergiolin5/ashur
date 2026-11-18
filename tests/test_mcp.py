@@ -727,3 +727,25 @@ def test_gate_logs_run_off_the_event_loop():
     limited = run(lambda cl: [call(cl, "t") for _ in range(61)])
     over = [x for x in limited if x[1].get("limited")]
     assert len(over) == 1 and not over[0][2]
+
+
+def test_diagnostico_names_known_reasons_and_nothing_else(tmp_path):
+    """0.67.1: so Sergio stops opening the panel to read why the Legion Go fails; only fixed words leave."""
+    c, clock = tools_app(tmp_path)
+    errs = ["RuntimeError: falta el modelo: ollama pull bge-m3",
+            "RuntimeError: falta el modelo: ollama pull bge-m3",
+            "RuntimeError: Ollama respondió 400 en /api/chat: registry.ollama.ai/library/llava:7b does not support tools (con herramientas)",
+            "RuntimeError: Ollama respondió 500 en /api/chat: model requires more system memory (12 GiB) than is available",
+            "RuntimeError: Ollama no tiene modelos para conversar; ejecuta: ollama pull qwen2.5:3b",
+            "RuntimeError: falta el modelo: ollama pull diario; rm -rf /",
+            "RuntimeError: el contrato secreto de arriendo dice tal cosa"]
+    for n, err in enumerate(errs, 1):
+        c.db.log(clock(), "legion-go", "task_failed", {"task_id": n, "module": "llm", "error": err})
+    text, _ = tool_text(c, "ashur_diagnostico")
+    assert "legion-go · task_failed · llm · RuntimeError · falta el modelo bge-m3 · 2 veces" in text
+    assert "legion-go · task_failed · llm · RuntimeError · Ollama 400, el modelo no acepta herramientas · 1 vez" in text
+    assert "legion-go · task_failed · llm · RuntimeError · Ollama 500, no le alcanza la memoria · 1 vez" in text
+    assert "legion-go · task_failed · llm · RuntimeError · no tiene modelos de chat · 1 vez" in text
+    assert "legion-go · task_failed · llm · RuntimeError · 2 veces" in text            # the two it cannot vouch for
+    for bad in ("secreto", "arriendo", "diario", "rm -rf", "llava", "12 GiB", "registry"):
+        assert bad not in text

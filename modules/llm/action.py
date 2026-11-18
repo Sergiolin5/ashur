@@ -64,7 +64,9 @@ def run(payload: dict, ctx, client=None) -> dict:
     if tools:                                   # 0.61.0: an agent's turn may offer tools; Ollama answers with tool_calls
         body["tools"] = tools
     r = c.post(f"{url}/api/chat", timeout=180, json=body)
-    r.raise_for_status()
+    if r.status_code >= 400:                    # 0.63.3: Ollama says why in its body; raise_for_status() threw that away
+        raise RuntimeError(f"Ollama respondió {r.status_code} en /api/chat: {ollama_error(r)}"
+                           + (" (con herramientas)" if tools else ""))
     data = r.json()
     out = {"text": data.get("message", {}).get("content", ""), "model": model,
            "tokens_out": data.get("eval_count"), "seconds": round((data.get("total_duration") or 0) / 1e9, 2),
@@ -72,6 +74,16 @@ def run(payload: dict, ctx, client=None) -> dict:
     if tools:                                   # always present when tools were offered: the core knows this node knows them
         out["tool_calls"] = data.get("message", {}).get("tool_calls") or []
     return out
+
+
+def ollama_error(r) -> str:
+    """Ollama's own reason ({"error": "..."}), short: «does not support tools», «json: cannot unmarshal …». It names the
+    model or the field, never the prompt."""
+    try:
+        why = (r.json() or {}).get("error") or ""
+    except ValueError:
+        why = r.text or ""
+    return str(why).strip()[:200] or "sin detalle"
 
 
 def embed(url: str, texts: list, model: str, client) -> dict:

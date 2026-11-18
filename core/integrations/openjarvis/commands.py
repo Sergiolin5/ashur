@@ -24,7 +24,7 @@ HELP = [
     ("/rutinas", "rutinas", "lo que sueles hacer seguido"),
     ("/bench · /bench resultado", "bench_skills", "benchmark de skills"),
     ("/google conectar · /google fin <url>", "google_conectar", "conecta tu cuenta de Google"),
-    ("/correo <búsqueda> | <pregunta>", "correo_consultar", "pregunta sobre tus correos (solo local)"),
+    ("/correo <búsqueda> [| <pregunta>]", "correo_consultar", "pregunta sobre tus correos o los resume (solo local)"),
     ("/enviar <para> | <asunto> | <cuerpo>", "correo_enviar", "prepara un correo (por aprobar)"),
     ("/tareas · /tarea <título> [| AAAA-MM-DD]", "tareas", "Google Tasks"),
     ("/agenda [días] · /evento <título> | <inicio> | <fin>", "agenda", "tu calendario"),
@@ -45,7 +45,12 @@ def _pairs(words: list[str]) -> dict:
     return out
 
 
+RESUMEN_CORREO = "Resume estos correos: de quién es cada uno, el asunto y lo importante."
+
+
 def _bars(rest: str, n: int, what: str) -> list[str]:
+    for bar in ("｜", "¦", "│"):            # phone keyboards: look-alike bars count as the separator (0.67.3)
+        rest = rest.replace(bar, "|")
     parts = [p.strip() for p in rest.split("|")]
     if len(parts) < n or not all(parts[:n]):
         raise Usage(f"Usa: {what}")
@@ -122,8 +127,9 @@ def parse(text: str) -> Optional[tuple[str, dict]]:
             return "google_conectar_fin", {"url": words[1]}
         raise Usage("Usa: /google conectar  o  /google fin <url>")
     if head == "correo":
-        q, pregunta = _bars(rest, 2, "/correo <búsqueda> | <pregunta>")[:2]
-        return "correo_consultar", {"consulta": q, "pregunta": pregunta}
+        parts = _bars(rest, 1, "/correo <búsqueda> [| <pregunta>]")
+        pregunta = parts[1] if len(parts) > 1 and parts[1] else RESUMEN_CORREO      # 0.67.3: the question is optional
+        return "correo_consultar", {"consulta": parts[0], "pregunta": pregunta}
     if head == "enviar":
         para, asunto, cuerpo = _bars(rest, 3, "/enviar <para> | <asunto> | <cuerpo>")[:3]
         return "correo_enviar", {"para": para, "asunto": asunto, "cuerpo": cuerpo}

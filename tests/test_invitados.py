@@ -396,15 +396,21 @@ def test_guest_temas_and_profile_endpoints(tmp_path):
 import sqlite3
 
 
-def test_guest_conversations_from_before_063_are_not_mined(tmp_path):
+def test_guest_conversations_from_before_063_are_learned_too(tmp_path):
+    # Sergio's choice (2026-11-17): learn from what guests said before 0.63, their 0.62 archive included
     p = str(tmp_path / "old.db")
     db = DB(p)
-    cid = db.conv_open("g1", 1.0)
-    db.add_message(1.0, "app", "user", "estoy en tratamiento", "g1", cid)
+    arch = db.conv_new("g1", 0.5)
+    db.add_message(0.5, "app", "user", "antes de 0.62", "g1", arch)
+    db.conn.execute("UPDATE conversations SET archived = 1, closed = 0.6 WHERE id = ?", (arch,))
+    db.conn.commit()
+    cid = db.conv_new("g1", 1.0)
+    db.add_message(1.0, "app", "user", "estudio arquitectura", "g1", cid)
     db.conv_close(cid, 2.0)
-    s = db.conv_open("sergio", 1.0)
-    db.add_message(1.0, "app", "user", "hola", "sergio", s)
-    db.conv_close(s, 2.0)
+    s_arch = db.conv_new("sergio", 0.5)
+    db.add_message(0.5, "app", "user", "hilo viejo de Sergio", "sergio", s_arch)
+    db.conn.execute("UPDATE conversations SET archived = 1, closed = 0.6 WHERE id = ?", (s_arch,))
+    db.conn.commit()
     db.close()
     c = sqlite3.connect(p)                                      # as a 0.62 database: no owner/tema/temas columns yet
     c.execute("CREATE TABLE m2 AS SELECT id, created, kind, text, source, tier FROM memory")
@@ -413,7 +419,7 @@ def test_guest_conversations_from_before_063_are_not_mined(tmp_path):
     c.commit()
     c.close()
     db = DB(p)
-    assert [cv["id"] for cv in db.conv_due()] == [s]           # Sergio's still learned; the guest's is not
+    assert sorted(cv["id"] for cv in db.conv_due()) == sorted([arch, cid])   # Sergio's archive waits for his approval
 
 
 def test_guest_transcript_is_labelled_with_the_guest_name(tmp_path):

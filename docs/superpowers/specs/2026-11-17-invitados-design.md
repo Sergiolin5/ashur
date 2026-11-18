@@ -30,7 +30,9 @@ corregirlo. Las conversaciones con varias personas a la vez quedan para después
 6. Lo aprendido de «trato» va a una **sección «Trato» del archivo de persona**, versionada, con su fuente.
 7. El resumidor viejo **se reconvierte**: un resumen corto por conversación al cerrarla, en la misma pasada de la
    extracción.
-8. **Enfoque A, y cambio de esquema aprobado:**
+8. Lo que los invitados escribieron antes de 0.63, incluido su archivo de 0.62, **también se aprende** (decisión
+   posterior, 2026-11-17).
+9. **Enfoque A, y cambio de esquema aprobado:**
    - `memory.owner` y `memory.tema`;
    - `memory_proposals.owner`;
    - `guests.temas` (temas permitidos).

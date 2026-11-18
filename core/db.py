@@ -367,13 +367,11 @@ class DB:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN gpus TEXT")
         if "mode_reason" not in ncols:
             self.conn.execute("ALTER TABLE nodes ADD COLUMN mode_reason TEXT")
-        stamp_guests = False
         mem = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory)")}
         if "tier" not in mem:                          # 'claude' = may travel to Claude; 'local' = local models only
             self.conn.execute("ALTER TABLE memory ADD COLUMN tier TEXT NOT NULL DEFAULT 'claude'")
         if "owner" not in mem:                         # 0.63.0: 'sergio' or a guest's profile, 'g<id>'
             self.conn.execute("ALTER TABLE memory ADD COLUMN owner TEXT NOT NULL DEFAULT 'sergio'")
-            stamp_guests = True                        # see below, once messages have conversation_id
         if "tema" not in mem:                          # 0.63.0: trabajo, gustos, ashur, privado; NULL = not yet classified
             self.conn.execute("ALTER TABLE memory ADD COLUMN tema TEXT")
         pcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(memory_proposals)")}
@@ -391,15 +389,6 @@ class DB:
                     (r["user"], r["a"], r["b"], r["b"], "Archivo · antes de 0.62")).lastrowid
                 self.conn.execute("UPDATE messages SET conversation_id = ? WHERE user = ?", (cid, r["user"]))
         self.conn.execute("CREATE INDEX IF NOT EXISTS messages_conv ON messages (conversation_id, id)")
-        if stamp_guests:
-            # 0.63.0: guests talked before 0.63 under «no puedes guardar recuerdos». That promise holds: what they
-            # said then is never learned; only what they write from now on is.
-            for r in self.conn.execute("SELECT c.id, COALESCE(c.closed, c.last_msg) AS t, "
-                                       "(SELECT MAX(id) FROM messages WHERE conversation_id = c.id) AS last "
-                                       "FROM conversations c WHERE c.user LIKE 'g%'").fetchall():
-                self.conn.execute("UPDATE conversations SET extracted = COALESCE(extracted, ?) WHERE id = ?", (r["t"], r["id"]))
-                self.conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                                  (f"conv_cursor:{r['id']}", str(r["last"] or 0)))
         gcols = {r["name"] for r in self.conn.execute("PRAGMA table_info(guests)")}
         if "is_self" not in gcols:
             self.conn.execute("ALTER TABLE guests ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0")
@@ -2311,10 +2300,12 @@ class DB:
         return dict(r) if r else None
 
     def conv_due(self, limit: int = 50) -> list[dict]:
-        """Closed conversations (anyone's, not archived) with something not learned yet: new, or reopened since."""
+        """Closed conversations with something not learned yet: new, or reopened since. Anyone's, guests' archives
+        included (Sergio's choice, 2026-11-17); Sergio's own archive goes through «aprender_archivo»."""
         with self.lock:
             rows = self.conn.execute(
-                f"SELECT {self.CONV_COLS} FROM conversations c WHERE closed IS NOT NULL AND archived = 0 "
+                f"SELECT {self.CONV_COLS} FROM conversations c WHERE closed IS NOT NULL "
+                "AND (archived = 0 OR user LIKE 'g%') "        # a guest's 0.62 archive too; Sergio's waits for his yes
                 "AND (extracted IS NULL OR last_msg > extracted) "
                 "AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id) ORDER BY last_msg LIMIT ?",
                 (limit,)).fetchall()

@@ -60,6 +60,17 @@ struct APIClient {
         return try await send(req)
     }
 
+    /// La respuesta cruda (código y cuerpo), para flujos que leen el cuerpo de un 409 (Casa: «confirmar»).
+    func crudo(_ method: String, _ path: String, body: some Encodable) async throws -> (Int, Data) {
+        var req = request(path, method: method)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+        let (d, r) = try await session.data(for: req)
+        let code = (r as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 401 { throw Failure.wrongKey }
+        return (code, d)
+    }
+
     /// Sube bytes tal cual (audio del diario: POST /api/audio?kind=…).
     func upload<T: Decodable>(_ path: String, query: [URLQueryItem], data: Data) async throws -> T {
         var req = request(path, method: "POST", query: query)

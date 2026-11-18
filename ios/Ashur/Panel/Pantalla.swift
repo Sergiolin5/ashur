@@ -101,6 +101,8 @@ struct PanelTabs: View {
             Pantalla(p.titulo, ruta: "t=diary", web: web, activa: sel == p, nativa: AnyView(DiarioView()))
         case .cerebro:
             Pantalla(p.titulo, ruta: "t=cerebro", web: web, activa: sel == p, nativa: AnyView(CerebroView()))
+        case .casa:
+            Pantalla(p.titulo, ruta: "t=casa", web: web, activa: sel == p, nativa: AnyView(NavigationStack { CasaView(web: web) }))
         case .settings:
             Pantalla(p.titulo, ruta: "t=settings", web: web, activa: sel == p, nativa: AnyView(AjustesView(web: web)))
         default:

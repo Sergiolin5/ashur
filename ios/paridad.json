@@ -2,7 +2,8 @@
  "_": "Paridad panel web ↔ app iOS. estado: nativo | parcial | web (en la app se ve con el panel web). docs/ios/NATIVO.md",
  "pestañas": {
   "casa": {
-   "estado": "web"
+   "estado": "parcial",
+   "nota": "dispositivos, organizar y energía nativos; cámaras en el panel web (WebRTC nativo pendiente de elegir paquete); energía sin nivel por sensor ni mini gráficas"
   },
   "cerebro": {
    "estado": "parcial",
@@ -89,7 +90,7 @@
    "estado": "nativo"
   },
   "api/casa": {
-   "estado": "web"
+   "estado": "nativo"
   },
   "api/casa/camaras": {
    "estado": "web"

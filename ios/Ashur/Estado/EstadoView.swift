@@ -11,6 +11,7 @@ struct EstadoView: View {
                 Text(problem).font(.footnote).foregroundStyle(.red)
             }
             if let d = model.data {
+                presencia(d)
                 cifras(d)
                 enCurso(d)
                 cola(d)
@@ -30,6 +31,41 @@ struct EstadoView: View {
             while !Task.isCancelled {
                 await model.load()
                 try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    /// presence() y el aviso «Sin respaldo» del panel.
+    @ViewBuilder private func presencia(_ d: Overview) -> some View {
+        let nodos = d.status.nodes.sorted { ($0.mode == "offline" ? 1 : 0) < ($1.mode == "offline" ? 1 : 0) }
+        let on = nodos.filter { $0.mode != "offline" }, off = nodos.filter { $0.mode == "offline" }
+        let nm = { (n: Nodo) in model.nombres["node:" + n.device_id] ?? n.device_id }
+        let h = Calendar.current.component(.hour, from: .now)
+        Section {
+            HStack(spacing: 14) {
+                ZStack {
+                    ForEach(Array(nodos.enumerated()), id: \.offset) { i, n in
+                        Circle().stroke(n.mode != "offline" ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1.5)
+                            .frame(width: CGFloat(28 + i * 12), height: CGFloat(28 + i * 12))
+                    }
+                    Circle().fill(Color.accentColor).frame(width: 12, height: 12)
+                }.frame(width: 70, height: 70)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(h < 6 ? "Buena madrugada" : h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches").font(.caption).foregroundStyle(.secondary)
+                    Text(nodos.isEmpty ? "Aún no hay equipos." : "\(on.count) de \(nodos.count) " + (nodos.count == 1 ? "equipo sumando." : "equipos sumando.")).font(.headline)
+                    Text((on.isEmpty ? "Ninguno encendido." : "Encendidos: " + on.map(nm).joined(separator: ", ") + ".")
+                         + (off.isEmpty ? "" : " Sin señal: " + off.map(nm).joined(separator: ", ") + ".")).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let s = model.sinRespaldo, s.bytes > 0 {
+                NavigationLink { EspacioView().navigationTitle("Archivos y espacio") } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sin respaldo").font(.caption).foregroundStyle(.orange)
+                        Text(Textos.bytes(s.bytes)).font(.title3.weight(.semibold))
+                        Text(s.detalle).font(.caption).foregroundStyle(.secondary)
+                        Text("Ver qué está en una sola copia ›").font(.caption)
+                    }
+                }
             }
         }
     }

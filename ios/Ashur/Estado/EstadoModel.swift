@@ -9,6 +9,8 @@ final class EstadoModel {
     private(set) var problem: String?
     private(set) var discos: [String: [EquipoExtra.Disco]] = [:]   // /api/disks, por equipo (etapa 7)
     private(set) var nombres: [String: String] = [:]               // /api/names: «node:…», «disk:…:…»
+    private(set) var sinRespaldo: (bytes: Double, detalle: String)?  // loadHook() del panel, cada 5 min como mucho
+    private var respaldoEn = Date.distantPast
     var note: String?                            // avisos de la cola (p. ej. «esa tarea ya no está en espera»)
     var armed: Set<Int> = []                     // «Cancelar» pide un segundo toque, como en el panel
 
@@ -23,6 +25,12 @@ final class EstadoModel {
             data = try await api.get("/api/overview")
             if let d: DiscosResp = try? await api.get("/api/disks") { discos = Dictionary(uniqueKeysWithValues: d.nodes.map { ($0.node_id, $0.disks) }) }
             if let n: [String: String] = try? await api.get("/api/names") { nombres = n }
+            if Date().timeIntervalSince(respaldoEn) > 300, let b: EspacioView.Backup = try? await api.get("/api/backup"), b.pending != true, let ds = b.disks {
+                respaldoEn = Date()
+                let solos = ds.map { max(0, ($0.bytes_fp ?? 0) - ($0.copied_bytes ?? 0)) }
+                let total = solos.reduce(0, +), discos = solos.filter { $0 > 1e9 }.count
+                sinRespaldo = (total, "de tus archivos existen en una sola copia" + (discos > 1 ? ", repartidos en \(discos) discos. Si uno falla, lo suyo se pierde." : ". Si ese disco falla, se pierden."))
+            }
             ms = Date().timeIntervalSince(t0) * 1000
             problem = nil
         } catch {

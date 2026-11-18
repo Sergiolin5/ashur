@@ -82,9 +82,31 @@
     background: var(--red); color: var(--row); font: 700 11px/1 var(--font); letter-spacing: .08em; }
   .greet { margin-top: 2px; color: var(--secondary); font-size: var(--fs-small); }
   .subtitle { margin-top: 2px; color: var(--secondary); font: var(--fs-meta)/1.4 var(--font); font-variant-numeric: tabular-nums; }
-  .subtitle .live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 0; }
-  .subtitle.stale .live { background: var(--amber); }      /* a lost connection is not an emergency */
-  .subtitle.locked .live { background: var(--gray); }
+  /* 0.66.0: the avatar — the brain's core in small, Ashur's state at a glance (replaces the green dot) */
+  .avatar { position: relative; display: inline-flex; width: 26px; height: 26px; margin: 0 6px 0 -3px; padding: 0; border: 0; background: none;
+            vertical-align: middle; cursor: pointer; --av: #8f8cff; --glow: rgba(143,140,255,.55); }
+  .avatar svg { width: 26px; height: 26px; overflow: visible; filter: drop-shadow(0 0 4px var(--glow)); transition: filter .4s; }
+  .avatar .core { fill: var(--av); transform-origin: 12px 12px; animation: av-pulse 3.2s ease-in-out infinite; }
+  .avatar .rings { transform-origin: 12px 12px; animation: av-spin 14s linear infinite; }
+  .avatar .rings ellipse { fill: none; stroke: var(--av); stroke-width: 1; opacity: .7; }
+  .avatar .wave { fill: none; stroke: var(--av); stroke-width: 1; opacity: 0; transform-origin: 12px 12px; }
+  .avatar .badge { position: absolute; top: -7px; right: -9px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: #ff8a65;
+                   color: #1b1033; font: 600 10px/14px var(--font, system-ui); text-align: center; }
+  .avatar.thinking .rings { animation-duration: 1.4s; }
+  .avatar.thinking .core { animation-duration: .9s; }
+  .avatar.speaking .wave { animation: av-wave 1.2s ease-out infinite; }
+  .avatar.speaking .wave:nth-of-type(2) { animation-delay: .4s; } .avatar.speaking .wave:nth-of-type(3) { animation-delay: .8s; }
+  .avatar.listening .rings { animation: av-spin 14s linear infinite, av-breathe 1.6s ease-in-out infinite; }
+  .avatar.needs { --av: #ff9e7a; --glow: rgba(255,138,101,.65); }
+  .subtitle.stale .avatar { --av: var(--amber); --glow: transparent; }      /* a lost connection is not an emergency */
+  .subtitle.locked .avatar { --av: var(--gray); --glow: transparent; }
+  .subtitle.stale .avatar .rings, .subtitle.locked .avatar .rings, .subtitle.locked .avatar .core, .subtitle.locked .avatar .wave { animation: none; }
+  @keyframes av-pulse { 50% { transform: scale(.82); } }
+  @keyframes av-spin { to { transform: rotate(360deg); } }
+  @keyframes av-breathe { 50% { transform: scale(1.12); } }
+  @keyframes av-wave { 0% { opacity: .8; transform: scale(.4); } 100% { opacity: 0; transform: scale(1.5); } }
+  @media (prefers-reduced-motion: reduce) { .avatar .rings, .avatar .core, .avatar .wave { animation: none !important; } .avatar.thinking .core { opacity: .55; } .avatar.speaking .core { opacity: .8; } .avatar.listening .rings ellipse { opacity: 1; } }
+  .av-fly { position: fixed; z-index: 50; pointer-events: none; transition: transform .45s cubic-bezier(.2,.8,.2,1), opacity .45s; }
 
   section { margin-top: var(--s8); }
   h2 { margin: 0 0 10px; font: 700 var(--fs-small)/1.3 var(--font); color: var(--secondary); letter-spacing: 0; }
@@ -628,7 +650,7 @@
     <h1>Ashur<span class="chan" id="chan" hidden>EXPERIMENTAL</span></h1>
     <div class="greet" id="greet" hidden></div>
     <button type="button" class="notefab" id="note-fab" aria-label="Anotar un problema o una idea" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg><span class="badge" id="note-badge" hidden></span></button>
-    <div class="subtitle" id="subtitle"><span class="live"></span><span id="subtitle-text">Conectando…</span></div>
+    <div class="subtitle" id="subtitle"><button type="button" class="avatar" id="avatar" aria-label="Ashur"><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="wave" cx="12" cy="12" r="10"/><circle class="wave" cx="12" cy="12" r="10"/><circle class="wave" cx="12" cy="12" r="10"/><g class="rings"><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/></g><circle class="core" cx="12" cy="12" r="3.2"/></svg><span class="badge" id="avatar-badge" hidden></span></button><span id="subtitle-text">Conectando…</span></div>
     <button type="button" class="inbox-pill" id="inbox-pill" hidden></button>
   </header>
 
@@ -1644,6 +1666,7 @@
     role = me.role; guestName = me.name; owner = me.owner || owner;
   }
   function unlockGuest() {
+    avatarNeeds(0);                                    // a guest never sees what waits for Sergio
     if (unlocked) return;
     unlocked = true;
     $("signin").hidden = true; $("demo").hidden = true; $("dashboard").hidden = true; $("settings").hidden = true;
@@ -1967,6 +1990,7 @@
     try { localStorage.removeItem(KEY); } catch (e) {}
     for (const id of ["dashboard", "settings", "chat", "diary", "casa", "cerebro", "tabs", "composer", "guest-signout", "greet", "inbox-pill"]) $(id).hidden = true;
     cerebroShow(false); CB.data = null; CB.nodes = null; CB.hasta = null; $("cb-card").hidden = true;   // nothing of the brain outlives the session
+    clearTimeout(AV.speakTimer); AV.speakTimer = 0; AV.thinking = 0; avatarNeeds(0);                 // nor the avatar's badge or state
     $("thread").replaceChildren(); lastDay = null;
     if (NATIVE) {                                             // the app asks for the key, not the panel
       $("signin").hidden = true; $("demo").hidden = true;
@@ -2002,6 +2026,7 @@
   if (location.hash === "#estado") tab = "status";
   let unlocked = false, historyLoaded = false;
   function unlock() {
+    avatarRender();
     if (unlocked) return;                       // only the first successful load switches views
     unlocked = true;
     $("signin").hidden = true; $("demo").hidden = true; $("tabs").hidden = false;
@@ -2063,6 +2088,48 @@
   $("tab-cerebro").addEventListener("click", () => showTab("cerebro"));
   $("tab-status").addEventListener("click", () => { showTab("status"); refresh(); });
   $("tab-settings").addEventListener("click", () => { showTab("settings"); refresh(); });
+
+  // --- 0.66.0: the avatar — real signals only; it never talks on its own -----------------------------------------
+  const AV = { thinking: 0, speakTimer: 0, listening: false, needs: 0 };
+  function avatarRender() {
+    const a = $("avatar"), guest = role !== "admin";
+    a.tabIndex = guest ? -1 : 0; a.toggleAttribute("aria-disabled", guest); a.style.cursor = guest ? "default" : "pointer";
+    const speaking = !!AV.speakTimer, needs = !guest && AV.needs > 0;
+    a.classList.toggle("thinking", AV.thinking > 0);
+    a.classList.toggle("speaking", speaking && !AV.thinking);
+    a.classList.toggle("listening", AV.listening && !AV.thinking && !speaking);
+    a.classList.toggle("needs", needs);
+    $("avatar-badge").hidden = !needs; $("avatar-badge").textContent = needs ? String(AV.needs) : "";
+    a.setAttribute("aria-label", AV.thinking ? "Ashur está pensando" : speaking ? "Ashur está respondiendo" : AV.listening ? "Ashur te escucha"
+      : needs ? "Ashur te necesita: " + AV.needs + " por aprobar" : guest ? "Ashur" : "Ashur: abrir el cerebro");
+  }
+  function avatarNeeds(n) { AV.needs = n || 0; avatarRender(); }
+  function avatarThink(on) { AV.thinking = Math.max(0, AV.thinking + (on ? 1 : -1)); avatarListen(); }   // the box was just emptied
+  function avatarSpeak() { clearTimeout(AV.speakTimer); AV.speakTimer = setTimeout(() => { AV.speakTimer = 0; avatarRender(); }, 3000); avatarRender(); }
+  function avatarListen() {
+    const m = $("msg"), mic = $("mic");
+    AV.listening = (document.activeElement === m && m.value.trim() !== "") || mic.classList.contains("rec");
+    avatarRender();
+  }
+  $("msg").addEventListener("input", avatarListen); $("msg").addEventListener("blur", avatarListen); $("msg").addEventListener("focus", avatarListen);
+  new MutationObserver(avatarListen).observe($("mic"), { attributes: true, attributeFilter: ["class"] });
+  $("avatar").addEventListener("click", () => {
+    if (role !== "admin") return;                          // a guest's avatar opens nothing
+    if (AV.needs > 0) { showTab("settings"); showPage("claude-requests"); return; }
+    if (tab === "cerebro") return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { showTab("cerebro"); return; }   // no flight, just open it
+    const a = $("avatar"), from = a.getBoundingClientRect();
+    const fly = a.cloneNode(true); fly.removeAttribute("id"); fly.classList.add("av-fly");
+    fly.setAttribute("aria-hidden", "true"); fly.tabIndex = -1; fly.inert = true;
+    for (const x of fly.querySelectorAll("[id]")) x.removeAttribute("id");
+    fly.style.left = from.left + "px"; fly.style.top = from.top + "px"; document.body.append(fly);
+    showTab("cerebro");
+    const st = $("cb-stage").getBoundingClientRect();
+    const dx = st.left + st.width / 2 - (from.left + from.width / 2), dy = st.top + st.height / 2 - (from.top + from.height / 2);
+    requestAnimationFrame(() => { fly.style.transform = `translate(${dx}px, ${dy}px) scale(3.2)`; fly.style.opacity = "0"; });
+    setTimeout(() => fly.remove(), 500);
+    CB.lit && CB.lit.set("core", 1);                      // and the core it became lights up
+  });
 
   // --- 0.65.0: Cerebro — Ashur's memory in 3D (three.js, served by the core, loaded only here) --------------
   const CB = { on: false, three: null, ready: false, data: null, mode: "nucleo", filtro: "todo", hasta: null,
@@ -3188,7 +3255,11 @@
     }
   });
   let sending = false;
-  async function ask(text, allowClaude) {
+  async function ask(text, allowClaude) {          // 0.66.0: the avatar thinks while it waits, then speaks
+    avatarThink(true); AV.replied = false;
+    try { return await askInner(text, allowClaude); } finally { avatarThink(false); if (AV.replied) avatarSpeak(); }   // speaks only if a reply came
+  }
+  async function askInner(text, allowClaude) {
     const wait = bubble("ashur", "");
     const dots = el("span", "typing"); dots.append(el("i"), el("i"), el("i")); wait.append(dots);
     try {
@@ -3225,7 +3296,7 @@
         bubble("note bad", data.reply);
         showBudget(data);
       } else {
-        bubble("ashur", data.reply);
+        bubble("ashur", data.reply); AV.replied = true;
         if (data.conversation_id) {
           if (sentId !== null && data.conversation_id !== sentId)
             bubble("note", "Pasaron más de 30 minutos: esto ya es una conversación nueva.");
@@ -3795,6 +3866,7 @@
     } catch (e) {}
   }
   function setInbox(n) {
+    avatarNeeds(role === "admin" ? n : 0);
     const p = $("inbox-pill");
     p.hidden = !n || role !== "admin";
     p.textContent = n + (n === 1 ? " por aprobar ›" : " por aprobar ›");

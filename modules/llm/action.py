@@ -25,6 +25,26 @@ def installed_models(url: str, client=None) -> list[str]:
     return [m["name"] for m in r.json().get("models", [])]
 
 
+EMBED_FAMILIES = ("bert", "nomic-bert")
+EMBED_HINTS = ("embed", "bge", "minilm", "e5-")
+
+
+def chat_models(url: str, client=None) -> list[str]:
+    """Installed models that can chat: an embedding model (bge-m3 for Ashur's memories, 0.62) cannot, and Ollama
+    lists the newest pull first."""
+    c = client or httpx
+    r = c.get(f"{url}/api/tags", timeout=5)
+    r.raise_for_status()
+    out = []
+    for m in r.json().get("models", []):
+        d = m.get("details") or {}
+        fams = {d.get("family")} | set(d.get("families") or [])
+        if fams & set(EMBED_FAMILIES) or any(h in m["name"].lower() for h in EMBED_HINTS):
+            continue
+        out.append(m["name"])
+    return out
+
+
 def run(payload: dict, ctx, client=None) -> dict:
     cfg = getattr(ctx, "config", {}) or {}
     url = ollama_url(cfg)
@@ -33,9 +53,9 @@ def run(payload: dict, ctx, client=None) -> dict:
         return embed(url, payload["embed"], payload.get("model") or "bge-m3", c)
     model = payload.get("model") or cfg.get("llm_model")
     if not model:
-        models = installed_models(url, c)
+        models = chat_models(url, c)
         if not models:
-            raise RuntimeError("Ollama no tiene modelos; ejecuta: ollama pull qwen2.5:3b")
+            raise RuntimeError("Ollama no tiene modelos para conversar; ejecuta: ollama pull qwen2.5:3b")
         model = models[0]
     messages = [{"role": "system", "content": payload.get("system", "")}] + list(payload.get("messages", []))
     body = {"model": model, "messages": messages, "stream": False,

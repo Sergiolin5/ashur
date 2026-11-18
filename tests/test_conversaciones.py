@@ -532,3 +532,23 @@ def test_conversation_view_shows_the_newest_messages(tmp_path):
         db.add_message(c.clock(), "app", "user", f"m{i}", "sergio", cid)
     got = c.get(f"/api/conversations/{cid}", headers=A).json()["messages"]
     assert len(got) == 500 and got[-1]["content"] == "m509" and got[0]["content"] == "m10"
+
+
+def test_chat_never_picks_an_embedding_model():
+    # 0.63.1: after «ollama pull bge-m3», /api/tags lists it first and the chat used it (Ollama: 400, no chat)
+    from modules.llm.action import run
+    seen = {}
+
+    def handler(req):
+        if req.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [
+                {"name": "bge-m3:latest", "details": {"family": "bert", "families": ["bert"]}},
+                {"name": "nomic-embed-text:latest", "details": {"family": "nomic-bert"}},
+                {"name": "qwen2.5:7b", "details": {"family": "qwen2", "families": ["qwen2"]}}]})
+        if req.url.path == "/api/chat":
+            seen["model"] = _json.loads(req.content)["model"]
+            return httpx.Response(200, json={"message": {"content": "ok"}})
+        return httpx.Response(200, json={"models": []})
+    out = run({"system": "s", "messages": [{"role": "user", "content": "hola"}]}, SimpleNamespace(config={}),
+              client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert seen["model"] == "qwen2.5:7b" and out["text"] == "ok"

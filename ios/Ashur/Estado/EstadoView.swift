@@ -41,20 +41,24 @@ struct EstadoView: View {
         let on = nodos.filter { $0.mode != "offline" }, off = nodos.filter { $0.mode == "offline" }
         let nm = { (n: Nodo) in model.nombres["node:" + n.device_id] ?? n.device_id }
         let h = Calendar.current.component(.hour, from: .now)
+        let saludo: String = h < 6 ? "Buena madrugada" : h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches"
+        let cuenta: String = nodos.isEmpty ? "Aún no hay equipos." : "\(on.count) de \(nodos.count) " + (nodos.count == 1 ? "equipo sumando." : "equipos sumando.")
+        let encendidos: String = on.isEmpty ? "Ninguno encendido." : "Encendidos: " + on.map(nm).joined(separator: ", ") + "."
+        let apagados: String = off.isEmpty ? "" : " Sin señal: " + off.map(nm).joined(separator: ", ") + "."
         Section {
             HStack(spacing: 14) {
                 ZStack {
                     ForEach(Array(nodos.enumerated()), id: \.offset) { i, n in
-                        Circle().stroke(n.mode != "offline" ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1.5)
-                            .frame(width: CGFloat(28 + i * 12), height: CGFloat(28 + i * 12))
+                        let lado = CGFloat(28 + i * 12)
+                        let color: Color = n.mode != "offline" ? Color.accentColor : Color.secondary.opacity(0.3)
+                        Circle().stroke(color, lineWidth: 1.5).frame(width: lado, height: lado)
                     }
                     Circle().fill(Color.accentColor).frame(width: 12, height: 12)
                 }.frame(width: 70, height: 70)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(h < 6 ? "Buena madrugada" : h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches").font(.caption).foregroundStyle(.secondary)
-                    Text(nodos.isEmpty ? "Aún no hay equipos." : "\(on.count) de \(nodos.count) " + (nodos.count == 1 ? "equipo sumando." : "equipos sumando.")).font(.headline)
-                    Text((on.isEmpty ? "Ninguno encendido." : "Encendidos: " + on.map(nm).joined(separator: ", ") + ".")
-                         + (off.isEmpty ? "" : " Sin señal: " + off.map(nm).joined(separator: ", ") + ".")).font(.caption).foregroundStyle(.secondary)
+                    Text(saludo).font(.caption).foregroundStyle(.secondary)
+                    Text(cuenta).font(.headline)
+                    Text(encendidos + apagados).font(.caption).foregroundStyle(.secondary)
                 }
             }
             if let s = model.sinRespaldo, s.bytes > 0 {

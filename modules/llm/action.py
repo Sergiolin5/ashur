@@ -29,20 +29,38 @@ EMBED_FAMILIES = ("bert", "nomic-bert")
 EMBED_HINTS = ("embed", "bge", "minilm", "e5-")
 
 
+_CAPS: dict = {}                                # (name, digest) -> Ollama's capabilities, asked once per pull
+
+
+def capabilities(url: str, name: str, digest: str, client) -> set:
+    """What a model can do («completion», «tools», «vision»…), from /api/show; empty when Ollama does not say."""
+    key = (name, digest)
+    if key not in _CAPS:
+        try:
+            r = client.post(f"{url}/api/show", timeout=5, json={"model": name})
+            _CAPS[key] = set((r.json() or {}).get("capabilities") or []) if r.status_code == 200 else set()
+        except Exception:
+            _CAPS[key] = set()
+    return _CAPS[key]
+
+
 def chat_models(url: str, client=None) -> list[str]:
-    """Installed models that can chat: an embedding model (bge-m3 for Ashur's memories, 0.62) cannot, and Ollama
-    lists the newest pull first."""
+    """Installed models that can chat, best first (0.66.2): those that take tools (an OpenJarvis turn needs them),
+    then the biggest. Before, the newest pull came first, so a node without llm_model chatted with whatever was
+    downloaded last. An embedding model (bge-m3 for Ashur's memories, 0.62) never chats. When Ollama tells neither
+    size nor capabilities, the order stays Ollama's (newest first)."""
     c = client or httpx
     r = c.get(f"{url}/api/tags", timeout=5)
     r.raise_for_status()
-    out = []
-    for m in r.json().get("models", []):
+    found = []
+    for i, m in enumerate(r.json().get("models", [])):
         d = m.get("details") or {}
         fams = {d.get("family")} | set(d.get("families") or [])
         if fams & set(EMBED_FAMILIES) or any(h in m["name"].lower() for h in EMBED_HINTS):
             continue
-        out.append(m["name"])
-    return out
+        tools = "tools" in capabilities(url, m["name"], m.get("digest", ""), c)
+        found.append((not tools, -int(m.get("size") or 0), i, m["name"]))
+    return [name for *_, name in sorted(found)]
 
 
 def run(payload: dict, ctx, client=None) -> dict:

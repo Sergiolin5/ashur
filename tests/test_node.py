@@ -484,3 +484,33 @@ def test_agent_copies_a_folder_to_the_server_without_its_noise_or_secrets(tmp_pa
     done = c.get("/api/mudanzas", headers=A).json()[0]
     assert done["estado"] == "hecha" and done["done_files"] == 3, done
     assert (src / "plano.pdf").exists()                         # «copiar»: the original stays where it is
+
+
+def test_without_llm_model_the_node_picks_the_best_chat_model_not_the_newest():
+    """0.66.2: a node without llm_model chatted with whatever was pulled last (the Legion Go, 2026-11-18)."""
+    import json as _j
+    from types import SimpleNamespace
+    from modules.llm import action
+    action._CAPS.clear()
+    caps = {"llava:7b": ["completion", "vision"], "qwen2.5:3b": ["completion", "tools"],
+            "qwen2.5:7b": ["completion", "tools"]}
+    seen = {}
+
+    def handler(req):
+        if req.url.path == "/api/tags":                      # newest pull first, as Ollama lists them
+            return _httpx.Response(200, json={"models": [
+                {"name": "llava:7b", "size": 4_700_000_000, "digest": "a"},
+                {"name": "bge-m3:latest", "size": 1_200_000_000, "digest": "b", "details": {"family": "bert"}},
+                {"name": "qwen2.5:3b", "size": 1_900_000_000, "digest": "c"},
+                {"name": "qwen2.5:7b", "size": 4_600_000_000, "digest": "d"}]})
+        if req.url.path == "/api/show":
+            return _httpx.Response(200, json={"capabilities": caps[_j.loads(req.content)["model"]]})
+        if req.url.path == "/api/chat":
+            seen["model"] = _j.loads(req.content)["model"]
+            return _httpx.Response(200, json={"message": {"content": "ok"}})
+        return _httpx.Response(404)
+    client = _httpx.Client(transport=_httpx.MockTransport(handler))
+    action.run({"system": "s", "messages": []}, SimpleNamespace(config={}), client=client)
+    assert seen["model"] == "qwen2.5:7b"                     # takes tools and is the biggest; not llava, the newest
+    action.run({"system": "s", "messages": []}, SimpleNamespace(config={"llm_model": "qwen2.5:3b"}), client=client)
+    assert seen["model"] == "qwen2.5:3b"                     # an llm_model in node.yaml still wins

@@ -2477,13 +2477,27 @@
     return d.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
   }
   let lastDay = null;
+  // **negrita**, *cursiva* y `código` en las respuestas de Ashur, como nodos (nunca innerHTML: el texto sigue siendo texto)
+  function mdInline(text) {
+    const out = [], re = /\*\*([^*\n]+)\*\*|`([^`\n]+)`|(^|[^*\w])\*([^*\n]+)\*(?![*\w])/g;
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      const lead = m[3] || "", start = m.index + lead.length;
+      if (start > last) out.push(document.createTextNode(text.slice(last, start)));
+      out.push(m[1] != null ? el("strong", null, m[1]) : m[2] != null ? el("code", null, m[2]) : el("em", null, m[4]));
+      last = re.lastIndex;
+    }
+    if (last < text.length) out.push(document.createTextNode(text.slice(last)));
+    return out;
+  }
   function bubble(role, text, ts) {
     const th = $("thread");
     if (ts) {
       const day = dayLabel(ts);
       if (day !== lastDay) { th.append(el("div", "day", day)); lastDay = day; }
     }
-    const b = el("div", "bubble " + role, text);
+    const b = el("div", "bubble " + role);
+    if (role === "ashur") b.append(...mdInline(text || "")); else b.textContent = text || "";
     th.append(b);
     window.scrollTo({ top: document.body.scrollHeight });
     return b;
@@ -4121,10 +4135,12 @@
         if (L.salud && L.salud.length) m.append(el("div", "detail wrap", "No va a Claude (salud), " + L.salud.length + (L.salud.length === 1 ? " línea" : " líneas") + "."));
         const a = el("div", "acts");
         if (!open && L.done) {                                   // what the model really said for the «otro / duda» ones
-          const see = el("button", null, "Ver las dudas"), box = el("div", "detail wrap");
+          const see = el("button", null, "Ver las dudas"), box = el("div", "detail wrap dudas-box");
           see.type = "button";
           see.onclick = async () => {
-            see.disabled = true;
+            if (box.childNodes.length) { box.replaceChildren(); see.textContent = "Ver las dudas"; loadLotes(); return; }   // closing lets the list refresh again
+            see.disabled = true; see.textContent = "Ocultar las dudas";
+            box.textContent = "Buscando las dudas…";           // visible at once: the sample can take a while on a big lote
             try {
               const r = await api("api/lotes/" + L.id + "/muestra?tipo=&n=30");
               const d = await r.json();
@@ -4705,7 +4721,9 @@
     const visible = document.visibilityState === "visible";
     if (visible && (tab === "status" || tab === "settings" || !unlocked)) refresh();
     if (visible && unlocked) loadInbox();
-    if (visible && unlocked && tab === "settings" && !document.querySelector('.page[data-page="encargos"]').hidden) loadLotes();   // a lote moves by itself
+    // a lote moves by itself; but an open «Ver las dudas» box is his work in progress, and a re-render would wipe it
+    if (visible && unlocked && tab === "settings" && !document.querySelector('.page[data-page="encargos"]').hidden
+        && !$("lotes-list").querySelector(".dudas-box:not(:empty)")) loadLotes();
     const base = visible ? 10000 : 60000;
     timer = setTimeout(loop, Math.min(60000, base * Math.pow(2, Math.min(failStreak, 3))));
   }

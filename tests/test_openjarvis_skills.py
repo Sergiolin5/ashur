@@ -35,8 +35,8 @@ def by_id(rows):
 def test_catalog_classifies_the_bundled_skills(oj, tmp_path):
     runner_app(tmp_path)
     cat = by_id(oj.catalog())
-    assert len([s for s in cat if s.startswith("incluida/")]) == 20
-    email = cat["incluida/email-draft"]
+    assert len([s for s in cat if s.startswith("incluida/")]) == 19 and "incluida/email-draft" not in cat
+    email = cat["ashur/email-draft"]                             # Ashur's version hides the bundled one (2026-11-18)
     assert email["estado"] == "lista" and email["entradas"] == ["context", "intent", "recipient"]
     assert cat["incluida/backup-files"]["estado"] == "bloqueada"
     assert "shell_exec" in cat["incluida/backup-files"]["bloqueos"]
@@ -51,7 +51,7 @@ def test_think_steps_are_real_model_calls_and_values_may_carry_quotes(oj, tmp_pa
     tricky = 'Análisis: tono "formal"\ny breve'
     node = FakeLLM(c, lambda p, n: tricky if n == 1 else f"paso {n}", device="ryzen9")
     try:
-        eid = bridge.queue_run(c.db, c.clock, "skill", "Skill email-draft", skill="incluida/email-draft",
+        eid = bridge.queue_run(c.db, c.clock, "skill", "Skill email-draft", skill="ashur/email-draft",
                                entradas={"context": "reunión", "intent": "aceptar", "recipient": "Ana"})
         steps(c)
     finally:
@@ -61,6 +61,9 @@ def test_think_steps_are_real_model_calls_and_values_may_carry_quotes(oj, tmp_pa
     assert e["result"] == "paso 3" and e["done"] == 3 and e["devices"] == {"ryzen9": 3}
     assert tricky in node.payloads[1]["messages"][-1]["content"]        # step 2 got step 1's text, quotes and all
     assert "reunión" in node.payloads[0]["messages"][-1]["content"]
+    writes = node.payloads[1]["messages"][-1]["content"]                # the step that writes the mail (2026-11-18)
+    assert "reunión" in writes and "aceptar" in writes and "Ana" in writes
+    assert "Devuelve solo la versión final del correo" in node.payloads[2]["messages"][-1]["content"]
 
 
 def test_file_read_reads_ashurs_indexed_documents(oj, tmp_path, fast_local):
@@ -95,7 +98,7 @@ def test_blocked_and_incomplete_runs_are_refused(oj, tmp_path):
     with pytest.raises(EncargoError, match="bloqueada"):
         oj.validate_run("incluida/backup-files", {"source_dir": "/", "backup_dir": "/x"})
     with pytest.raises(EncargoError, match="Faltan entradas: intent, recipient"):
-        oj.validate_run("incluida/email-draft", {"context": "x"})
+        oj.validate_run("ashur/email-draft", {"context": "x"})
 
 
 # ---- GitHub import ----------------------------------------------------------------------------------------------

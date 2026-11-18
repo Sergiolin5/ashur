@@ -92,7 +92,8 @@ class FakeWebSearch:
 
             def execute(self, **p):
                 outer.queries.append(p.get("query"))
-                return ToolResult(tool_name="web_search", content="Ashur es un asistente local.", success=True)
+                return ToolResult(tool_name="web_search", success=True,
+                                  content="Ashur es un asistente local. https://ejemplo.org/ashur")
         from core.integrations.openjarvis.research import AshurDocsSearch
         return [WebSearch()] + ([AshurDocsSearch()] if params.get("documentos") else [])
 
@@ -127,7 +128,10 @@ def test_deep_research_turns_are_units_and_tools_run_in_the_core(oj, tmp_path, f
     e = c.db.encargo_get(eid)
     assert e["status"] == "kept", e["error"]
     assert e["result"].startswith("Informe: Ashur es un asistente local.")
-    assert web.queries == ["Ashur asistente"] and e["devices"] == {"ryzen9": 2}
+    assert e["result"].endswith("Fuentes:\n- https://ejemplo.org/ashur")
+    assert web.queries == ["¿Qué es Ashur?", "Ashur asistente"] and e["devices"] == {"ryzen9": 2}   # the core searched first
+    first = node.payloads[0]["messages"][-1]["content"]
+    assert "Responde en español" in first and "https://ejemplo.org/ashur" in first
     second = node.payloads[1]["messages"]
     assert second[-2]["tool_calls"] == [{"function": {"name": "web_search", "arguments": {"query": "Ashur asistente"}}}]
     assert second[-1]["role"] == "tool" and "asistente local" in second[-1]["content"]
@@ -243,3 +247,20 @@ def test_an_ollama_rejection_says_why():
         action.run({"system": "s", "messages": [], "tools": tools}, Ctx(), client=FakeOllama400(None))
     assert str(e.value) == ("Ollama respondió 400 en /api/chat: registry.ollama.ai/library/qwen2.5:7b does not support "
                             "tools (con herramientas)")
+
+
+def test_research_says_when_it_found_no_sources(oj, tmp_path, fast_local, monkeypatch):
+    from openjarvis.core.types import ToolResult
+    from core.integrations.openjarvis import bridge
+    web = FakeWebSearch()
+    tools = web.make({})
+    tools[0].execute = lambda **p: ToolResult(tool_name="web_search", content="", success=False)
+    monkeypatch.setattr(oj, "make_tools", lambda params: tools)
+    c = runner_app(tmp_path)
+    eid = bridge.queue_run(c.db, c.clock, "deep_research", "Investigar", pregunta="x")
+    node = FakeToolLLM(c, lambda p, n: {"text": "Respuesta.", "tool_calls": []}, device="ryzen9")
+    try:
+        steps(c)
+    finally:
+        node.close()
+    assert c.db.encargo_get(eid)["result"] == "Respuesta.\n\n(Sin fuentes: la búsqueda web no devolvió resultados.)"

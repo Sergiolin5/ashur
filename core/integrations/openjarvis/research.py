@@ -5,6 +5,7 @@ The tools run in the core: OpenJarvis's web search, a read-only page fetch (GET,
 asks for it, a search over the documents Ashur indexed. A run that searched his documents is private: its result stays
 in the panel and never goes back to the chat.
 """
+import re
 from typing import Any
 
 from openjarvis.core.types import ToolResult
@@ -69,15 +70,43 @@ def make_tools(params: dict) -> list:
     return tools
 
 
+URL = re.compile(r"https?://[^\s)\]>\"'|,]+")
+FIRST_SEARCH_CHARS = 4000
+MAX_SOURCES = 8
+
+
+def urls(text: str) -> list[str]:
+    out = []
+    for u in URL.findall(text or ""):
+        u = u.rstrip(".;:")
+        if u not in out:
+            out.append(u)
+    return out
+
+
 def runner(params: dict):
+    """2026-11-18, after the first live run came back without sources: the core makes one web search with the
+    question before the agent starts (a 7B often answers without calling any tool), and the sources are the URLs of
+    every web result (upstream only counts knowledge_search hits as sources)."""
     def run(ask) -> str:
         from openjarvis.agents.deep_research import DeepResearchAgent
         from core.integrations.openjarvis.engine import MODEL, AshurQueueEngine
-        agent = DeepResearchAgent(AshurQueueEngine(ask), MODEL, tools=make_tools(params),
+        pregunta = str(params["pregunta"])
+        tools = make_tools(params)
+        search = next((t for t in tools if t.spec.name == "web_search"), None)
+        first = search.execute(query=pregunta) if search else None
+        found = str(first.content)[:FIRST_SEARCH_CHARS] if first is not None and first.success else ""
+        question = pregunta + "\n\nResponde en español y cita la URL de cada dato que uses."
+        if found:
+            question += "\n\nResultados de una primera búsqueda web:\n" + found
+        agent = DeepResearchAgent(AshurQueueEngine(ask), MODEL, tools=tools,
                                   max_turns=int(params.get("turnos") or MAX_TURNS))
-        r = agent.run(str(params["pregunta"]))
-        sources = (r.metadata or {}).get("sources") or []
-        return r.content + ("\n\nFuentes:\n" + "\n".join(f"- {s}" for s in sources) if sources else "")
+        r = agent.run(question)
+        web = [found] + [str(tr.content) for tr in (r.tool_results or []) if tr.tool_name == "web_search"]
+        sources = urls("\n".join(web)) + [s for s in ((r.metadata or {}).get("sources") or [])]
+        sources = list(dict.fromkeys(sources))[:MAX_SOURCES]
+        return r.content + ("\n\nFuentes:\n" + "\n".join(f"- {s}" for s in sources) if sources else
+                            "\n\n(Sin fuentes: la búsqueda web no devolvió resultados.)")
     return run
 
 

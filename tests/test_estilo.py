@@ -168,6 +168,27 @@ def test_confirm_measures_style_and_asks_to_learn(tmp_path):
     assert len(reqs) == 1 and reqs[0]["args"]["import"] == iid and reqs[0]["status"] == "pending"
 
 
+def test_a_big_chat_arrives_in_parts_and_leaves_no_file(tmp_path):
+    """0.67.6: an export over 8 MB goes in parts; preview and confirm name the upload, and confirm removes the file."""
+    c = local_app(tmp_path)
+    up = "ab" * 16
+    half = len(ANDROID) // 2
+    for i, part in enumerate([ANDROID[:half], ANDROID[half:]]):
+        assert c.post("/api/imports/parte", headers=A, json={"upload": up, "i": i, "text": part}).status_code == 200
+    r = c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "chat.txt", "upload": up}).json()
+    assert r["senders"] == [{"name": "Ana", "n": 2}, {"name": "Sergio", "n": 2}]
+    r = c.post("/api/imports/confirm", headers=A, json={"name": "Ana", "file_name": "chat.txt", "upload": up, "me": "Sergio"})
+    assert r.status_code == 200 and r.json()["n_me"] == 2
+    assert not (tmp_path / "imports-tmp" / (up + ".txt")).exists()
+    assert c.post("/api/imports", headers=A, json={"name": "Ana", "upload": up}).status_code == 404
+
+
+def test_a_part_without_the_first_one_is_refused(tmp_path):
+    c = local_app(tmp_path)
+    assert c.post("/api/imports/parte", headers=A, json={"upload": "cd" * 16, "i": 1, "text": "x"}).status_code == 409
+    assert c.post("/api/imports/parte", headers=A, json={"upload": "../etc", "i": 0, "text": "x"}).status_code == 422
+
+
 def test_only_admin_imports(tmp_path):
     c = local_app(tmp_path)
     g = c.post("/api/guests", headers=A, json={"name": "Ana"}).json()

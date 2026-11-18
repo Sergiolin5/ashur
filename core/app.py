@@ -277,7 +277,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.67.5", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.67.6", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -2505,8 +2505,51 @@ def create_app(
     class ImportIn(BaseModel):
         name: str = Field(min_length=1, max_length=80)
         file_name: str = Field(default="", max_length=200)
-        text: str = Field(min_length=1, max_length=8_000_000)
+        text: str = Field(default="", max_length=8_000_000)
+        upload: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{32}$")   # 0.67.6: a chat sent in parts
         me: Optional[str] = Field(default=None, max_length=120)
+
+    # 0.67.6: a WhatsApp export over 8 MB arrives in parts of ≤ 2 MB, appended to one file on disk, so no single request
+    # (and no browser tab) holds it whole; preview and confirm read it back by its id. 64 MB at most, gone after a day.
+    IMPORT_MAX = 64 * 1024 * 1024
+    class ImportPart(BaseModel):
+        upload: str = Field(pattern=r"^[0-9a-f]{32}$")
+        i: int = Field(ge=0, le=100)
+        text: str = Field(min_length=1, max_length=2_100_000)
+
+    def import_tmp(upload: str) -> Path:
+        d = Path(os.path.dirname(os.path.abspath(db_path))) / "imports-tmp"
+        d.mkdir(exist_ok=True)
+        return d / (upload + ".txt")
+
+    def import_text(body: "ImportIn") -> str:
+        if body.upload:
+            f = import_tmp(body.upload)
+            if not f.exists():
+                raise HTTPException(404, "Esa subida ya no está: vuelve a elegir el archivo.")
+            return f.read_text(encoding="utf-8")
+        if not body.text:
+            raise HTTPException(422, "Falta el texto del chat.")
+        return body.text
+
+    @app.post("/api/imports/parte", dependencies=[Depends(require_admin)])
+    def import_part(body: ImportPart):
+        f = import_tmp(body.upload)
+        now = time.time()
+        for old in f.parent.glob("*.txt"):                      # leftovers of an upload that never finished
+            if now - old.stat().st_mtime > 86400:
+                old.unlink(missing_ok=True)
+        if body.i == 0:
+            f.unlink(missing_ok=True)
+        elif not f.exists():
+            raise HTTPException(409, "Falta la primera parte: vuelve a elegir el archivo.")
+        size = f.stat().st_size if f.exists() else 0
+        if size + len(body.text.encode("utf-8")) > IMPORT_MAX:
+            f.unlink(missing_ok=True)
+            raise HTTPException(413, "El chat pasa de 64 MB.")
+        with f.open("a", encoding="utf-8") as h:
+            h.write(body.text)
+        return {"ok": True, "bytes": f.stat().st_size}
 
     def estilo_refresh() -> dict:
         medidas = estilo_mod.medir([m["text"] for m in db.imported_mine()])
@@ -2523,7 +2566,7 @@ def create_app(
 
     @app.post("/api/imports", dependencies=[Depends(require_admin)])
     def import_preview(body: ImportIn):
-        msgs = estilo_mod.parse_whatsapp(body.text)
+        msgs = estilo_mod.parse_whatsapp(import_text(body))
         if not msgs:
             raise HTTPException(422, "No encontré mensajes de WhatsApp en ese archivo.")
         return {"senders": estilo_mod.senders(msgs), "mensajes": len(msgs)}
@@ -2534,10 +2577,12 @@ def create_app(
 
     @app.post("/api/imports/confirm", dependencies=[Depends(require_admin)])
     def import_confirm(body: ImportIn):
-        msgs = estilo_mod.parse_whatsapp(body.text)
+        msgs = estilo_mod.parse_whatsapp(import_text(body))
         if not body.me or body.me not in {m["sender"] for m in msgs}:
             raise HTTPException(422, "Elige cuál de los remitentes eres tú.")
         iid = db.import_add(clock(), body.name.strip(), body.file_name, body.me, msgs)
+        if body.upload:
+            import_tmp(body.upload).unlink(missing_ok=True)
         imp = db.import_get(iid)
         estilo_refresh()
         db.claude_request_add(clock(), "aprender_import", {"import": iid, "nombre": imp["name"], "mensajes": imp["n_me"]},

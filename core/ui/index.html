@@ -3484,7 +3484,7 @@
   });
 
   // --- 0.64.0: your style and the form ------------------------------------------------------------------
-  let impText = null;
+  let impText = null, impUpload = null;
   async function loadEstilo() {
     try {
       const st = await (await api("api/estilo")).json();
@@ -3503,11 +3503,28 @@
     const f = $("imp-file").files[0], note = $("imp-note");
     note.hidden = false;
     if (!f) { note.textContent = "Elige el archivo .txt del chat."; return; }
-    if (f.size > 8e6) { note.textContent = "El archivo pasa de 8 MB."; return; }
-    impText = await f.text();
+    if (f.size > 64 * 1048576) { note.textContent = "El chat pasa de 64 MB."; return; }
+    // 0.67.6: over 6 MB it goes in parts of 1.5 MB; the core keeps them on disk and both steps name the upload, not the text
+    impText = null; impUpload = null;
+    const all = await f.text();
+    if (f.size > 6e6) {
+      const up = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, "0")).join("");
+      const step = 1500000;
+      for (let i = 0, at = 0; at < all.length; i++) {
+        let end = Math.min(all.length, at + step);
+        const c = all.charCodeAt(end - 1);
+        if (end < all.length && c >= 0xd800 && c <= 0xdbff) end--;    // never split an emoji in half
+        note.textContent = "Subiendo el chat… " + Math.round(100 * at / all.length) + " %";
+        const rp = await api("api/imports/parte", { method: "POST", body: JSON.stringify({ upload: up, i, text: all.slice(at, end) }) });
+        if (!rp.ok) { note.textContent = await detailOf(rp, "No pude subir el chat."); return; }
+        at = end;
+      }
+      impUpload = up;
+    } else impText = all;
+    note.textContent = "Leyendo el chat…";
     const name = $("imp-name").value.trim() || f.name.replace(/\.txt$/i, "").replace(/^Chat de WhatsApp con /i, "");
     $("imp-name").value = name;
-    const r = await api("api/imports", { method: "POST", body: JSON.stringify({ name, file_name: f.name, text: impText }) });
+    const r = await api("api/imports", { method: "POST", body: JSON.stringify({ name, file_name: f.name, ...(impUpload ? { upload: impUpload } : { text: impText }) }) });
     const d = await r.json();
     if (!r.ok) { note.textContent = d.detail || "No pude leerlo."; return; }
     note.textContent = d.mensajes + " mensajes. ¿Cuál eres tú?";
@@ -3521,11 +3538,11 @@
       const me = (who.querySelector("input:checked") || {}).value;
       if (!me) { note.textContent = "Marca cuál eres tú."; return; }
       go.disabled = true;
-      const r2 = await api("api/imports/confirm", { method: "POST", body: JSON.stringify({ name, file_name: f.name, text: impText, me }) });
+      const r2 = await api("api/imports/confirm", { method: "POST", body: JSON.stringify({ name, file_name: f.name, ...(impUpload ? { upload: impUpload } : { text: impText }), me }) });
       const d2 = await r2.json();
       note.textContent = r2.ok ? "Listo: " + d2.n_me + " mensajes tuyos y " + d2.n_others + " de otros. Aprueba en «Por aprobar» para que Ashur aprenda de los tuyos."
                                : (d2.detail || "No pude importarlo.");
-      if (r2.ok) { who.hidden = true; impText = null; $("imp-file").value = ""; loadEstilo(); }
+      if (r2.ok) { who.hidden = true; impText = null; impUpload = null; $("imp-file").value = ""; loadEstilo(); }
       go.disabled = false;
     });
     who.append(go);

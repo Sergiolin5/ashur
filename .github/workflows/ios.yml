@@ -1,0 +1,27 @@
+name: ios
+
+# Compila la app iOS para el simulador, sin firmar, para ver errores sin la Mac (docs/ios/HIBRIDO.md).
+# Repo público: los minutos de macOS no cuestan. Solo corre si cambia ios/ o a mano.
+on:
+  push:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode más nuevo disponible
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i simulator
+      - name: Compilar para el simulador
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/Ashur.xcodeproj -target Ashur -sdk iphonesimulator \
+            -configuration Debug CODE_SIGNING_ALLOWED=NO build 2>&1 | tee build.log | grep -E "error:|warning:|BUILD" || true
+          test "${PIPESTATUS[0]}" -eq 0

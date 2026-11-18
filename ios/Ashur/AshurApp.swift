@@ -25,7 +25,12 @@ struct AshurApp: App {
 final class Session {
     private(set) var api: APIClient? {
         didSet {
+            web?.close()
+            web = nil
             guard let api else { return }
+            web = PanelWeb(key: api.key) { [weak self] detail in
+                Task { await self?.panelRejectedKey(detail) }
+            }
             if let chat, let panel {
                 chat.api = api
                 panel.api = api
@@ -36,6 +41,8 @@ final class Session {
         }
     }
     private(set) var chat: ChatModel?
+    /// El panel web (docs/ios/HIBRIDO.md). Uno por desbloqueo: se crea con el cliente y se suelta con él.
+    private(set) var web: PanelWeb?
     private(set) var panel: PanelModel?
     /// Hay clave en el Keychain pero todavía no se abrió con biometría en esta ejecución.
     private(set) var locked: Bool
@@ -98,6 +105,21 @@ final class Session {
         }
     }
 
+    /// El panel avisó un 401 o un 429. Se comprueba la clave una vez: solo si el núcleo de verdad ya no la acepta
+    /// se olvida (un 429 es la puerta bloqueada por intentos, no una clave mala).
+    func panelRejectedKey(_ detail: String) async {
+        guard let api else { return }
+        do {
+            let _: WhoAmI = try await api.get("/api/whoami")
+            problem = detail.isEmpty ? nil : detail
+        } catch APIClient.Failure.wrongKey {
+            forgetKey()
+            problem = "El núcleo ya no acepta la clave guardada. Escríbela otra vez."
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+
     func forgetKey() {
         KeyStore.delete()
         api = nil
@@ -113,23 +135,23 @@ struct RootView: View {
     var body: some View {
         if session.locked {
             UnlockView()
-        } else if session.api != nil, let chat = session.chat, let panel = session.panel {
-            AdaptiveRoot(chat: chat, panel: panel)
+        } else if session.api != nil, let chat = session.chat, let web = session.web {
+            AdaptiveRoot(chat: chat, web: web)
         } else {
             KeySetupView()
         }
     }
 }
 
-/// Funcionalidad (b). Se decide por size class (guía de Apple), no por orientación ni por el tamaño de pantalla:
-/// pantalla externa del Duo (cerrado) → compacto, solo conversación;
-/// pantalla interna (abierto) → regular, dos paneles: conversación | memoria, hábitos y pedidos.
-/// No se usa la bisagra: con size classes basta.
+/// Funcionalidad (b), híbrida desde docs/ios/HIBRIDO.md. Se decide por size class, no por orientación:
+/// pantalla externa del Duo (cerrado) → compacto: el chat, y «Panel» abre el panel web a pantalla completa;
+/// pantalla interna (abierto) → regular: chat nativo | panel web.
 struct AdaptiveRoot: View {
     let chat: ChatModel
-    let panel: PanelModel
+    let web: PanelWeb
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var columns: NavigationSplitViewVisibility = .all
+    @State private var panelOpen = false
 
     var body: some View {
         if sizeClass == .regular {
@@ -137,12 +159,30 @@ struct AdaptiveRoot: View {
                 ChatView(model: chat)
                     .navigationSplitViewColumnWidth(min: 320, ideal: 420)
             } detail: {
-                NavigationStack { PanelView(model: panel) }
+                PanelWebView(web: web).ignoresSafeArea(edges: .bottom)
             }
             .navigationSplitViewStyle(.balanced)
         } else {
             NavigationStack {
                 ChatView(model: chat)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Panel", systemImage: "square.grid.2x2") { panelOpen = true }
+                        }
+                    }
+            }
+            .fullScreenCover(isPresented: $panelOpen) {
+                NavigationStack {
+                    PanelWebView(web: web)
+                        .ignoresSafeArea(edges: .bottom)
+                        .navigationTitle("Panel")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Chat", systemImage: "chevron.left") { panelOpen = false }
+                            }
+                        }
+                }
             }
         }
     }

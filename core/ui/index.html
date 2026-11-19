@@ -699,10 +699,30 @@
   .cfg-body { display: grid; gap: 6px; padding: 6px 0 4px; } .cfg-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .cfg-row > span { min-width: 190px; font-size: 13px; } .cfg-mods { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; }
   .cfg-lims { display: grid; gap: 6px; } .cfg-actions { display: flex; gap: 8px; }
+  /* 0.69.0: temas. Un tema solo cambia apariencia (core/temas.py); lo que decide o protege queda en esta capa:
+     una declaración !important dentro de una capa le gana a cualquier regla sin capa, también a la de un tema. */
+  @layer locked {
+    [data-locked] { color: #16154A !important; background: #FFFFFF !important; background-image: none !important;
+      border: 1px solid #5856D6 !important; border-radius: 12px !important; box-shadow: none !important; text-shadow: none !important;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif !important; font-weight: 600 !important; font-style: normal !important;
+      letter-spacing: normal !important; word-spacing: normal !important; text-transform: none !important; line-height: 1.3 !important;
+      animation: none !important; transition: none !important; outline-color: #5856D6 !important; accent-color: #5856D6 !important;
+      caret-color: #16154A !important; text-decoration-color: currentColor !important; }
+    @media (prefers-color-scheme: dark) {
+      [data-locked] { color: #EEEDFF !important; background: #1B1A4C !important; border-color: #9C9AFF !important;
+        outline-color: #9C9AFF !important; caret-color: #EEEDFF !important; }
+    }
+  }
+  #tema-banner:not([hidden]) { position: fixed; left: 12px; right: 12px; z-index: 60; display: flex; gap: 10px; align-items: center;
+    justify-content: space-between; padding: 10px 14px; bottom: calc(var(--tabbar) + 12px + env(safe-area-inset-bottom, 0px)); }
+  #tema-banner button { min-height: 40px; padding: 0 14px; }
+  .tema-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .tema-acts button, .tema-acts label { min-height: 40px; padding: 0 14px; cursor: pointer; display: inline-flex; align-items: center; }
 </style>
 
 </head>
 <body>
+<div id="tema-banner" data-locked role="status" hidden><span id="tema-banner-text"></span><button type="button" id="tema-banner-off" data-locked>Quitar prueba</button></div>
 <main>
   <header>
     <h1>Ashur<span class="chan" id="chan" hidden>EXPERIMENTAL</span></h1>
@@ -738,8 +758,8 @@
     <div class="group signin">
       <p>Escribe tu clave; se queda solo en este navegador.</p>
       <form id="signin-form">
-        <input id="key" type="password" autocomplete="current-password" placeholder="Clave" aria-label="Clave">
-        <button type="submit">Conectar</button>
+        <input id="key" type="password" autocomplete="current-password" placeholder="Clave" aria-label="Clave" data-locked>
+        <button type="submit" data-locked>Conectar</button>
         <div class="error" id="signin-error" role="alert" hidden></div>
       </form>
     </div>
@@ -930,6 +950,7 @@
       <div class="menu">
         <button type="button" class="menu-item" data-page="voices"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span><span class="mi-text"><b>Personas</b><small>Cómo te habla Ashur en cada dispositivo</small></span><span class="mi-go" aria-hidden="true">›</span></button>
         <button type="button" class="menu-item" data-page="access"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H21M18 12v3M15 12v2"/></svg></span><span class="mi-text"><b>Acceso</b><small>Invitados y claves de chat</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="apariencia"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" stroke="none" opacity=".35"/><circle cx="12" cy="12" r="2.5"/></svg></span><span class="mi-text"><b>Apariencia</b><small>Temas: elegir, probar y subir</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       </div>
       <h2 class="menu-h">Equipos y sistema</h2>
       <div class="menu">
@@ -1244,6 +1265,23 @@
       <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Comandos</div></div>
       <div id="cmds"></div>
       <div class="note" style="margin-top:14px">Los instaladores solo funcionan dentro de tu tailnet. Ninguno de estos comandos lleva claves. Pégalos de uno en uno.</div>
+    </div>
+
+    <div class="page" data-page="apariencia" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Apariencia</div></div>
+      <section><h2>Temas</h2><div class="group" id="tema-list"></div>
+        <div class="note" id="tema-status" role="status" hidden></div></section>
+      <section><h2>Agregar un tema</h2>
+        <div class="group"><div class="row nrow"><div class="main">
+          <div class="title">Subir un tema (.zip)</div>
+          <div class="detail wrap">Ashur lo revisa al subirlo: solo acepta colores, imágenes, fuentes y CSS de apariencia. Lo que mueva, esconda o cargue algo de fuera se descarta o se rechaza. Luego espera tu sí en «Por aprobar», donde puedes probarlo solo en esta pantalla.</div>
+          <div class="tema-acts">
+            <label data-locked for="tema-file">Elegir .zip</label>
+            <input type="file" id="tema-file" accept=".zip,application/zip" hidden>
+            <button type="button" id="tema-base" data-locked>Descargar base para agentes</button>
+          </div>
+        </div></div></div>
+        <div class="note">La base trae el manifiesto con los colores de hoy y un theme.css de ejemplo, para pasarla a ChatGPT, Gemini, Claude u otro agente junto con el prompt de temas.</div></section>
     </div>
 
     <div class="page" data-page="access" hidden>
@@ -2262,11 +2300,103 @@
   function showPage(name) {
     if (name === "estilo") loadEstilo();
     if (name === "formulario") loadForm();
+    if (name === "apariencia") loadTemas();
     $("menu").hidden = !!name; $("signout-row").hidden = !!name;
     for (const pg of document.querySelectorAll("#settings .page")) pg.hidden = pg.dataset.page !== name;
     window.scrollTo({ top: 0 });
   }
   $("menu").addEventListener("click", (e) => { const b = e.target.closest(".menu-item"); if (b) showPage(b.dataset.page); });
+
+  // --- 0.69.0: temas. Solo apariencia; el núcleo valida y compila (core/temas.py). El activo se carga sin clave
+  // (invitados y antes de entrar); «Probar» trae el CSS con la clave y lo aplica solo en esta pantalla.
+  const TEMA = { activo: null, prueba: null };
+  function temaAplicar() {
+    const id = TEMA.prueba || TEMA.activo;
+    if (id) document.documentElement.dataset.tema = String(id); else delete document.documentElement.dataset.tema;
+  }
+  function temaLink(id) {
+    let l = document.getElementById("tema-css");
+    if (!id) { if (l) l.remove(); }
+    else {
+      if (!l) { l = document.createElement("link"); l.id = "tema-css"; l.rel = "stylesheet"; document.head.append(l); }
+      l.href = "api/temas/" + id + "/tema.css?v=" + Date.now();
+    }
+    TEMA.activo = id || null; temaAplicar();
+  }
+  async function temaCargar() {
+    try { const j = await (await fetch("api/temas/activo", { cache: "no-store" })).json(); temaLink(j.id); } catch (e) {}
+  }
+  temaCargar();
+  async function temaProbar(id, nombre) {
+    try {
+      const r = await api("api/temas/" + id + "/tema.css");
+      if (!r.ok) return;
+      let s = $("tema-prueba");
+      if (!s) { s = document.createElement("style"); s.id = "tema-prueba"; document.head.append(s); }
+      s.textContent = await r.text();
+      TEMA.prueba = id; temaAplicar();
+      $("tema-banner-text").textContent = "Probando «" + nombre + "» solo en esta pantalla";
+      $("tema-banner").hidden = false;
+    } catch (e) {}
+  }
+  function temaQuitarPrueba() {
+    const s = $("tema-prueba"); if (s) s.remove();
+    TEMA.prueba = null; $("tema-banner").hidden = true; temaAplicar();
+  }
+  $("tema-banner-off").addEventListener("click", temaQuitarPrueba);
+  function temaNota(t) { const n = $("tema-status"); n.hidden = !t; n.textContent = t || ""; }
+  async function temaDescargar(path, nombre) {
+    try {
+      const r = await api(path); if (!r.ok) { temaNota(await detailOf(r, "No pude descargarlo.")); return; }
+      const u = URL.createObjectURL(await r.blob()), a = document.createElement("a");
+      a.href = u; a.download = nombre; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(u), 10000);
+    } catch (e) { temaNota("No pude descargarlo."); }
+  }
+  const TEMA_ESTADO = { pendiente: "Espera tu sí en «Por aprobar»", aprobado: "Aprobado", rechazado: "Rechazado" };
+  async function loadTemas() {
+    try {
+      const j = await (await api("api/temas")).json();
+      const btn = (text, fn) => { const b = el("button", null, text); b.type = "button"; b.dataset.locked = ""; b.onclick = fn; return b; };
+      const usar = async (id) => {
+        const r = await api("api/temas/activar", { method: "POST", body: JSON.stringify({ id }) });
+        if (!r.ok) { temaNota(await detailOf(r, "No pude cambiar el tema.")); return; }
+        temaQuitarPrueba(); temaLink(id); temaNota(id ? "Tema en uso en todos tus equipos." : "Volviste al tema predeterminado."); loadTemas();
+      };
+      const rows = [];
+      const base = el("div", "row nrow"), bm = el("div", "main");
+      bm.append(el("div", "title", "Predeterminado" + (j.activo ? "" : " · en uso")), el("div", "detail", "El diseño de Ashur, claro y oscuro."));
+      const ba = el("div", "tema-acts"); if (j.activo) ba.append(btn("Usar", () => usar(null)));
+      bm.append(ba); base.append(bm); rows.push(base);
+      for (const t of j.temas) {
+        const r = el("div", "row nrow"), m = el("div", "main");
+        const enUso = j.activo === t.id;
+        m.append(el("div", "title", t.nombre + " · de " + t.autor + (enUso ? " · en uso" : "")),
+                 el("div", "detail wrap", (TEMA_ESTADO[t.estado] || t.estado) + " · " + whenText(t.ts) + (t.descripcion ? " · " + t.descripcion : "")));
+        if (t.avisos && t.avisos.length) m.append(el("div", "detail wrap", "Al revisarlo: " + t.avisos.slice(0, 4).join(" ") + (t.avisos.length > 4 ? " (y " + (t.avisos.length - 4) + " más)" : "")));
+        const acts = el("div", "tema-acts");
+        if (t.estado === "aprobado" && !enUso) acts.append(btn("Usar", () => usar(t.id)));
+        if (t.estado !== "rechazado") acts.append(btn("Probar", () => temaProbar(t.id, t.nombre)));
+        acts.append(btn("Descargar", () => temaDescargar("api/temas/" + t.id + "/zip", "ashur-tema-" + t.id + ".zip")));
+        m.append(acts); r.append(m); rows.push(r);
+      }
+      put($("tema-list"), rows);
+    } catch (e) {}
+  }
+  $("tema-base").addEventListener("click", () => temaDescargar("api/temas/base.zip", "ashur-tema-base.zip"));
+  $("tema-file").addEventListener("change", async () => {
+    const f = $("tema-file").files[0]; $("tema-file").value = "";
+    if (!f) return;
+    if (f.size > 8 * 1024 * 1024) { temaNota("El tema pasa de 8 MB."); return; }
+    temaNota("Revisando «" + f.name + "»…");
+    try {
+      const r = await api("api/temas", { method: "POST", body: await f.arrayBuffer(), headers: { "Content-Type": "application/zip" } });
+      if (!r.ok) { temaNota(await detailOf(r, "No pude subir el tema.")); return; }
+      const j = await r.json();
+      temaNota("Listo: espera tu sí en «Por aprobar»." + (j.avisos.length ? " Descarté " + j.avisos.length + " cosa(s): " + j.avisos.slice(0, 3).join(" ") : ""));
+      inboxAt = 0; loadInbox(); loadTemas();
+    } catch (e) { temaNota("No pude subir el tema."); }
+  });
   for (const b of document.querySelectorAll("#settings .back")) b.addEventListener("click", () => showPage(null));
   if (window.ResizeObserver) {
     new ResizeObserver(() => document.documentElement.style.setProperty("--composer-h", $("composer").offsetHeight + "px")).observe($("composer"));
@@ -4086,6 +4216,12 @@
           const a = el("div", "acts");
           const ok = el("button", null, "Aprobar"), no = el("button", null, "Rechazar");
           ok.type = no.type = "button";
+          ok.dataset.locked = no.dataset.locked = "";          // 0.69.0: ningún tema puede tocarlos
+          if (q.action === "tema" && q.args && Number.isInteger(q.args.tema)) {
+            const pr = el("button", null, "Probar en esta pantalla"); pr.type = "button"; pr.dataset.locked = "";
+            pr.onclick = () => temaProbar(q.args.tema, q.args.nombre || "tema");
+            a.append(pr);
+          }
           twice(ok, "Toca otra vez para aprobar", () => decideRequest(q.id, "approve", [ok, no]));
           no.onclick = () => decideRequest(q.id, "reject", [ok, no]);
           a.append(ok, no); m.append(a);

@@ -496,3 +496,18 @@ def test_the_edited_marker_is_stripped_and_the_text_kept():
 y editado ‎<Se editó este mensaje.>
 """
     assert _pairs(text) == [("Ana", "nos vemos a las 8"), ("Ana", "see you at 8"), ("Ana", "dos líneas\ny editado")]
+
+
+def test_a_message_whose_text_starts_on_the_next_line_is_kept():
+    text = """12/11/26, 9:16 a. m. - Ana: 
+la lista:
+- pan
+12/11/26, 9:17 a. m. - Sergio:
+listo
+11/12/26, 9:18 AM - Ana:
+ok
+[12/11/26, 9:19:00] Ana:
+desde el iPhone
+12/11/26, 9:20 a. m. - Ana:
+"""
+    assert _pairs(text) == [("Ana", "la lista:\n- pan"), ("Sergio", "listo"), ("Ana", "ok"), ("Ana", "desde el iPhone")]

@@ -65,6 +65,8 @@ def parse_whatsapp(text: str) -> list:
         cur = None
         rest = m.group(8)
         name, sep, body = rest.partition(": ")
+        if not sep and rest.endswith(":"):                          # «Ana:» and the text starts on the next line
+            name, sep, body = rest[:-1], ":", ""
         prev = _ts(*m.groups()[:7], prev)
         if not sep:                                                 # «Los mensajes … están cifrados», «X se unió»
             continue

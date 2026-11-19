@@ -1525,7 +1525,8 @@
       case "task_failed": return "Falló: " + mod.toLowerCase();
       case "revoked": return "Acceso revocado";
       case "chat": return (d.channel === "atajo" ? "Conversación desde el Atajo" : "Conversación") +
-                          (d.provider === "local" ? ", modelo local" : d.provider === "claude" ? ", Claude" : "");
+                          (d.provider === "local" ? ", modelo local" : d.provider === "claude" ? ", Claude" : "") +
+                          (d.count > 1 ? " ×" + d.count : "");   // 0.69.2: consecutive guest chats folded into one row
       case "chat_unanswered": return "Mensaje sin responder";
       case "modules_changed": return "Cambió sus capacidades: " + (d.to || []).join(", ");
       case "code_updated": return "Actualizó su código";

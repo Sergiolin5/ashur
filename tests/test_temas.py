@@ -252,8 +252,8 @@ def test_flujo_completo(tmp_path):
     r = subir(c, files)
     assert r.status_code == 200, r.text
     tid, rid = r.json()["id"], r.json()["pedido"]
-    # sin clave: nada activo, y el CSS de un tema pendiente no se entrega
-    assert c.get("/api/temas/activo").json() == {"id": None}
+    # sin clave: el activo es Luz (incluido), y el CSS de un tema pendiente no se entrega
+    assert c.get("/api/temas/activo").json()["nombre"] == "Luz"
     assert c.get(f"/api/temas/{tid}/tema.css").status_code == 401
     assert c.get(f"/api/temas/{tid}/tema.css", headers=A).status_code == 200      # «Probar»
     # no se puede usar antes de aprobar
@@ -315,3 +315,43 @@ def test_descargas(tmp_path):
     again = temas.leer_zip(c.get(f"/api/temas/{tid}/zip", headers=A).content)
     assert again.manifest["nombre"] == "Luz" and "--t-x" in again.css
     assert c.get("/api/temas/base.zip").status_code == 401
+
+
+# --- 0.69.1: Luz viene incluido y es el tema por defecto ----------------------------------------------------------
+def test_luz_incluido_activo_al_arrancar(tmp_path):
+    c = app_client(tmp_path)
+    act = c.get("/api/temas/activo").json()
+    assert act["nombre"] == "Luz"
+    t = [x for x in c.get("/api/temas", headers=A).json()["temas"] if x["id"] == act["id"]][0]
+    assert t["estado"] == "aprobado" and "chat" in t["fondos"]
+    assert c.get(f"/api/temas/{act['id']}/tema.css").status_code == 200
+    assert not [q for q in c.get("/api/claude-requests", headers=A).json() if q["action"] == "tema"]
+
+
+def test_si_elige_otro_se_respeta_al_reiniciar(tmp_path):
+    c = app_client(tmp_path)
+    assert c.post("/api/temas/activar", headers=A, json={"id": None}).json() == {"activo": None}
+    c2 = app_client(tmp_path)                           # mismo .db: reinicio del núcleo
+    assert c2.get("/api/temas/activo").json() == {"id": None}
+    assert len([t for t in c2.get("/api/temas", headers=A).json()["temas"] if t["nombre"] == "Luz"]) == 1
+
+
+def test_luz_subido_a_mano_antes_queda_aprobado_y_su_pedido_cerrado(tmp_path):
+    from pathlib import Path
+    import core.app as appmod
+    data = (Path(appmod.__file__).parent / "temas_incluidos" / "luz.zip").read_bytes()
+    zipdir = Path(appmod.__file__).parent / "temas_incluidos" / "luz.zip"
+    # Simula un núcleo 0.69.0: el zip ya se subió a mano y espera aprobación.
+    import shutil
+    hidden = zipdir.with_suffix(".bak")
+    shutil.move(zipdir, hidden)
+    try:
+        c = app_client(tmp_path)
+        rid = c.post("/api/temas", headers={**A, "Content-Type": "application/zip"}, content=data).json()["pedido"]
+    finally:
+        shutil.move(hidden, zipdir)
+    c2 = app_client(tmp_path)
+    act = c2.get("/api/temas/activo").json()
+    assert act["nombre"] == "Luz"
+    pedido = [q for q in c2.get("/api/claude-requests", headers=A).json() if q["id"] == rid][0]
+    assert pedido["status"] == "approved"

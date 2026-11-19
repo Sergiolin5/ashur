@@ -278,7 +278,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.69.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.69.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -5079,6 +5079,46 @@ def create_app(
                 "descripcion": m.get("descripcion", ""), "version": m.get("version", ""), "avisos": t["avisos"],
                 "esquemas": sorted(m.get("esquemas", {})), "fondos": sorted(m.get("fondos", {}))}
 
+    def tema_guardar(p, sha: str) -> int:
+        tid = db.tema_add(clock(), p.manifest["nombre"], p.manifest["autor"], sha, p.manifest, p.avisos)
+        d = tema_files(tid)
+        (d / "assets").mkdir(parents=True, exist_ok=True)
+        (d / "tema.css").write_text(p.css, encoding="utf-8")
+        for name, (b, _mime) in p.assets.items():
+            (d / "assets" / name).write_bytes(b)          # names already checked against [a-z0-9_-]{1,40}.ext
+        return tid
+
+    def tema_luz_incluido() -> None:
+        """0.69.1: «Luz» viene con el núcleo y es el tema por defecto (decisión de Sergio, 2026-11-19). Se instala ya
+        aprobado (sale del repo, no de un agente) y se activa una sola vez: si luego Sergio elige otro, se respeta."""
+        import hashlib
+        f = Path(__file__).parent / "temas_incluidos" / "luz.zip"
+        if not f.is_file():
+            return
+        data = f.read_bytes()
+        sha = hashlib.sha256(data).hexdigest()
+        t = db.tema_by_sha(sha)
+        if t is None:
+            try:
+                tid = tema_guardar(temas_mod.leer_zip(data), sha)
+            except temas_mod.TemaInvalido as e:
+                db.log(clock(), None, "tema_incluido_fallo", {"error": str(e)})
+                return
+            db.tema_set_estado(tid, "aprobado")
+        else:
+            tid = t["id"]
+            if t["estado"] != "aprobado":
+                db.tema_set_estado(tid, "aprobado", expect=t["estado"])
+                rid = db.claude_request_pending_same("tema", {"tema": tid, "nombre": t["nombre"], "autor": t["autor"]})
+                if rid:                                      # the same zip uploaded by hand: its request is moot now
+                    db.claude_request_decide(rid, "approved", clock(), "Viene incluido en el núcleo como tema por defecto.")
+        if db.setting("tema_luz_por_defecto", "") != "1":
+            db.set_setting("tema_activo", str(tid))
+            db.set_setting("tema_luz_por_defecto", "1")
+            db.log(clock(), None, "tema_activo", {"tema": tid, "por": "defecto"})
+
+    tema_luz_incluido()
+
     @app.post("/api/temas", dependencies=[Depends(require_admin)])
     async def tema_subir(request: Request):
         data = await request.body()
@@ -5090,12 +5130,7 @@ def create_app(
         sha = hashlib.sha256(data).hexdigest()
         if (old := db.tema_by_sha(sha)):
             raise HTTPException(409, f"Ese tema ya está subido (#{old['id']}, {old['estado']}).")
-        tid = db.tema_add(clock(), p.manifest["nombre"], p.manifest["autor"], sha, p.manifest, p.avisos)
-        d = tema_files(tid)
-        (d / "assets").mkdir(parents=True, exist_ok=True)
-        (d / "tema.css").write_text(p.css, encoding="utf-8")
-        for name, (b, _mime) in p.assets.items():
-            (d / "assets" / name).write_bytes(b)          # names already checked against [a-z0-9_-]{1,40}.ext
+        tid = tema_guardar(p, sha)
         rid = db.claude_request_add(clock(), "tema", {"tema": tid, "nombre": p.manifest["nombre"], "autor": p.manifest["autor"]},
                                     "Subiste un tema. Pruébalo antes de aprobar: solo trae colores, imágenes y CSS filtrado.")
         db.log(clock(), None, "tema_subido", {"tema": tid, "avisos": len(p.avisos)})

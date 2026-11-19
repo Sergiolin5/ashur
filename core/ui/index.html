@@ -2361,11 +2361,11 @@
       const usar = async (id) => {
         const r = await api("api/temas/activar", { method: "POST", body: JSON.stringify({ id }) });
         if (!r.ok) { temaNota(await detailOf(r, "No pude cambiar el tema.")); return; }
-        temaQuitarPrueba(); temaLink(id); temaNota(id ? "Tema en uso en todos tus equipos." : "Volviste al tema predeterminado."); loadTemas();
+        temaQuitarPrueba(); temaLink(id); temaNota(id ? "Tema en uso en todos tus equipos." : "Volviste al tema Índigo."); loadTemas();
       };
       const rows = [];
       const base = el("div", "row nrow"), bm = el("div", "main");
-      bm.append(el("div", "title", "Predeterminado" + (j.activo ? "" : " · en uso")), el("div", "detail", "El diseño de Ashur, claro y oscuro."));
+      bm.append(el("div", "title", "Índigo" + (j.activo ? "" : " · en uso")), el("div", "detail", "El diseño anterior de Ashur, claro y oscuro."));
       const ba = el("div", "tema-acts"); if (j.activo) ba.append(btn("Usar", () => usar(null)));
       bm.append(ba); base.append(bm); rows.push(base);
       for (const t of j.temas) {

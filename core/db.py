@@ -2352,6 +2352,8 @@ class DB:
             rows = self.conn.execute(
                 f"SELECT {self.CONV_COLS} FROM conversations c WHERE closed IS NOT NULL "
                 "AND (archived = 0 OR user LIKE 'g%') "        # a guest's 0.62 archive too; Sergio's waits for his yes
+                # a revoked guest: nothing pending is learned any more (Sergio, 0.69.2); profile and approvals stay
+                "AND NOT EXISTS (SELECT 1 FROM guests WHERE 'g' || guests.id = c.user AND guests.revoked IS NOT NULL) "
                 "AND (extracted IS NULL OR last_msg > extracted) "
                 "AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id) ORDER BY last_msg LIMIT ?",
                 (limit,)).fetchall()

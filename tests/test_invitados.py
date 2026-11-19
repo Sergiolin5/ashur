@@ -459,3 +459,22 @@ def test_health_in_trato_or_cambio_is_dropped_and_money_or_partner_in_profile_is
 def test_trato_name_filter_is_by_whole_word():
     out = conv.parse_guest_extraction("TRATO: confirma el plan de la semana antes de cerrar\nTRATO: con Ana ve despacio", "Ana")
     assert out["trato"] == ["confirma el plan de la semana antes de cerrar"]
+
+
+def test_revoked_guest_conversations_are_not_learned_but_profile_stays(tmp_path):
+    # B1 (0.69.2): once a guest is revoked nothing pending of theirs is learned; profile and approvals stay
+    db = DB(str(tmp_path / "x.db"))
+    ana = db.add_guest(1.0, "Ana", "k-ana", 1.0)
+    beto = db.add_guest(1.0, "Beto", "k-beto", 1.0)
+    db.add_memory(1.0, "estudia arquitectura", owner=f"g{ana}")
+    pid = db.proposal_add(1.0, "le gusta el café", "conv:1", owner=f"g{ana}")
+    ids = {}
+    for gid in (ana, beto):
+        ids[gid] = db.conv_new(f"g{gid}", 1.0)
+        db.add_message(1.0, "app", "user", "hola", f"g{gid}", ids[gid])
+        db.conv_close(ids[gid], 2.0)
+    assert sorted(cv["id"] for cv in db.conv_due()) == sorted(ids.values())
+    db.revoke_guest(ana, 3.0)
+    assert [cv["id"] for cv in db.conv_due(limit=1)] == [ids[beto]]          # excluded, not blocking the next one
+    assert [m["text"] for m in db.memories_of(f"g{ana}")] == ["estudia arquitectura"]
+    assert db.proposal_get(pid)["status"] == "pending"

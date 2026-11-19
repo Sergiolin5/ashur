@@ -3791,22 +3791,28 @@
   function formQuestion(q) {
     const w = el("div", "form-q"), lab = el("label", null, q.pregunta), ta = el("textarea", "field");
     ta.rows = 2; ta.maxLength = 4000; ta.value = q.respuesta || ""; ta.setAttribute("aria-label", q.pregunta);
+    const err = el("div", "error", "No se guardó. Vuelve a intentarlo."); err.setAttribute("role", "alert"); err.style.marginTop = "6px"; err.hidden = true;
     let saved = ta.value;
     ta.addEventListener("blur", async () => {
-      if (ta.value === saved) return;
-      const r = await api("api/formulario/" + q.id, { method: "PUT", body: JSON.stringify({ respuesta: ta.value }) });
-      if (r.ok) saved = ta.value;
+      const v = ta.value;
+      if (v === saved) return;
+      let ok = false;
+      try { ok = (await api("api/formulario/" + q.id, { method: "PUT", body: JSON.stringify({ respuesta: v }) })).ok; } catch (e) {}
+      if (ok) saved = v;                         // 0.69.2: a failed save says so and retries on the next blur
+      err.hidden = ok;
     });
-    w.append(lab, ta); return w;
+    w.append(lab, ta, err); return w;
   }
   async function loadForm() {
     try {
       const f = await (await api("api/formulario")).json();
-      const box = $("form-secs"); box.replaceChildren();
+      const box = $("form-secs"), y = window.scrollY;
+      const was = new Set([...box.querySelectorAll("details[open]")].map((d) => d.dataset.sec));   // 0.69.2: a reload keeps them open
+      box.replaceChildren();
       let done = 0, total = 0;
       for (const s of f.secciones) {
         done += s.respondidas; total += s.preguntas.length;
-        const d = el("details", "form-sec"), sm = el("summary");
+        const d = el("details", "form-sec"), sm = el("summary"); d.dataset.sec = s.id; d.open = was.has(s.id);
         sm.append(el("span", null, s.titulo), el("span", "detail", s.respondidas + " de " + s.preguntas.length));
         d.append(sm);
         for (const q of s.preguntas) d.append(formQuestion(q));
@@ -3822,10 +3828,11 @@
         d.append(sv); box.append(d);
       }
       $("form-sub").textContent = done + " de " + total + " respondidas";
-      const open = f.ashur.filter((q) => !q.respuesta);
-      $("form-ashur-sec").hidden = !open.length;
+      const aq = [...f.ashur.filter((q) => !q.respuesta), ...f.ashur.filter((q) => q.respuesta)];   // answered ones stay editable, last
+      $("form-ashur-sec").hidden = !aq.length;
       const ab = $("form-ashur"); ab.replaceChildren();
-      for (const q of open) ab.append(formQuestion(q));
+      for (const q of aq) ab.append(formQuestion(q));
+      window.scrollTo(0, y);
     } catch (e) {}
   }
 

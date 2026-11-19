@@ -478,3 +478,66 @@ def test_revoked_guest_conversations_are_not_learned_but_profile_stays(tmp_path)
     assert [cv["id"] for cv in db.conv_due(limit=1)] == [ids[beto]]          # excluded, not blocking the next one
     assert [m["text"] for m in db.memories_of(f"g{ana}")] == ["estudia arquitectura"]
     assert db.proposal_get(pid)["status"] == "pending"
+
+
+# --- B10 (0.69.2): memory endpoints -----------------------------------------------------------------------------
+def test_a_guest_memory_tier_cannot_be_changed_and_stays_local(tmp_path):
+    c = TestClient(create_app(str(tmp_path / "y.db"), "e", "a", sweep_every_s=None))
+    db = c.app.state.db
+    mid = db.add_memory(1.0, "está en tratamiento", tier="local", owner="g7")
+    assert c.put(f"/api/memory/{mid}/tier", headers=A, json={"tier": "claude"}).status_code == 404
+    assert db.memories_of("g7")[0]["tier"] == "local"
+    own = db.add_memory(1.0, "dato de Sergio")
+    assert c.put(f"/api/memory/{own}/tier", headers=A, json={"tier": "local"}).status_code == 200
+
+
+def _slow_add_memory(monkeypatch, db, wait=0.3):
+    import time
+    orig = db.add_memory
+
+    def slow(*a, **k):
+        time.sleep(wait)                                  # the window two approvals used to slip through
+        return orig(*a, **k)
+    monkeypatch.setattr(db, "add_memory", slow)
+
+
+def test_two_concurrent_approvals_save_one_memory(tmp_path, monkeypatch):
+    c = TestClient(create_app(str(tmp_path / "y.db"), "e", "a", sweep_every_s=None))
+    db = c.app.state.db
+    pid = db.proposal_add(1.0, "le gusta el café", "conv:4")
+    _slow_add_memory(monkeypatch, db)
+    codes = []
+    ths = [threading.Thread(target=lambda: codes.append(c.post(f"/api/proposals/{pid}/approve", headers=A, json={}).status_code))
+           for _ in range(2)]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(5)
+    assert sorted(codes) == [200, 404]
+    assert [m["text"] for m in db.memories()] == ["le gusta el café"] and db.proposal_get(pid)["status"] == "accepted"
+
+
+def test_reject_while_approving_does_not_overwrite_the_approval(tmp_path, monkeypatch):
+    import time
+    c = TestClient(create_app(str(tmp_path / "y.db"), "e", "a", sweep_every_s=None))
+    db = c.app.state.db
+    pid = db.proposal_add(1.0, "le gusta el café", "conv:4")
+    _slow_add_memory(monkeypatch, db)
+    th = threading.Thread(target=lambda: c.post(f"/api/proposals/{pid}/approve", headers=A, json={}))
+    th.start()
+    time.sleep(0.1)
+    r = c.post(f"/api/proposals/{pid}/reject", headers=A)
+    th.join(5)
+    assert r.status_code == 404 and db.proposal_get(pid)["status"] == "accepted"
+
+
+def test_an_approval_that_fails_to_save_goes_back_to_pending(tmp_path, monkeypatch):
+    c = TestClient(create_app(str(tmp_path / "y.db"), "e", "a", sweep_every_s=None), raise_server_exceptions=False)
+    db = c.app.state.db
+    pid = db.proposal_add(1.0, "le gusta el café", "conv:4")
+
+    def boom(*a, **k):
+        raise RuntimeError("disco lleno")
+    monkeypatch.setattr(db, "add_memory", boom)
+    assert c.post(f"/api/proposals/{pid}/approve", headers=A, json={}).status_code == 500
+    assert db.proposal_get(pid)["status"] == "pending"

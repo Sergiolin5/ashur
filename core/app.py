@@ -3047,8 +3047,13 @@ def create_app(
         tier = body.tier or ("local" if p["source"] == "diary" or p["source"].startswith("conv:") else "claude")
         if owner != "sergio":                            # 0.63.0: a guest's sensitive line stays with the local models
             tier = "local"
-        mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier, owner=owner)
-        db.proposal_set(pid, "accepted")
+        if not db.proposal_claim(pid, "accepted"):       # reserved first: a second approval at the same time gets a 404
+            raise HTTPException(404, "No existe esa propuesta.")
+        try:
+            mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier, owner=owner)
+        except Exception:
+            db.proposal_set(pid, "pending")              # not saved: it waits for him again
+            raise
         db.log(clock(), None, "memory_accepted", {"memory_id": mid, "tier": tier})
         return {"memory_id": mid, "tier": tier}
 
@@ -3057,7 +3062,8 @@ def create_app(
         p = db.proposal_get(pid)
         if not p or p["status"] != "pending":
             raise HTTPException(404, "No existe esa propuesta.")
-        db.proposal_set(pid, "rejected")                 # kept as «rejected» so it is not proposed again
+        if not db.proposal_claim(pid, "rejected"):       # kept as «rejected» so it is not proposed again; an approval in course wins
+            raise HTTPException(404, "No existe esa propuesta.")
         return {"ok": True}
 
     @app.post("/api/proposals/run", dependencies=[Depends(require_admin)])

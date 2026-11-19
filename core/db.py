@@ -2523,7 +2523,8 @@ class DB:
 
     def set_memory_tier(self, memory_id: int, tier: str) -> bool:
         with self.lock:
-            cur = self.conn.execute("UPDATE memory SET tier = ? WHERE id = ?", (tier, memory_id))
+            # Sergio's own only: a guest's memory stays with the local models (0.63.0 rule, 0.69.2)
+            cur = self.conn.execute("UPDATE memory SET tier = ? WHERE id = ? AND owner = 'sergio'", (tier, memory_id))
             self.conn.commit()
         return cur.rowcount > 0
 
@@ -2586,6 +2587,13 @@ class DB:
         with self.lock:
             r = self.conn.execute("SELECT id, ts, text, source, status, owner FROM memory_proposals WHERE id = ?", (pid,)).fetchone()
         return dict(r) if r else None
+
+    def proposal_claim(self, pid: int, status: str) -> bool:
+        """Pending -> status in one UPDATE: of two concurrent decisions on the same proposal only one wins (0.69.2)."""
+        with self.lock:
+            cur = self.conn.execute("UPDATE memory_proposals SET status = ? WHERE id = ? AND status = 'pending'", (status, pid))
+            self.conn.commit()
+        return cur.rowcount > 0
 
     def proposal_set(self, pid: int, status: str) -> None:
         with self.lock:

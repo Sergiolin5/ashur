@@ -435,3 +435,64 @@ def test_sweep_runs_one_learning_job_per_tick(tmp_path):
         setattr(c.app.state, name, (lambda n: (lambda: calls.append(n) or 1))(name))
     c.app.state.learning_tick()
     assert calls == ["conversations_due"]
+
+
+# --- B8 (0.69.2): the parser against real exports -----------------------------------------------------
+def _pairs(text):
+    return [(m["sender"], m["text"]) for m in estilo.parse_whatsapp(text)]
+
+
+def test_markers_of_media_attachments_polls_and_locations_go():
+    android_es = """12/11/26, 9:16 a. m. - Ana: <Multimedia omitido>
+12/11/26, 9:16 a. m. - Ana: audio omitido
+12/11/26, 9:16 a. m. - Ana: nota de voz omitida
+12/11/26, 9:16 a. m. - Ana: IMG-20261112-WA0001.jpg (archivo adjunto)
+12/11/26, 9:16 a. m. - Ana: PTT-20261112-WA0003.opus (archivo adjunto)
+12/11/26, 9:16 a. m. - Ana: documento omitido
+12/11/26, 9:16 a. m. - Ana: ubicación: https://maps.google.com/?q=4.60,-74.08
+12/11/26, 9:16 a. m. - Ana: ENCUESTA:
+¿Dónde comemos?
+OPCIÓN: Pizza (2 votos)
+OPCIÓN: Sushi (0 votos)
+12/11/26, 9:16 a. m. - Ana: Se eliminó este mensaje
+12/11/26, 9:17 a. m. - Ana: mandé el audio ahorita
+"""
+    android_en = """11/12/26, 9:16 AM - Ana: <Media omitted>
+11/12/26, 9:16 AM - Ana: IMG-20261112-WA0001.jpg (file attached)
+11/12/26, 9:16 AM - Ana: location: https://maps.google.com/?q=4.60,-74.08
+11/12/26, 9:16 AM - Ana: POLL:
+Where?
+OPTION: Pizza (2 votes)
+11/12/26, 9:16 AM - Ana: This message was deleted
+11/12/26, 9:17 AM - Ana: the document omitted a page
+"""
+    ios = """[12/11/26, 9:16:02] Ana: ‎audio omitido
+[12/11/26, 9:16:02] Ana: ‎<adjunto: 00000012-AUDIO-2026-11-12-09-16-02.opus>
+[12/11/26, 9:16:02] Ana: ‎<attached: 00000013-PHOTO-2026-11-12-09-16-02.jpg>
+[12/11/26, 9:16:02] Ana: ‎imagen omitida
+[12/11/26, 9:16:02] Ana: ‎Tarjeta de contacto omitida
+[12/11/26, 9:16:02] Ana: Factura.pdf • ‎2 páginas ‎documento omitido
+[11/12/26, 9:16:02 AM] Ana: ‎image omitted
+[11/12/26, 9:16:02 AM] Ana: ‎audio omitted
+[11/12/26, 9:16:02 AM] Ana: ‎Ubicación: https://maps.google.com/?q=4.60,-74.08
+[12/11/26, 9:17:00] Ana: un audio de 5 minutos, omitido por largo
+"""
+    assert _pairs(android_es) == [("Ana", "mandé el audio ahorita")]
+    assert _pairs(android_en) == [("Ana", "the document omitted a page")]
+    assert _pairs(ios) == [("Ana", "un audio de 5 minutos, omitido por largo")]
+
+
+def test_an_attachment_with_a_caption_keeps_the_caption():
+    assert _pairs("12/11/26, 9:16 a. m. - Ana: IMG-20261112-WA0001.jpg (archivo adjunto)\nmira esto\n") == [
+        ("Ana", "mira esto")]
+    assert _pairs("[12/11/26, 9:16:02] Ana: ‎<adjunto: 00000013-PHOTO-2026-11-12-09-16-02.jpg>\nmira esto\n") == [
+        ("Ana", "mira esto")]
+
+
+def test_the_edited_marker_is_stripped_and_the_text_kept():
+    text = """12/11/26, 9:16 a. m. - Ana: nos vemos a las 8 <Se editó este mensaje.>
+11/12/26, 9:17 AM - Ana: see you at 8 <This message was edited>
+[12/11/26, 9:18:00] Ana: dos líneas
+y editado ‎<Se editó este mensaje.>
+"""
+    assert _pairs(text) == [("Ana", "nos vemos a las 8"), ("Ana", "see you at 8"), ("Ana", "dos líneas\ny editado")]

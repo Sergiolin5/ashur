@@ -85,6 +85,7 @@
   /* 0.66.0: the avatar — the brain's core in small, Ashur's state at a glance (replaces the green dot) */
   .avatar { position: relative; display: inline-flex; width: 26px; height: 26px; margin: 0 6px 0 -3px; padding: 0; border: 0; background: none;
             vertical-align: middle; cursor: pointer; --av: #8f8cff; --glow: rgba(143,140,255,.55); }
+  .avatar::before { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; }   /* 44 px tap zone, same look */
   .avatar svg { width: 26px; height: 26px; overflow: visible; filter: drop-shadow(0 0 4px var(--glow)); transition: filter .4s; }
   .avatar .core { fill: var(--av); transform-origin: 12px 12px; animation: av-pulse 3.2s ease-in-out infinite; }
   .avatar .rings { transform-origin: 12px 12px; animation: av-spin 14s linear infinite; }
@@ -2419,13 +2420,13 @@
   function avatarRender() {
     const a = $("avatar"), guest = role !== "admin";
     a.tabIndex = guest ? -1 : 0; a.toggleAttribute("aria-disabled", guest); a.style.cursor = guest ? "default" : "pointer";
-    const speaking = !!AV.speakTimer, needs = !guest && AV.needs > 0;
-    a.classList.toggle("thinking", AV.thinking > 0);
-    a.classList.toggle("speaking", speaking && !AV.thinking);
-    a.classList.toggle("listening", AV.listening && !AV.thinking && !speaking);
+    const listening = AV.listening && !AV.thinking, speaking = !!AV.speakTimer && !AV.thinking && !listening, needs = !guest && AV.needs > 0;
+    a.classList.toggle("thinking", AV.thinking > 0);                 // 0.69.2: thinking > listening > speaking
+    a.classList.toggle("speaking", speaking);
+    a.classList.toggle("listening", listening);
     a.classList.toggle("needs", needs);
     $("avatar-badge").hidden = !needs; $("avatar-badge").textContent = needs ? String(AV.needs) : "";
-    a.setAttribute("aria-label", AV.thinking ? "Ashur está pensando" : speaking ? "Ashur está respondiendo" : AV.listening ? "Ashur te escucha"
+    a.setAttribute("aria-label", AV.thinking ? "Ashur está pensando" : listening ? "Ashur te escucha" : speaking ? "Ashur está respondiendo"
       : needs ? "Ashur te necesita: " + AV.needs + " por aprobar" : guest ? "Ashur" : "Ashur: abrir el cerebro");
   }
   function avatarNeeds(n) { AV.needs = n || 0; avatarRender(); }
@@ -2434,6 +2435,7 @@
   function avatarListen() {
     const m = $("msg"), mic = $("mic");
     AV.listening = (document.activeElement === m && m.value.trim() !== "") || mic.classList.contains("rec");
+    if (AV.listening) { clearTimeout(AV.speakTimer); AV.speakTimer = 0; }   // typing or dictating ends «hablando»
     avatarRender();
   }
   $("msg").addEventListener("input", avatarListen); $("msg").addEventListener("blur", avatarListen); $("msg").addEventListener("focus", avatarListen);
@@ -2959,7 +2961,8 @@
   let camDoor = null, camSes = null, camList = [], camSig = null, camBusy = false, camAsking = false, camProbing = false;
   let camView = null, camFb = null, camIce = null, camPc = null, camPending = null, camGen = 0, camRt = null, camFlight = null;
   // Silent renewals: one at a time, >= 15 s apart, and at most 3 with no picture in between (a thumbnail load or a <video>
-  // «playing», WebRTC included); the 4th latches camGaveUp until the user taps, whatever the timing of /sesion.
+  // «playing», WebRTC included); the 4th latches camGaveUp until the user taps or a camera comes back on, whatever the timing
+  // of /sesion. Renewals while every camera is off (and no live view) don't count: nothing could have shown a picture.
   let camLast = 0, camRenewN = 0, camGaveUp = false, camPrevV = null, camResetN = 0;
   const camGood = () => { camRenewN = 0; };      // media proved the session works
   const camUserGo = () => { camGaveUp = false; camRenewN = 0; camLast = 0; };   // an explicit tap: renewals may start again
@@ -3042,7 +3045,8 @@
     if (camGaveUp) return old;
     if (camLast && now - camLast < 15000) return old;                       // too soon after the last one: a later tick tries again
     if (camRenewN >= 3) { camGaveUp = true; camMsg("No pude renovar la sesión de video"); camNoSes(); return old; }   // 3 tokens, no picture
-    camRenewN++; camLast = now;
+    if (camView || camList.some((c) => c.en_linea)) camRenewN++;      // 0.69.2: with every camera off nothing can prove it, so it doesn't count
+    camLast = now;
     const e = await camNewSession("");
     if (e) { camMsg(e); return false; }
     if (!$("cam-msg").textContent.startsWith("El servicio")) camMsg("");
@@ -3194,7 +3198,9 @@
       if (!r.ok || tab !== "casa") return;
       const d = await r.json();
       if (d.estado === "desactivado") { camClose(); $("casa-camaras").hidden = true; return; }
+      const was = new Set(camList.filter((c) => c.en_linea).map((c) => c.nombre));
       camList = d.camaras || [];
+      if (camList.some((c) => c.en_linea && !was.has(c.nombre))) { camGaveUp = false; camRenewN = 0; }   // a camera came back: renewals may start again
       if (d.estado !== "ok") { camMsg("El servicio de cámaras no responde" + (d.causa ? " · " + d.causa : "")); camClose(); }
       else if ($("cam-msg").textContent.startsWith("El servicio")) camMsg("");
       if (d.estado === "ok") {
@@ -3609,10 +3615,11 @@
   async function askInner(text, allowClaude) {
     const wait = bubble("ashur", "");
     const dots = el("span", "typing"); dots.append(el("i"), el("i"), el("i")); wait.append(dots);
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 120000);   // 0.69.2: at most 120 s, then give up
     try {
       const v = $("voice-row").hidden ? "" : $("voice").value;
       if (convId === null) {                       // the first message of a new conversation opens it on the server
-        const n = await api("api/conversations", { method: "POST" });
+        const n = await api("api/conversations", { method: "POST", signal: ctl.signal });
         if (n.ok) convId = (await n.json()).id;
       }
       const body = { message: text };
@@ -3624,8 +3631,9 @@
       const sd = !$("docs-row").hidden && $("share-docs").checked, sy = !$("diary-row").hidden && $("share-diary").checked;
       if (sd) body.share_docs = true;
       if (sy) body.share_diary = true;
-      const r = await api("api/chat", { method: "POST", body: JSON.stringify(body) });
+      const r = await api("api/chat", { method: "POST", body: JSON.stringify(body), signal: ctl.signal });
       const data = await r.json();
+      clearTimeout(timer);
       wait.remove();
       if (r.ok && !data.needs_approval) $("share-docs").checked = $("share-diary").checked = false;   // a retry after approval keeps them
       if (!r.ok) {
@@ -3666,8 +3674,9 @@
         showBudget(data);
       }
     } catch (err) {
-      wait.remove();
-      if (String(err.message) !== "401") bubble("note bad", "Sin conexión con el núcleo. Tu mensaje no se envió.");
+      clearTimeout(timer); wait.remove();
+      if (ctl.signal.aborted) bubble("note bad", "No hubo respuesta a tiempo. Revisa la conexión e inténtalo de nuevo.");
+      else if (String(err.message) !== "401") bubble("note bad", "Sin conexión con el núcleo. Tu mensaje no se envió.");
     }
   }
   $("chat-form").addEventListener("submit", async (e) => {
@@ -3782,22 +3791,28 @@
   function formQuestion(q) {
     const w = el("div", "form-q"), lab = el("label", null, q.pregunta), ta = el("textarea", "field");
     ta.rows = 2; ta.maxLength = 4000; ta.value = q.respuesta || ""; ta.setAttribute("aria-label", q.pregunta);
+    const err = el("div", "error", "No se guardó. Vuelve a intentarlo."); err.setAttribute("role", "alert"); err.style.marginTop = "6px"; err.hidden = true;
     let saved = ta.value;
     ta.addEventListener("blur", async () => {
-      if (ta.value === saved) return;
-      const r = await api("api/formulario/" + q.id, { method: "PUT", body: JSON.stringify({ respuesta: ta.value }) });
-      if (r.ok) saved = ta.value;
+      const v = ta.value;
+      if (v === saved) return;
+      let ok = false;
+      try { ok = (await api("api/formulario/" + q.id, { method: "PUT", body: JSON.stringify({ respuesta: v }) })).ok; } catch (e) {}
+      if (ok) saved = v;                         // 0.69.2: a failed save says so and retries on the next blur
+      err.hidden = ok;
     });
-    w.append(lab, ta); return w;
+    w.append(lab, ta, err); return w;
   }
   async function loadForm() {
     try {
       const f = await (await api("api/formulario")).json();
-      const box = $("form-secs"); box.replaceChildren();
+      const box = $("form-secs"), y = window.scrollY;
+      const was = new Set([...box.querySelectorAll("details[open]")].map((d) => d.dataset.sec));   // 0.69.2: a reload keeps them open
+      box.replaceChildren();
       let done = 0, total = 0;
       for (const s of f.secciones) {
         done += s.respondidas; total += s.preguntas.length;
-        const d = el("details", "form-sec"), sm = el("summary");
+        const d = el("details", "form-sec"), sm = el("summary"); d.dataset.sec = s.id; d.open = was.has(s.id);
         sm.append(el("span", null, s.titulo), el("span", "detail", s.respondidas + " de " + s.preguntas.length));
         d.append(sm);
         for (const q of s.preguntas) d.append(formQuestion(q));
@@ -3813,10 +3828,11 @@
         d.append(sv); box.append(d);
       }
       $("form-sub").textContent = done + " de " + total + " respondidas";
-      const open = f.ashur.filter((q) => !q.respuesta);
-      $("form-ashur-sec").hidden = !open.length;
+      const aq = [...f.ashur.filter((q) => !q.respuesta), ...f.ashur.filter((q) => q.respuesta)];   // answered ones stay editable, last
+      $("form-ashur-sec").hidden = !aq.length;
       const ab = $("form-ashur"); ab.replaceChildren();
-      for (const q of open) ab.append(formQuestion(q));
+      for (const q of aq) ab.append(formQuestion(q));
+      window.scrollTo(0, y);
     } catch (e) {}
   }
 

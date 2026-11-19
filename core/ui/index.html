@@ -3609,10 +3609,11 @@
   async function askInner(text, allowClaude) {
     const wait = bubble("ashur", "");
     const dots = el("span", "typing"); dots.append(el("i"), el("i"), el("i")); wait.append(dots);
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 120000);   // 0.69.2: at most 120 s, then give up
     try {
       const v = $("voice-row").hidden ? "" : $("voice").value;
       if (convId === null) {                       // the first message of a new conversation opens it on the server
-        const n = await api("api/conversations", { method: "POST" });
+        const n = await api("api/conversations", { method: "POST", signal: ctl.signal });
         if (n.ok) convId = (await n.json()).id;
       }
       const body = { message: text };
@@ -3624,8 +3625,9 @@
       const sd = !$("docs-row").hidden && $("share-docs").checked, sy = !$("diary-row").hidden && $("share-diary").checked;
       if (sd) body.share_docs = true;
       if (sy) body.share_diary = true;
-      const r = await api("api/chat", { method: "POST", body: JSON.stringify(body) });
+      const r = await api("api/chat", { method: "POST", body: JSON.stringify(body), signal: ctl.signal });
       const data = await r.json();
+      clearTimeout(timer);
       wait.remove();
       if (r.ok && !data.needs_approval) $("share-docs").checked = $("share-diary").checked = false;   // a retry after approval keeps them
       if (!r.ok) {
@@ -3666,8 +3668,9 @@
         showBudget(data);
       }
     } catch (err) {
-      wait.remove();
-      if (String(err.message) !== "401") bubble("note bad", "Sin conexión con el núcleo. Tu mensaje no se envió.");
+      clearTimeout(timer); wait.remove();
+      if (ctl.signal.aborted) bubble("note bad", "No hubo respuesta a tiempo. Revisa la conexión e inténtalo de nuevo.");
+      else if (String(err.message) !== "401") bubble("note bad", "Sin conexión con el núcleo. Tu mensaje no se envió.");
     }
   }
   $("chat-form").addEventListener("submit", async (e) => {

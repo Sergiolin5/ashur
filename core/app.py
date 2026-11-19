@@ -57,6 +57,7 @@ APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", 
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
+CASA_CONTROL_LOCK_S = 10    # a control waits this long for the house lock, then 409 (busy)
 CAMARA_MEDIOS = re.compile(r"/api/casa/camaras/[a-z0-9-]{1,32}/(foto\.jpg|hls/(stream\.m3u8|playlist\.m3u8|init\.mp4|segment\.m4s|segment\.ts))")
 VIDEO_SESION_S = 900
 VIDEO_SESIONES_MAX = 32
@@ -1998,7 +1999,10 @@ def create_app(
         if not row:
             raise HTTPException(404, "esa casa no existe")
         e = casa_entry(cid)
-        with e["lock"]:
+        # a plain Lock shared with the view (casa_cache): a stuck Home Assistant call must not queue every control behind it
+        if not e["lock"].acquire(timeout=CASA_CONTROL_LOCK_S):
+            raise HTTPException(409, "La casa está ocupada con otra orden; inténtalo de nuevo.")
+        try:
             try:
                 casa_refresh(row, False)
             except HAError as x:
@@ -2021,6 +2025,8 @@ def create_app(
                 ok, motivo = False, "error"
             if ok:
                 e["states_t"] = -1e18                           # the next read asks Home Assistant again (the old states stay as cache)
+        finally:
+            e["lock"].release()
         db.log(clock(), None, "casa_control", {"casa": cid, "entity": b.entity_id, "accion": b.accion, "ok": ok})
         if not ok:
             raise HTTPException(502, casa_txt(motivo, causa))

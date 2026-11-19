@@ -435,3 +435,128 @@ def test_sweep_runs_one_learning_job_per_tick(tmp_path):
         setattr(c.app.state, name, (lambda n: (lambda: calls.append(n) or 1))(name))
     c.app.state.learning_tick()
     assert calls == ["conversations_due"]
+
+
+# --- B8 (0.69.2): the parser against real exports -----------------------------------------------------
+def _pairs(text):
+    return [(m["sender"], m["text"]) for m in estilo.parse_whatsapp(text)]
+
+
+def test_markers_of_media_attachments_polls_and_locations_go():
+    android_es = """12/11/26, 9:16 a. m. - Ana: <Multimedia omitido>
+12/11/26, 9:16 a. m. - Ana: audio omitido
+12/11/26, 9:16 a. m. - Ana: nota de voz omitida
+12/11/26, 9:16 a. m. - Ana: IMG-20261112-WA0001.jpg (archivo adjunto)
+12/11/26, 9:16 a. m. - Ana: PTT-20261112-WA0003.opus (archivo adjunto)
+12/11/26, 9:16 a. m. - Ana: documento omitido
+12/11/26, 9:16 a. m. - Ana: ubicación: https://maps.google.com/?q=4.60,-74.08
+12/11/26, 9:16 a. m. - Ana: ENCUESTA:
+¿Dónde comemos?
+OPCIÓN: Pizza (2 votos)
+OPCIÓN: Sushi (0 votos)
+12/11/26, 9:16 a. m. - Ana: Se eliminó este mensaje
+12/11/26, 9:17 a. m. - Ana: mandé el audio ahorita
+"""
+    android_en = """11/12/26, 9:16 AM - Ana: <Media omitted>
+11/12/26, 9:16 AM - Ana: IMG-20261112-WA0001.jpg (file attached)
+11/12/26, 9:16 AM - Ana: location: https://maps.google.com/?q=4.60,-74.08
+11/12/26, 9:16 AM - Ana: POLL:
+Where?
+OPTION: Pizza (2 votes)
+11/12/26, 9:16 AM - Ana: This message was deleted
+11/12/26, 9:17 AM - Ana: the document omitted a page
+"""
+    ios = """[12/11/26, 9:16:02] Ana: ‎audio omitido
+[12/11/26, 9:16:02] Ana: ‎<adjunto: 00000012-AUDIO-2026-11-12-09-16-02.opus>
+[12/11/26, 9:16:02] Ana: ‎<attached: 00000013-PHOTO-2026-11-12-09-16-02.jpg>
+[12/11/26, 9:16:02] Ana: ‎imagen omitida
+[12/11/26, 9:16:02] Ana: ‎Tarjeta de contacto omitida
+[12/11/26, 9:16:02] Ana: Factura.pdf • ‎2 páginas ‎documento omitido
+[11/12/26, 9:16:02 AM] Ana: ‎image omitted
+[11/12/26, 9:16:02 AM] Ana: ‎audio omitted
+[11/12/26, 9:16:02 AM] Ana: ‎Ubicación: https://maps.google.com/?q=4.60,-74.08
+[12/11/26, 9:17:00] Ana: un audio de 5 minutos, omitido por largo
+"""
+    assert _pairs(android_es) == [("Ana", "mandé el audio ahorita")]
+    assert _pairs(android_en) == [("Ana", "the document omitted a page")]
+    assert _pairs(ios) == [("Ana", "un audio de 5 minutos, omitido por largo")]
+
+
+def test_an_attachment_with_a_caption_keeps_the_caption():
+    assert _pairs("12/11/26, 9:16 a. m. - Ana: IMG-20261112-WA0001.jpg (archivo adjunto)\nmira esto\n") == [
+        ("Ana", "mira esto")]
+    assert _pairs("[12/11/26, 9:16:02] Ana: ‎<adjunto: 00000013-PHOTO-2026-11-12-09-16-02.jpg>\nmira esto\n") == [
+        ("Ana", "mira esto")]
+
+
+def test_the_edited_marker_is_stripped_and_the_text_kept():
+    text = """12/11/26, 9:16 a. m. - Ana: nos vemos a las 8 <Se editó este mensaje.>
+11/12/26, 9:17 AM - Ana: see you at 8 <This message was edited>
+[12/11/26, 9:18:00] Ana: dos líneas
+y editado ‎<Se editó este mensaje.>
+"""
+    assert _pairs(text) == [("Ana", "nos vemos a las 8"), ("Ana", "see you at 8"), ("Ana", "dos líneas\ny editado")]
+
+
+def test_a_message_whose_text_starts_on_the_next_line_is_kept():
+    text = """12/11/26, 9:16 a. m. - Ana: 
+la lista:
+- pan
+12/11/26, 9:17 a. m. - Sergio:
+listo
+11/12/26, 9:18 AM - Ana:
+ok
+[12/11/26, 9:19:00] Ana:
+desde el iPhone
+12/11/26, 9:20 a. m. - Ana:
+"""
+    assert _pairs(text) == [("Ana", "la lista:\n- pan"), ("Sergio", "listo"), ("Ana", "ok"), ("Ana", "desde el iPhone")]
+
+
+def test_system_notices_with_a_colon_are_not_senders():
+    text = """12/11/26, 9:10 a. m. - Los mensajes y las llamadas están cifrados de extremo a extremo. Toca para más información: 
+12/11/26, 9:11 a. m. - Ana cambió el asunto a: viaje
+12/11/26, 9:12 a. m. - Ana añadió a: Luis
+12/11/26, 9:12 a. m. - Cambiaste el asunto a: viaje
+12/11/26, 9:13 a. m. - Luis se unió usando el enlace de invitación: grupo
+12/11/26, 9:13 a. m. - Ana fijó un mensaje:
+11/12/26, 9:14 AM - Messages and calls are end-to-end encrypted. Tap to learn more: 
+11/12/26, 9:15 AM - Ana changed the subject to: trip
+11/12/26, 9:15 AM - You added: Luis
+11/12/26, 9:15 AM - Luis joined using this group's invite link: x
+[12/11/26, 9:16:00] Ana cambió la descripción del grupo: playa
+[11/12/26, 9:16:00 AM] Ana removed: Luis
+12/11/26, 9:20 a. m. - Ana: hola
+12/11/26, 9:21 a. m. - Sergio M.: Ana cambió el asunto a: viaje jaja
+12/11/26, 9:22 a. m. - +57 300 1234567: quién es?
+12/11/26, 9:23 a. m. - Left: soy un contacto raro
+"""
+    assert _pairs(text) == [("Ana", "hola"), ("Sergio M.", "Ana cambió el asunto a: viaje jaja"),
+                            ("+57 300 1234567", "quién es?"), ("Left", "soy un contacto raro")]
+
+
+def test_the_same_chat_twice_is_refused_in_preview_and_confirm(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    r = c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "otro.txt", "text": ANDROID})
+    assert r.status_code == 409 and r.json()["detail"] == f"Ese chat ya está subido (#{iid})."
+    r = c.post("/api/imports/confirm", headers=A, json={"name": "Otra", "file_name": "c.txt", "text": ANDROID, "me": "Ana"})
+    assert r.status_code == 409 and f"#{iid}" in r.json()["detail"]
+    assert len(c.get("/api/imports", headers=A).json()) == 1
+    # same number of messages but one text differs: a different chat
+    other = ANDROID.replace("todo bien 😊", "todo bien")
+    assert c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "c.txt", "text": other}).status_code == 200
+    imported(c, text=other)
+    # after deleting it, the chat can be uploaded again
+    c.delete(f"/api/imports/{iid}", headers=A)
+    assert c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "c.txt", "text": ANDROID}).status_code == 200
+
+
+def test_a_duplicate_sent_in_parts_is_refused_and_leaves_no_file(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    up = "ef" * 16
+    assert c.post("/api/imports/parte", headers=A, json={"upload": up, "i": 0, "text": ANDROID}).status_code == 200
+    r = c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "chat.txt", "upload": up})
+    assert r.status_code == 409 and f"#{iid}" in r.json()["detail"]
+    assert not (tmp_path / "imports-tmp" / (up + ".txt")).exists()

@@ -1661,3 +1661,48 @@ def test_panel_opens_any_screen_from_the_hash(env):
     html = c.get("/").text
     assert "const q = new URLSearchParams(String(h || \"\").replace(/^#/, \"\"));" in html
     assert html.index('window.addEventListener("hashchange"') < html.index('if ("serviceWorker" in navigator) {\n    navigator.serviceWorker.addEventListener("message"')
+
+
+# --- B4 (0.69.2): guest chat lines must not push failures and activity out of their windows ---------------------
+def _guest_chats(db, ts, n, gid=7):
+    for i in range(n):
+        db.log(ts + i, "mac", "chat", {"provider": "local", "guest": gid})
+
+
+def test_log_events_filters_by_event_and_time_newest_first(tmp_path):
+    from core.db import DB
+    db = DB(str(tmp_path / "x.db"))
+    db.log(10.0, "mac", "task_failed", {"n": 1})
+    db.log(100.0, "mac", "task_failed", {"n": 2})
+    db.log(101.0, "mac", "chat_error", {"n": 3})
+    db.log(102.0, "mac", "task_done", {"n": 4})
+    assert [e["detail"]["n"] for e in db.log_events(("task_failed", "chat_error"), since=50.0)] == [3, 2]
+    assert [e["detail"]["n"] for e in db.log_events({"task_failed"}, limit=1)] == [2]
+    assert [e["detail"]["n"] for e in db.log_events(("task_failed",))] == [2, 1]
+    assert db.log_events((), since=0.0) == []
+
+
+def test_diagnostics_problems_survive_a_flood_of_guest_chats(env):
+    c, clock = env
+    register(c)
+    db = c.app.state.db
+    db.log(clock.now, "mac", "task_failed", {"task_id": 9, "module": "inventory", "error": "disco lleno"})
+    _guest_chats(db, clock.now + 1, 700)
+    d = c.get("/api/diagnostics", headers=A).json()
+    assert any("disco lleno" in p["text"] for p in d["problems"])
+
+
+def test_overview_activity_folds_consecutive_guest_chats_into_one_row(env):
+    c, clock = env
+    register(c)
+    db = c.app.state.db
+    db.log(clock.now + 1, "mac", "task_start", {"module": "inventory"})
+    db.log(clock.now + 2, "mac", "chat", {"provider": "local"})                  # Sergio's own: a row of its own
+    _guest_chats(db, clock.now + 3, 40, gid=7)
+    _guest_chats(db, clock.now + 50, 5, gid=8)
+    act = c.get("/api/overview", headers=A).json()["activity"]
+    chats = [a for a in act if a["event"] == "chat"]
+    assert [a["detail"].get("count") for a in chats] == [45, None]
+    g = chats[0]
+    assert g["ts"] == clock.now + 54 and g["node_id"] == "mac" and g["detail"]["guest"] == 8   # the newest row's shape
+    assert any(a["event"] == "task_start" for a in act) and len(act) <= 30

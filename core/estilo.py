@@ -13,9 +13,27 @@ from collections import Counter
 _STAMP = r"(\d{1,2})/(\d{1,2})/(\d{2,4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])?\.?\s?(?:m\.?)?"
 ANDROID = re.compile(r"^" + _STAMP + r"\s*-\s(.*)$", re.I)
 IOS = re.compile(r"^\[" + _STAMP + r"\]\s(.*)$", re.I)
+# Export markers (0.69.2). Only exact markers go; a message that merely says «audio» or «omitido» stays.
+# A whole message that is only a marker: media left out of the export, a deleted message, a location, a missed call.
 MEDIA = re.compile(r"^<?\s*(multimedia omitido|media omitted|(imagen|image|audio|video|vídeo|sticker|gif|documento|"
-                   r"document|contacto|contact)\s+(omitid[oa]|omitted))\s*>?$|^(se eliminó este mensaje|"
-                   r"this message was deleted|eliminaste este mensaje|you deleted this message)\.?$", re.I)
+                   r"document|contacto|contact|tarjeta de contacto|contact card|nota de voz|voice message)\s+"
+                   r"(omitid[oa]|omitted))\s*>?$|^(se eliminó este mensaje|this message was deleted|eliminaste este mensaje|"
+                   r"you deleted this message|este mensaje fue eliminado)\.?$|^(ubicación|location): https?://\S+$|"
+                   r"^(llamada de (voz|video|vídeo) perdida|missed (voice|video) call)$", re.I)
+# A line that only names an attached file (export «con archivos»): it goes, a caption under it stays.
+ATTACH = re.compile(r"^(<(adjunto|attached): [^<>]+>|.+\.\w{2,5} \((archivo adjunto|file attached)\)|"
+                    r".+\.\w{2,5}( \u2022 .*)? (documento omitido|document omitted))$", re.I)
+# A system notice that happens to contain «: » («Ana cambió el asunto a: viaje») would look like a message from
+# «Ana cambió el asunto a». Rule: what comes before the colon is a notice, not a sender, when it holds a WhatsApp
+# system verb after the first word («<Nombre> cambió/añadió/se unió…», «<Name> changed/added/joined…»), or starts
+# with a 2nd-person one («Cambiaste…», «You added…»). Contact names never carry those verbs; a name that only
+# starts with such a word («Left») is still a sender, because the verb has to follow another word.
+NOTICE = re.compile(r"^(cambiaste|añadiste|agregaste|eliminaste|creaste|saliste|fijaste|te uniste|activaste|desactivaste|"
+                    r"you)\s|\s(cambió|añadió|agregó|eliminó|creó|salió|se unió|fijó|activó|desactivó|actualizó|"
+                    r"están cifrados|changed|added|removed|created|left|joined|pinned|turned|updated|"
+                    r"are end-to-end)\b", re.I)
+POLL = re.compile(r"^(encuesta|poll):$", re.I)                     # first line of a poll; the OPCIÓN lines follow
+EDITED = re.compile(r"\s*<(se editó este mensaje\.?|this message was edited)>$", re.I)   # appended to the real text
 EMOJI = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]")
 
 
@@ -30,6 +48,15 @@ def _ts(d, mo, y, h, mi, s, ampm, prev: float) -> float:
         except ValueError:
             continue
     return prev + 0.001                                              # unreadable date: keep the order
+
+
+def _clean(text: str) -> str:
+    """The real text of a message: '' if it is only a marker; the «editado» marker and attachment lines go."""
+    lines = text.strip().split("\n")
+    if POLL.match(lines[0].strip()):
+        return ""
+    text = EDITED.sub("", "\n".join(ln for ln in lines if not ATTACH.match(ln.strip()))).strip()
+    return "" if MEDIA.match(text) else text
 
 
 def parse_whatsapp(text: str) -> list:
@@ -47,13 +74,17 @@ def parse_whatsapp(text: str) -> list:
         cur = None
         rest = m.group(8)
         name, sep, body = rest.partition(": ")
+        if not sep and rest.endswith(":"):                          # «Ana:» and the text starts on the next line
+            name, sep, body = rest[:-1], ":", ""
         prev = _ts(*m.groups()[:7], prev)
-        if not sep:                                                 # «Los mensajes … están cifrados», «X se unió»
+        if not sep or NOTICE.search(name):                         # «Los mensajes … están cifrados», «X se unió»
             continue
         cur = {"ts": prev, "sender": name.strip(), "text": body.strip()}
     if cur is not None:
         out.append(cur)
-    return [m for m in out if m["text"] and not MEDIA.match(m["text"].strip())]
+    for m in out:
+        m["text"] = _clean(m["text"])
+    return [m for m in out if m["text"]]
 
 
 def senders(messages: list) -> list:

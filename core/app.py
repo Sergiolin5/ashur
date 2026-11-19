@@ -57,6 +57,7 @@ APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", 
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
+CASA_CONTROL_LOCK_S = 10    # a control waits this long for the house lock, then 409 (busy)
 CAMARA_MEDIOS = re.compile(r"/api/casa/camaras/[a-z0-9-]{1,32}/(foto\.jpg|hls/(stream\.m3u8|playlist\.m3u8|init\.mp4|segment\.m4s|segment\.ts))")
 VIDEO_SESION_S = 900
 VIDEO_SESIONES_MAX = 32
@@ -278,7 +279,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.69.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.69.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -966,7 +967,7 @@ def create_app(
             tc = db.task_counts()
             q = db.queued_tasks()
             add("OK", "Tareas", f"{tc}; en espera: " + ("; ".join(f"{t['module']}@{t['target'] or '*'}" for t in q) or "ninguna"))
-            fails = [e for e in db.log_rows(300) if e["event"] in ("task_failed", "node_problem", "chat_error") and now - e["ts"] < 86400]
+            fails = [e for e in db.log_events(("task_failed", "node_problem", "chat_error"), now - 86400, 300) if now - e["ts"] < 86400]
             add("AVISO" if fails else "OK", "Fallos de las últimas 24 h", f"{len(fails)}" + ("".join(
                 f"\n      - {e['node_id'] or 'núcleo'}: {e['detail'].get('error') or e['detail'].get('text') or e['detail'].get('reason') or e['event']}"[:230]
                 for e in fails[:6])))
@@ -1108,9 +1109,7 @@ def create_app(
         # One row per kind of problem: same device, same event, same error, whatever the task number or how long the
         # silence lasted («FALLÓ tarea 263: X» and «… 264: X» are one row). «kind» splits connection from failures.
         problems, same = [], {}
-        for ev in db.log_rows(600):
-            if ev["event"] not in DIAG_EVENTS:
-                continue
+        for ev in db.log_events(DIAG_EVENTS, clock() - 7 * 86400, 600):     # by type in SQL: guest chat lines filled a last-600 window
             text = describe(ev["event"], ev["detail"])
             if ev["event"] == "offline":
                 cause = (ev["detail"] or {}).get("cause")
@@ -1159,7 +1158,7 @@ def create_app(
         return {"version": app.version, "now": now, "status": status(), "running": running,
                 "lote": lote_row(active) if active else None,
                 "queued": db.queued_tasks(), "queue_paused": queue_paused(), "inventory": inventory_summary_cached(),
-                "activity": db.log_rows(30), "budget": brain.budget(), "node_code_version": node_code()[0],
+                "activity": db.log_activity(30), "budget": brain.budget(), "node_code_version": node_code()[0],
                 "node_code_label": db.code_label(node_code()[0])}
 
     # --- the brain -------------------------------------------------------
@@ -1998,7 +1997,10 @@ def create_app(
         if not row:
             raise HTTPException(404, "esa casa no existe")
         e = casa_entry(cid)
-        with e["lock"]:
+        # a plain Lock shared with the view (casa_cache): a stuck Home Assistant call must not queue every control behind it
+        if not e["lock"].acquire(timeout=CASA_CONTROL_LOCK_S):
+            raise HTTPException(409, "La casa está ocupada con otra orden; inténtalo de nuevo.")
+        try:
             try:
                 casa_refresh(row, False)
             except HAError as x:
@@ -2021,6 +2023,8 @@ def create_app(
                 ok, motivo = False, "error"
             if ok:
                 e["states_t"] = -1e18                           # the next read asks Home Assistant again (the old states stay as cache)
+        finally:
+            e["lock"].release()
         db.log(clock(), None, "casa_control", {"casa": cid, "entity": b.entity_id, "accion": b.accion, "ok": ok})
         if not ok:
             raise HTTPException(502, casa_txt(motivo, causa))
@@ -2565,11 +2569,21 @@ def create_app(
 
     app.state.estilo_medidas = estilo_medidas
 
+    def import_not_twice(body: "ImportIn", msgs: list) -> None:
+        # 0.69.2: the same chat uploaded again is refused in preview (the panel says so before «Importar») and again
+        # in confirm; a chat sent in parts drops its file, since it will not be confirmed.
+        old = db.import_same(msgs)
+        if old is not None:
+            if body.upload:
+                import_tmp(body.upload).unlink(missing_ok=True)
+            raise HTTPException(409, f"Ese chat ya está subido (#{old}).")
+
     @app.post("/api/imports", dependencies=[Depends(require_admin)])
     def import_preview(body: ImportIn):
         msgs = estilo_mod.parse_whatsapp(import_text(body))
         if not msgs:
             raise HTTPException(422, "No encontré mensajes de WhatsApp en ese archivo.")
+        import_not_twice(body, msgs)
         return {"senders": estilo_mod.senders(msgs), "mensajes": len(msgs)}
 
     @app.get("/api/imports", dependencies=[Depends(require_admin)])
@@ -2581,6 +2595,7 @@ def create_app(
         msgs = estilo_mod.parse_whatsapp(import_text(body))
         if not body.me or body.me not in {m["sender"] for m in msgs}:
             raise HTTPException(422, "Elige cuál de los remitentes eres tú.")
+        import_not_twice(body, msgs)
         iid = db.import_add(clock(), body.name.strip(), body.file_name, body.me, msgs)
         if body.upload:
             import_tmp(body.upload).unlink(missing_ok=True)
@@ -2757,8 +2772,8 @@ def create_app(
     @app.get("/api/cerebro", dependencies=[Depends(require_admin)])
     def cerebro_get():
         used = set()
-        for e in db.log_rows(400):
-            if e["event"] == "memory_search" and e["ts"] > clock() - 86400:
+        for e in db.log_events(("memory_search",), clock() - 86400, 400):
+            if e["ts"] > clock() - 86400:
                 used.update(e["detail"].get("ids") or [])
         return cerebro_mod.build(db, brain.persona_file(), clock(), used)
 
@@ -3043,8 +3058,13 @@ def create_app(
         tier = body.tier or ("local" if p["source"] == "diary" or p["source"].startswith("conv:") else "claude")
         if owner != "sergio":                            # 0.63.0: a guest's sensitive line stays with the local models
             tier = "local"
-        mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier, owner=owner)
-        db.proposal_set(pid, "accepted")
+        if not db.proposal_claim(pid, "accepted"):       # reserved first: a second approval at the same time gets a 404
+            raise HTTPException(404, "No existe esa propuesta.")
+        try:
+            mid = db.add_memory(clock(), p["text"], source="propuesta", tier=tier, owner=owner)
+        except Exception:
+            db.proposal_set(pid, "pending")              # not saved: it waits for him again
+            raise
         db.log(clock(), None, "memory_accepted", {"memory_id": mid, "tier": tier})
         return {"memory_id": mid, "tier": tier}
 
@@ -3053,7 +3073,8 @@ def create_app(
         p = db.proposal_get(pid)
         if not p or p["status"] != "pending":
             raise HTTPException(404, "No existe esa propuesta.")
-        db.proposal_set(pid, "rejected")                 # kept as «rejected» so it is not proposed again
+        if not db.proposal_claim(pid, "rejected"):       # kept as «rejected» so it is not proposed again; an approval in course wins
+            raise HTTPException(404, "No existe esa propuesta.")
         return {"ok": True}
 
     @app.post("/api/proposals/run", dependencies=[Depends(require_admin)])
@@ -4102,7 +4123,7 @@ def create_app(
             if "inventory" in n["modules"] and n.get("disks"):
                 pol = disk_policy(n["id"])
                 unscanned += sum(1 for x in n["disks"] if x.get("present") and not pol.get(x["key"], False))
-        fails = sum(1 for e in db.log_rows(600) if e["event"] in ("task_failed", "node_problem", "chat_error") and now - e["ts"] < 86400)
+        fails = sum(1 for e in db.log_events(("task_failed", "node_problem", "chat_error"), now - 86400, 600) if now - e["ts"] < 86400)
         if fails:
             issues.append(f"{fails} falla{'s' if fails != 1 else ''}")
         if unscanned:
@@ -4364,8 +4385,7 @@ def create_app(
         """Ashur's state for the morning digest: the same device lines as the status view, the queue, the night's
         failures (counted, never their text)."""
         since = clock() - 12 * 3600
-        failed = sum(1 for r in db.log_rows(500) if r["ts"] >= since and r["event"] in
-                     ("task_failed", "encargo_failed", "lote_failed"))
+        failed = len(db.log_events(("task_failed", "encargo_failed", "lote_failed"), since, 500))
         return ([d["estado"] for d in network_for_brain()["dispositivos"]]
                 + ["Cola: " + ("pausada" if queue_paused() else "activa"),
                    f"Fallas en las últimas 12 h: {failed}"])
@@ -5248,8 +5268,8 @@ def create_app(
             lines = [title, body]
             # No free log text ever leaves here: only device, event name, module and the exception class name.
             groups: dict[tuple, dict] = {}
-            for ev in db.log_rows(600):
-                if ev["event"] not in DIAG_EVENTS or ev["event"] in CONN_EVENTS or now - ev["ts"] >= 86400:
+            for ev in db.log_events(DIAG_EVENTS - CONN_EVENTS, now - 86400, 600):
+                if now - ev["ts"] >= 86400:
                     continue
                 d = ev["detail"] or {}
                 module = d.get("module") if isinstance(d.get("module"), str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", d["module"]) else None

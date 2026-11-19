@@ -465,6 +465,41 @@ class DB:
             ).fetchall()
         return [dict(r) | {"detail": json.loads(r["detail"])} for r in rows]
 
+    def log_events(self, events, since: Optional[float] = None, limit: int = 500) -> list[dict]:
+        """The newest rows of these events (since a time), filtered in SQL: a window of the last N rows of anything
+        was filled by guests' chat lines and lost the failures (0.69.2)."""
+        events = list(events)
+        if not events:
+            return []
+        marks = ",".join("?" * len(events))
+        when, args = ("AND ts >= ? ", [since]) if since is not None else ("", [])
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM session_log WHERE event IN ({marks}) {when}ORDER BY ts DESC, rowid DESC LIMIT ?",
+                (*events, *args, limit)).fetchall()
+        return [dict(r) | {"detail": json.loads(r["detail"])} for r in rows]
+
+    def log_activity(self, limit: int = 30, scan: int = 2000) -> list[dict]:
+        """Estado's activity: the newest rows, consecutive guest chat lines folded into the newest one with
+        detail["count"] (0.69.2: every guest reply logs one and they pushed everything else out). Same row shape."""
+        out: list[dict] = []
+        with self.lock:
+            cur = self.conn.execute("SELECT * FROM session_log ORDER BY ts DESC, rowid DESC LIMIT ?", (scan,))
+            for r in cur:
+                row = dict(r) | {"detail": json.loads(r["detail"])}
+                guest_chat = row["event"] == "chat" and "guest" in row["detail"]
+                last = out[-1] if out else None
+                if guest_chat and last and last["event"] == "chat" and "guest" in last["detail"]:
+                    last["detail"]["count"] = last["detail"].get("count", 1) + 1
+                    continue
+                if len(out) >= limit:
+                    break
+                out.append(row)
+        for row in out:
+            if row["event"] == "chat" and "guest" in row["detail"] and "count" not in row["detail"]:
+                row["detail"]["count"] = 1
+        return out
+
     # --- nodes -----------------------------------------------------------
     def upsert_node(self, node: dict[str, Any], now: float) -> str:
         """Register or re-register a node. Returns a fresh token (old one is revoked)."""
@@ -2352,6 +2387,8 @@ class DB:
             rows = self.conn.execute(
                 f"SELECT {self.CONV_COLS} FROM conversations c WHERE closed IS NOT NULL "
                 "AND (archived = 0 OR user LIKE 'g%') "        # a guest's 0.62 archive too; Sergio's waits for his yes
+                # a revoked guest: nothing pending is learned any more (Sergio, 0.69.2); profile and approvals stay
+                "AND NOT EXISTS (SELECT 1 FROM guests WHERE 'g' || guests.id = c.user AND guests.revoked IS NOT NULL) "
                 "AND (extracted IS NULL OR last_msg > extracted) "
                 "AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id) ORDER BY last_msg LIMIT ?",
                 (limit,)).fetchall()
@@ -2382,6 +2419,28 @@ class DB:
                 [(iid, m["ts"], m["sender"], 1 if m["sender"] == me else 0, m["text"]) for m in messages])
             self.conn.commit()
         return iid
+
+    def import_same(self, messages: list) -> Optional[int]:
+        """0.69.2: the id of an imported chat with exactly these messages (ts, sender, text), if any. No schema of its
+        own: the message count picks the candidates, then a hash of each one's stored lines is compared."""
+        import hashlib
+
+        def digest(rows) -> str:
+            h = hashlib.sha256()
+            for ts, sender, text in rows:
+                h.update(repr((float(ts), sender, text)).encode("utf-8"))
+            return h.hexdigest()
+        want = None
+        with self.lock:
+            ids = [r[0] for r in self.conn.execute(
+                "SELECT id FROM chat_imports WHERE n_me + n_others = ? ORDER BY id", (len(messages),))]
+            for iid in ids:
+                want = want or digest((m["ts"], m["sender"], m["text"]) for m in messages)
+                rows = self.conn.execute(
+                    "SELECT ts, sender, text FROM imported_messages WHERE import_id = ? ORDER BY id", (iid,))
+                if digest(rows) == want:
+                    return iid
+        return None
 
     def import_get(self, iid: int) -> Optional[dict]:
         with self.lock:
@@ -2486,7 +2545,8 @@ class DB:
 
     def set_memory_tier(self, memory_id: int, tier: str) -> bool:
         with self.lock:
-            cur = self.conn.execute("UPDATE memory SET tier = ? WHERE id = ?", (tier, memory_id))
+            # Sergio's own only: a guest's memory stays with the local models (0.63.0 rule, 0.69.2)
+            cur = self.conn.execute("UPDATE memory SET tier = ? WHERE id = ? AND owner = 'sergio'", (tier, memory_id))
             self.conn.commit()
         return cur.rowcount > 0
 
@@ -2549,6 +2609,13 @@ class DB:
         with self.lock:
             r = self.conn.execute("SELECT id, ts, text, source, status, owner FROM memory_proposals WHERE id = ?", (pid,)).fetchone()
         return dict(r) if r else None
+
+    def proposal_claim(self, pid: int, status: str) -> bool:
+        """Pending -> status in one UPDATE: of two concurrent decisions on the same proposal only one wins (0.69.2)."""
+        with self.lock:
+            cur = self.conn.execute("UPDATE memory_proposals SET status = ? WHERE id = ? AND status = 'pending'", (status, pid))
+            self.conn.commit()
+        return cur.rowcount > 0
 
     def proposal_set(self, pid: int, status: str) -> None:
         with self.lock:

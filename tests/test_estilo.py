@@ -533,3 +533,30 @@ def test_system_notices_with_a_colon_are_not_senders():
 """
     assert _pairs(text) == [("Ana", "hola"), ("Sergio M.", "Ana cambió el asunto a: viaje jaja"),
                             ("+57 300 1234567", "quién es?"), ("Left", "soy un contacto raro")]
+
+
+def test_the_same_chat_twice_is_refused_in_preview_and_confirm(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    r = c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "otro.txt", "text": ANDROID})
+    assert r.status_code == 409 and r.json()["detail"] == f"Ese chat ya está subido (#{iid})."
+    r = c.post("/api/imports/confirm", headers=A, json={"name": "Otra", "file_name": "c.txt", "text": ANDROID, "me": "Ana"})
+    assert r.status_code == 409 and f"#{iid}" in r.json()["detail"]
+    assert len(c.get("/api/imports", headers=A).json()) == 1
+    # same number of messages but one text differs: a different chat
+    other = ANDROID.replace("todo bien 😊", "todo bien")
+    assert c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "c.txt", "text": other}).status_code == 200
+    imported(c, text=other)
+    # after deleting it, the chat can be uploaded again
+    c.delete(f"/api/imports/{iid}", headers=A)
+    assert c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "c.txt", "text": ANDROID}).status_code == 200
+
+
+def test_a_duplicate_sent_in_parts_is_refused_and_leaves_no_file(tmp_path):
+    c = local_app(tmp_path)
+    iid = imported(c)
+    up = "ef" * 16
+    assert c.post("/api/imports/parte", headers=A, json={"upload": up, "i": 0, "text": ANDROID}).status_code == 200
+    r = c.post("/api/imports", headers=A, json={"name": "Ana", "file_name": "chat.txt", "upload": up})
+    assert r.status_code == 409 and f"#{iid}" in r.json()["detail"]
+    assert not (tmp_path / "imports-tmp" / (up + ".txt")).exists()

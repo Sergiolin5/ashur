@@ -2565,11 +2565,21 @@ def create_app(
 
     app.state.estilo_medidas = estilo_medidas
 
+    def import_not_twice(body: "ImportIn", msgs: list) -> None:
+        # 0.69.2: the same chat uploaded again is refused in preview (the panel says so before «Importar») and again
+        # in confirm; a chat sent in parts drops its file, since it will not be confirmed.
+        old = db.import_same(msgs)
+        if old is not None:
+            if body.upload:
+                import_tmp(body.upload).unlink(missing_ok=True)
+            raise HTTPException(409, f"Ese chat ya está subido (#{old}).")
+
     @app.post("/api/imports", dependencies=[Depends(require_admin)])
     def import_preview(body: ImportIn):
         msgs = estilo_mod.parse_whatsapp(import_text(body))
         if not msgs:
             raise HTTPException(422, "No encontré mensajes de WhatsApp en ese archivo.")
+        import_not_twice(body, msgs)
         return {"senders": estilo_mod.senders(msgs), "mensajes": len(msgs)}
 
     @app.get("/api/imports", dependencies=[Depends(require_admin)])
@@ -2581,6 +2591,7 @@ def create_app(
         msgs = estilo_mod.parse_whatsapp(import_text(body))
         if not body.me or body.me not in {m["sender"] for m in msgs}:
             raise HTTPException(422, "Elige cuál de los remitentes eres tú.")
+        import_not_twice(body, msgs)
         iid = db.import_add(clock(), body.name.strip(), body.file_name, body.me, msgs)
         if body.upload:
             import_tmp(body.upload).unlink(missing_ok=True)

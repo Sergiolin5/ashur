@@ -2383,6 +2383,28 @@ class DB:
             self.conn.commit()
         return iid
 
+    def import_same(self, messages: list) -> Optional[int]:
+        """0.69.2: the id of an imported chat with exactly these messages (ts, sender, text), if any. No schema of its
+        own: the message count picks the candidates, then a hash of each one's stored lines is compared."""
+        import hashlib
+
+        def digest(rows) -> str:
+            h = hashlib.sha256()
+            for ts, sender, text in rows:
+                h.update(repr((float(ts), sender, text)).encode("utf-8"))
+            return h.hexdigest()
+        want = None
+        with self.lock:
+            ids = [r[0] for r in self.conn.execute(
+                "SELECT id FROM chat_imports WHERE n_me + n_others = ? ORDER BY id", (len(messages),))]
+            for iid in ids:
+                want = want or digest((m["ts"], m["sender"], m["text"]) for m in messages)
+                rows = self.conn.execute(
+                    "SELECT ts, sender, text FROM imported_messages WHERE import_id = ? ORDER BY id", (iid,))
+                if digest(rows) == want:
+                    return iid
+        return None
+
     def import_get(self, iid: int) -> Optional[dict]:
         with self.lock:
             r = self.conn.execute(f"SELECT {self.IMP_COLS} FROM chat_imports WHERE id = ?", (iid,)).fetchone()

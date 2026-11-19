@@ -42,6 +42,7 @@ from core.camaras import CamError, Go2rtc
 from zoneinfo import ZoneInfo
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
+from core import temas as temas_mod
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, OWN_TOOL, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
@@ -277,7 +278,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.68.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.69.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -4973,6 +4974,12 @@ def create_app(
                     return "not_done", "Ese archivo ya no espera aprender."
                 db.set_setting("archivo_aprender", str(cid))
                 return "approved", "Ashur aprenderá del chat anterior por tandas, con el modelo local."
+            if action == "tema":                             # 0.69.0: a theme Sergio uploaded, now selectable
+                tid = req["args"].get("tema")
+                if not isinstance(tid, int) or not db.tema_set_estado(tid, "aprobado"):
+                    return "not_done", "Ese tema ya no espera aprobación."
+                db.log(clock(), None, "tema_aprobado", {"tema": tid})
+                return "approved", "Listo en Ajustes → Apariencia. Todavía no está en uso: elígelo allí."
             if action == "cancelar_encargo":
                 return "approved", cancel_encargo(req["args"].get("encargo"))
             if action in ("pausar_cola", "reanudar_cola"):
@@ -5042,8 +5049,125 @@ def create_app(
             db.encargo_set(req["args"]["encargo"], expect="pending_approval", status="rejected")
         if req["action"] == "lote" and isinstance(req["args"].get("lote"), int):
             db.lote_set(req["args"]["lote"], expect="pending_approval", status="rejected")
+        if req["action"] == "tema" and isinstance(req["args"].get("tema"), int):
+            db.tema_set_estado(req["args"]["tema"], "rechazado")
         db.log(clock(), None, "claude_request_decided", {"id": rid, "status": "rejected"})
         return {"ok": True}
+
+    # --- 0.69.0: temas del panel (docs/superpowers/specs/2026-11-19-temas-design.md) ---------------------------------
+    temas_dir = Path(os.path.dirname(os.path.abspath(db_path))) / "temas"
+    tema_css_cache: dict = {}
+
+    def tema_files(tid: int) -> Path:
+        return temas_dir / str(int(tid))
+
+    def tema_css(t: dict) -> str:
+        key = (t["id"], t["sha256"])
+        if key not in tema_css_cache:
+            src = (tema_files(t["id"]) / "tema.css").read_text(encoding="utf-8") if (tema_files(t["id"]) / "tema.css").exists() else ""
+            tema_css_cache[key] = temas_mod.compilar(t["manifest"], src, t["id"])
+        return tema_css_cache[key]
+
+    def tema_activo() -> Optional[dict]:
+        v = db.setting("tema_activo", "") or ""
+        t = db.tema_get(int(v)) if v.isdigit() else None
+        return t if t and t["estado"] == "aprobado" else None
+
+    def tema_public(t: dict) -> dict:
+        m = t["manifest"]
+        return {"id": t["id"], "nombre": t["nombre"], "autor": t["autor"], "estado": t["estado"], "ts": t["ts"],
+                "descripcion": m.get("descripcion", ""), "version": m.get("version", ""), "avisos": t["avisos"],
+                "esquemas": sorted(m.get("esquemas", {})), "fondos": sorted(m.get("fondos", {}))}
+
+    @app.post("/api/temas", dependencies=[Depends(require_admin)])
+    async def tema_subir(request: Request):
+        data = await request.body()
+        try:
+            p = temas_mod.leer_zip(data)
+        except temas_mod.TemaInvalido as e:
+            raise HTTPException(422, str(e))
+        import hashlib
+        sha = hashlib.sha256(data).hexdigest()
+        if (old := db.tema_by_sha(sha)):
+            raise HTTPException(409, f"Ese tema ya está subido (#{old['id']}, {old['estado']}).")
+        tid = db.tema_add(clock(), p.manifest["nombre"], p.manifest["autor"], sha, p.manifest, p.avisos)
+        d = tema_files(tid)
+        (d / "assets").mkdir(parents=True, exist_ok=True)
+        (d / "tema.css").write_text(p.css, encoding="utf-8")
+        for name, (b, _mime) in p.assets.items():
+            (d / "assets" / name).write_bytes(b)          # names already checked against [a-z0-9_-]{1,40}.ext
+        rid = db.claude_request_add(clock(), "tema", {"tema": tid, "nombre": p.manifest["nombre"], "autor": p.manifest["autor"]},
+                                    "Subiste un tema. Pruébalo antes de aprobar: solo trae colores, imágenes y CSS filtrado.")
+        db.log(clock(), None, "tema_subido", {"tema": tid, "avisos": len(p.avisos)})
+        return {"id": tid, "pedido": rid, "avisos": p.avisos}
+
+    @app.get("/api/temas", dependencies=[Depends(require_admin)])
+    def temas_list():
+        act = tema_activo()
+        return {"activo": act["id"] if act else None, "temas": [tema_public(t) for t in db.temas()]}
+
+    @app.get("/api/temas/activo")
+    def tema_activo_get():
+        """Without a key: the panel and guests load it before signing in. Only an approved, chosen theme is ever served."""
+        t = tema_activo()
+        return {"id": t["id"], "nombre": t["nombre"]} if t else {"id": None}
+
+    @app.get("/api/temas/base.zip", dependencies=[Depends(require_admin)])
+    def tema_base():
+        return Response(temas_mod.base_zip(), media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="ashur-tema-base.zip"'})
+
+    @app.get("/api/temas/{tid}/tema.css")
+    def tema_css_get(tid: int, x_admin_key: str = Header(default="")):
+        t = db.tema_get(tid)
+        act = tema_activo()
+        if not t or t["estado"] == "rechazado":
+            raise HTTPException(404, "No existe ese tema.")
+        if not (act and act["id"] == tid):
+            require_admin(x_admin_key)                      # trying a theme («Probar») is admin only
+        return Response(tema_css(t), media_type="text/css; charset=utf-8",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+    @app.get("/api/temas/{tid}/assets/{name}")
+    def tema_asset(tid: int, name: str):
+        if not temas_mod.ASSET_NAME.match(name):
+            raise HTTPException(404, "No existe.")
+        t = db.tema_get(tid)
+        f = tema_files(tid) / "assets" / name
+        if not t or t["estado"] == "rechazado" or not f.is_file():
+            raise HTTPException(404, "No existe.")
+        mime = temas_mod.ASSET_MAGIC[name.rsplit(".", 1)[1]][1]
+        return FileResponse(f, media_type=mime, headers={"X-Content-Type-Options": "nosniff",
+                                                         "Content-Security-Policy": "default-src 'none'", "Cache-Control": "max-age=86400"})
+
+    @app.get("/api/temas/{tid}/zip", dependencies=[Depends(require_admin)])
+    def tema_zip(tid: int):
+        t = db.tema_get(tid)
+        if not t:
+            raise HTTPException(404, "No existe ese tema.")
+        d = tema_files(tid)
+        css = (d / "tema.css").read_text(encoding="utf-8") if (d / "tema.css").exists() else ""
+        css = css.replace("@@SCOPE@@ ", "").replace("@@SCOPE@@", ":root").replace("@@ASSET@@", "assets/")
+        assets = {f.name: f.read_bytes() for f in sorted((d / "assets").glob("*")) if f.is_file()} if (d / "assets").exists() else {}
+        safe = re.sub(r"[^a-z0-9-]+", "-", t["nombre"].lower()).strip("-") or "tema"
+        return Response(temas_mod.paquete_zip(t["manifest"], css, assets), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="ashur-tema-{safe}.zip"'})
+
+    class TemaActivar(BaseModel):
+        id: Optional[int] = None
+
+    @app.post("/api/temas/activar", dependencies=[Depends(require_admin)])
+    def tema_activar(body: TemaActivar):
+        if body.id is None:
+            db.set_setting("tema_activo", "")
+            db.log(clock(), None, "tema_activo", {"tema": None})
+            return {"activo": None}
+        t = db.tema_get(body.id)
+        if not t or t["estado"] != "aprobado":
+            raise HTTPException(409, "Solo se usa un tema aprobado.")
+        db.set_setting("tema_activo", str(t["id"]))
+        db.log(clock(), None, "tema_activo", {"tema": t["id"]})
+        return {"activo": t["id"]}
 
     def mcp_tools() -> list[Tool]:
         """The connector's tools. Every one builds its text from an allowlist of fields (see the constraints of 0.45.0)."""

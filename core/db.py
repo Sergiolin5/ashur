@@ -290,6 +290,11 @@ CREATE TABLE IF NOT EXISTS form_answers (  -- 0.64.0: the long form, and the que
     qid TEXT PRIMARY KEY, section TEXT NOT NULL, question TEXT NOT NULL, answer TEXT, ts REAL NOT NULL,
     origin TEXT NOT NULL DEFAULT 'form'
 );
+CREATE TABLE IF NOT EXISTS temas (        -- 0.69.0: panel themes; data + filtered CSS only, files under <datos>/temas/<id>/
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, nombre TEXT NOT NULL, autor TEXT NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE, estado TEXT NOT NULL DEFAULT 'pendiente',   -- pendiente | aprobado | rechazado
+    manifest TEXT NOT NULL, avisos TEXT NOT NULL DEFAULT '[]'
+);
 CREATE TABLE IF NOT EXISTS session_log (
     ts          REAL NOT NULL,
     node_id     TEXT,
@@ -2551,6 +2556,40 @@ class DB:
             self.conn.commit()
 
     # --- claude requests: actions Claude (via the connector) asks for, until Sergio decides ---
+    # --- 0.69.0: temas -------------------------------------------------------------------------------------------
+    def tema_add(self, ts: float, nombre: str, autor: str, sha256: str, manifest: dict, avisos: list) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO temas (ts, nombre, autor, sha256, manifest, avisos) VALUES (?, ?, ?, ?, ?, ?)",
+                (ts, nombre, autor, sha256, json.dumps(manifest, ensure_ascii=False), json.dumps(avisos, ensure_ascii=False)))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def tema_by_sha(self, sha256: str) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT id FROM temas WHERE sha256 = ?", (sha256,)).fetchone()
+        return self.tema_get(r[0]) if r else None
+
+    def tema_get(self, tid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT id, ts, nombre, autor, sha256, estado, manifest, avisos FROM temas WHERE id = ?",
+                                  (tid,)).fetchone()
+        if not r:
+            return None
+        return {"id": r[0], "ts": r[1], "nombre": r[2], "autor": r[3], "sha256": r[4], "estado": r[5],
+                "manifest": json.loads(r[6]), "avisos": json.loads(r[7])}
+
+    def temas(self) -> list[dict]:
+        with self.lock:
+            ids = [r[0] for r in self.conn.execute("SELECT id FROM temas ORDER BY id DESC").fetchall()]
+        return [self.tema_get(i) for i in ids]
+
+    def tema_set_estado(self, tid: int, estado: str, expect: str = "pendiente") -> bool:
+        with self.lock:
+            cur = self.conn.execute("UPDATE temas SET estado = ? WHERE id = ? AND estado = ?", (estado, tid, expect))
+            self.conn.commit()
+        return cur.rowcount > 0
+
     _CR_COLS = "id, ts, action, args, reason, status, decided_at, result"
 
     @staticmethod
@@ -2578,7 +2617,7 @@ class DB:
         with self.lock:
             # 0.63.0: what guests teach has its own cap (core/brain.py) and never takes Claude's slots
             return self.conn.execute("SELECT COUNT(*) FROM claude_requests WHERE status = 'pending' "
-                                     "AND action NOT IN ('persona_trato', 'persona_cambio')").fetchone()[0]
+                                     "AND action NOT IN ('persona_trato', 'persona_cambio', 'tema')").fetchone()[0]
 
     def claude_request_get(self, rid: int) -> Optional[dict]:
         with self.lock:

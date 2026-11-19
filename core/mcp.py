@@ -33,9 +33,10 @@ ACTIONS = {"pausar_cola": "pausar la cola", "reanudar_cola": "reanudar la cola",
            "aprender_archivo": "aprender del chat anterior ({mensajes} mensajes, modelo local)",
            "persona_trato": "enseñarle a Ashur: «{texto}» (de {invitado})",
            "aprender_import": "aprender de tus mensajes en el chat «{nombre}» ({mensajes} mensajes tuyos, modelo local)",
-           "persona_cambio": "corrección de {invitado}: «{texto}»"}
+           "persona_cambio": "corrección de {invitado}: «{texto}»",
+           "tema": "aceptar el tema «{nombre}» de {autor}"}
 OWN_TOOL = ("encargo", "lote", "oj_skill", "oj_correo", "oj_tarea", "oj_evento", "aprender_archivo",
-            "persona_trato", "persona_cambio", "aprender_import")      # 0.63.0: what guests teach comes only from their conversations   # asked only through their own tool
+            "persona_trato", "persona_cambio", "aprender_import", "tema")      # 0.63.0: what guests teach comes only from their conversations   # asked only through their own tool
                                               # (ashur_encargar, ashur_lote, the chat's OpenJarvis tools), never ashur_pedir
 MAX_PENDING_REQUESTS = 5
 

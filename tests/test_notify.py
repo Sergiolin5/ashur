@@ -220,3 +220,14 @@ def test_the_notified_line_keeps_where_the_notice_leads(tmp_path):
     app.state.notify_due(sync=True)
     row = app.state.db.conn.execute("SELECT detail FROM session_log WHERE event='notified' ORDER BY rowid DESC LIMIT 1").fetchone()
     assert json.loads(row[0])["url"] == "/#diagnostico"
+
+
+def test_the_daily_review_counts_failures_behind_a_flood_of_guest_chats(tmp_path):
+    # B4 (0.69.2): the fail count reads failures in the last 24 h, not the last 600 rows of anything
+    c, clock, sent, app = make(tmp_path, at=ts(19))
+    db = app.state.db
+    db.log(clock(), "mac-m1", "task_failed", {"module": "docs"})
+    for i in range(700):
+        db.log(clock() + i * 0.001, "mac-m1", "chat", {"provider": "local", "guest": 3})
+    app.state.daily_due(sync=True)
+    assert "1 falla" in sent[-1]["body"]

@@ -555,3 +555,29 @@ def test_causa_in_api_log_and_control(tmp_path):
     assert c.get("/api/casa", headers=A).json()["ha_causa"] is None
     rows = app.state.db.conn.execute("SELECT * FROM session_log").fetchall()
     assert "SECRETO123" not in r.text + r2.text + str(rows)
+
+
+def test_control_busy_lock_is_409_not_a_wait(casa_env, monkeypatch):
+    # B3 (0.69.2): a Home Assistant call stuck under the house lock must not hang every control behind it
+    import threading
+    import core.app as app_mod
+    monkeypatch.setattr(app_mod, "CASA_CONTROL_LOCK_S", 0.2)
+    c, _, fake, _ = casa_env
+    entered, release = threading.Event(), threading.Event()
+    orig = fake.states
+
+    def slow_states():
+        entered.set()
+        release.wait(3)                                      # without the fix the control waits for this
+        return orig()
+    fake.states = slow_states
+    th = threading.Thread(target=lambda: c.get("/api/casa", headers=A))
+    th.start()
+    assert entered.wait(3)
+    try:
+        r = c.post("/api/casa/1/control", headers=A, json={"entity_id": "light.sala", "accion": "off"})
+    finally:
+        release.set()
+        th.join(5)
+    assert r.status_code == 409 and r.json()["detail"] == "La casa está ocupada con otra orden; inténtalo de nuevo."
+    assert fake.calls == []

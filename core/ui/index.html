@@ -2420,13 +2420,13 @@
   function avatarRender() {
     const a = $("avatar"), guest = role !== "admin";
     a.tabIndex = guest ? -1 : 0; a.toggleAttribute("aria-disabled", guest); a.style.cursor = guest ? "default" : "pointer";
-    const speaking = !!AV.speakTimer, needs = !guest && AV.needs > 0;
-    a.classList.toggle("thinking", AV.thinking > 0);
-    a.classList.toggle("speaking", speaking && !AV.thinking);
-    a.classList.toggle("listening", AV.listening && !AV.thinking && !speaking);
+    const listening = AV.listening && !AV.thinking, speaking = !!AV.speakTimer && !AV.thinking && !listening, needs = !guest && AV.needs > 0;
+    a.classList.toggle("thinking", AV.thinking > 0);                 // 0.69.2: thinking > listening > speaking
+    a.classList.toggle("speaking", speaking);
+    a.classList.toggle("listening", listening);
     a.classList.toggle("needs", needs);
     $("avatar-badge").hidden = !needs; $("avatar-badge").textContent = needs ? String(AV.needs) : "";
-    a.setAttribute("aria-label", AV.thinking ? "Ashur está pensando" : speaking ? "Ashur está respondiendo" : AV.listening ? "Ashur te escucha"
+    a.setAttribute("aria-label", AV.thinking ? "Ashur está pensando" : listening ? "Ashur te escucha" : speaking ? "Ashur está respondiendo"
       : needs ? "Ashur te necesita: " + AV.needs + " por aprobar" : guest ? "Ashur" : "Ashur: abrir el cerebro");
   }
   function avatarNeeds(n) { AV.needs = n || 0; avatarRender(); }
@@ -2435,6 +2435,7 @@
   function avatarListen() {
     const m = $("msg"), mic = $("mic");
     AV.listening = (document.activeElement === m && m.value.trim() !== "") || mic.classList.contains("rec");
+    if (AV.listening) { clearTimeout(AV.speakTimer); AV.speakTimer = 0; }   // typing or dictating ends «hablando»
     avatarRender();
   }
   $("msg").addEventListener("input", avatarListen); $("msg").addEventListener("blur", avatarListen); $("msg").addEventListener("focus", avatarListen);

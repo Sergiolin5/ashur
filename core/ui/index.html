@@ -85,6 +85,7 @@
   /* 0.66.0: the avatar — the brain's core in small, Ashur's state at a glance (replaces the green dot) */
   .avatar { position: relative; display: inline-flex; width: 26px; height: 26px; margin: 0 6px 0 -3px; padding: 0; border: 0; background: none;
             vertical-align: middle; cursor: pointer; --av: #8f8cff; --glow: rgba(143,140,255,.55); }
+  .avatar::before { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; }   /* 44 px tap zone, same look */
   .avatar svg { width: 26px; height: 26px; overflow: visible; filter: drop-shadow(0 0 4px var(--glow)); transition: filter .4s; }
   .avatar .core { fill: var(--av); transform-origin: 12px 12px; animation: av-pulse 3.2s ease-in-out infinite; }
   .avatar .rings { transform-origin: 12px 12px; animation: av-spin 14s linear infinite; }

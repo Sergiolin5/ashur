@@ -23,6 +23,15 @@ MEDIA = re.compile(r"^<?\s*(multimedia omitido|media omitted|(imagen|image|audio
 # A line that only names an attached file (export «con archivos»): it goes, a caption under it stays.
 ATTACH = re.compile(r"^(<(adjunto|attached): [^<>]+>|.+\.\w{2,5} \((archivo adjunto|file attached)\)|"
                     r".+\.\w{2,5}( \u2022 .*)? (documento omitido|document omitted))$", re.I)
+# A system notice that happens to contain «: » («Ana cambió el asunto a: viaje») would look like a message from
+# «Ana cambió el asunto a». Rule: what comes before the colon is a notice, not a sender, when it holds a WhatsApp
+# system verb after the first word («<Nombre> cambió/añadió/se unió…», «<Name> changed/added/joined…»), or starts
+# with a 2nd-person one («Cambiaste…», «You added…»). Contact names never carry those verbs; a name that only
+# starts with such a word («Left») is still a sender, because the verb has to follow another word.
+NOTICE = re.compile(r"^(cambiaste|añadiste|agregaste|eliminaste|creaste|saliste|fijaste|te uniste|activaste|desactivaste|"
+                    r"you)\s|\s(cambió|añadió|agregó|eliminó|creó|salió|se unió|fijó|activó|desactivó|actualizó|"
+                    r"están cifrados|changed|added|removed|created|left|joined|pinned|turned|updated|"
+                    r"are end-to-end)\b", re.I)
 POLL = re.compile(r"^(encuesta|poll):$", re.I)                     # first line of a poll; the OPCIÓN lines follow
 EDITED = re.compile(r"\s*<(se editó este mensaje\.?|this message was edited)>$", re.I)   # appended to the real text
 EMOJI = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]")
@@ -68,7 +77,7 @@ def parse_whatsapp(text: str) -> list:
         if not sep and rest.endswith(":"):                          # «Ana:» and the text starts on the next line
             name, sep, body = rest[:-1], ":", ""
         prev = _ts(*m.groups()[:7], prev)
-        if not sep:                                                 # «Los mensajes … están cifrados», «X se unió»
+        if not sep or NOTICE.search(name):                         # «Los mensajes … están cifrados», «X se unió»
             continue
         cur = {"ts": prev, "sender": name.strip(), "text": body.strip()}
     if cur is not None:

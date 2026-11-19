@@ -511,3 +511,25 @@ desde el iPhone
 12/11/26, 9:20 a. m. - Ana:
 """
     assert _pairs(text) == [("Ana", "la lista:\n- pan"), ("Sergio", "listo"), ("Ana", "ok"), ("Ana", "desde el iPhone")]
+
+
+def test_system_notices_with_a_colon_are_not_senders():
+    text = """12/11/26, 9:10 a. m. - Los mensajes y las llamadas están cifrados de extremo a extremo. Toca para más información: 
+12/11/26, 9:11 a. m. - Ana cambió el asunto a: viaje
+12/11/26, 9:12 a. m. - Ana añadió a: Luis
+12/11/26, 9:12 a. m. - Cambiaste el asunto a: viaje
+12/11/26, 9:13 a. m. - Luis se unió usando el enlace de invitación: grupo
+12/11/26, 9:13 a. m. - Ana fijó un mensaje:
+11/12/26, 9:14 AM - Messages and calls are end-to-end encrypted. Tap to learn more: 
+11/12/26, 9:15 AM - Ana changed the subject to: trip
+11/12/26, 9:15 AM - You added: Luis
+11/12/26, 9:15 AM - Luis joined using this group's invite link: x
+[12/11/26, 9:16:00] Ana cambió la descripción del grupo: playa
+[11/12/26, 9:16:00 AM] Ana removed: Luis
+12/11/26, 9:20 a. m. - Ana: hola
+12/11/26, 9:21 a. m. - Sergio M.: Ana cambió el asunto a: viaje jaja
+12/11/26, 9:22 a. m. - +57 300 1234567: quién es?
+12/11/26, 9:23 a. m. - Left: soy un contacto raro
+"""
+    assert _pairs(text) == [("Ana", "hola"), ("Sergio M.", "Ana cambió el asunto a: viaje jaja"),
+                            ("+57 300 1234567", "quién es?"), ("Left", "soy un contacto raro")]

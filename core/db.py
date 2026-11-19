@@ -465,6 +465,41 @@ class DB:
             ).fetchall()
         return [dict(r) | {"detail": json.loads(r["detail"])} for r in rows]
 
+    def log_events(self, events, since: Optional[float] = None, limit: int = 500) -> list[dict]:
+        """The newest rows of these events (since a time), filtered in SQL: a window of the last N rows of anything
+        was filled by guests' chat lines and lost the failures (0.69.2)."""
+        events = list(events)
+        if not events:
+            return []
+        marks = ",".join("?" * len(events))
+        when, args = ("AND ts >= ? ", [since]) if since is not None else ("", [])
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM session_log WHERE event IN ({marks}) {when}ORDER BY ts DESC, rowid DESC LIMIT ?",
+                (*events, *args, limit)).fetchall()
+        return [dict(r) | {"detail": json.loads(r["detail"])} for r in rows]
+
+    def log_activity(self, limit: int = 30, scan: int = 2000) -> list[dict]:
+        """Estado's activity: the newest rows, consecutive guest chat lines folded into the newest one with
+        detail["count"] (0.69.2: every guest reply logs one and they pushed everything else out). Same row shape."""
+        out: list[dict] = []
+        with self.lock:
+            cur = self.conn.execute("SELECT * FROM session_log ORDER BY ts DESC, rowid DESC LIMIT ?", (scan,))
+            for r in cur:
+                row = dict(r) | {"detail": json.loads(r["detail"])}
+                guest_chat = row["event"] == "chat" and "guest" in row["detail"]
+                last = out[-1] if out else None
+                if guest_chat and last and last["event"] == "chat" and "guest" in last["detail"]:
+                    last["detail"]["count"] = last["detail"].get("count", 1) + 1
+                    continue
+                if len(out) >= limit:
+                    break
+                out.append(row)
+        for row in out:
+            if row["event"] == "chat" and "guest" in row["detail"] and "count" not in row["detail"]:
+                row["detail"]["count"] = 1
+        return out
+
     # --- nodes -----------------------------------------------------------
     def upsert_node(self, node: dict[str, Any], now: float) -> str:
         """Register or re-register a node. Returns a fresh token (old one is revoked)."""

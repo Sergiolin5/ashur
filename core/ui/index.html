@@ -2961,7 +2961,8 @@
   let camDoor = null, camSes = null, camList = [], camSig = null, camBusy = false, camAsking = false, camProbing = false;
   let camView = null, camFb = null, camIce = null, camPc = null, camPending = null, camGen = 0, camRt = null, camFlight = null;
   // Silent renewals: one at a time, >= 15 s apart, and at most 3 with no picture in between (a thumbnail load or a <video>
-  // «playing», WebRTC included); the 4th latches camGaveUp until the user taps, whatever the timing of /sesion.
+  // «playing», WebRTC included); the 4th latches camGaveUp until the user taps or a camera comes back on, whatever the timing
+  // of /sesion. Renewals while every camera is off (and no live view) don't count: nothing could have shown a picture.
   let camLast = 0, camRenewN = 0, camGaveUp = false, camPrevV = null, camResetN = 0;
   const camGood = () => { camRenewN = 0; };      // media proved the session works
   const camUserGo = () => { camGaveUp = false; camRenewN = 0; camLast = 0; };   // an explicit tap: renewals may start again
@@ -3044,7 +3045,8 @@
     if (camGaveUp) return old;
     if (camLast && now - camLast < 15000) return old;                       // too soon after the last one: a later tick tries again
     if (camRenewN >= 3) { camGaveUp = true; camMsg("No pude renovar la sesión de video"); camNoSes(); return old; }   // 3 tokens, no picture
-    camRenewN++; camLast = now;
+    if (camView || camList.some((c) => c.en_linea)) camRenewN++;      // 0.69.2: with every camera off nothing can prove it, so it doesn't count
+    camLast = now;
     const e = await camNewSession("");
     if (e) { camMsg(e); return false; }
     if (!$("cam-msg").textContent.startsWith("El servicio")) camMsg("");
@@ -3196,7 +3198,9 @@
       if (!r.ok || tab !== "casa") return;
       const d = await r.json();
       if (d.estado === "desactivado") { camClose(); $("casa-camaras").hidden = true; return; }
+      const was = new Set(camList.filter((c) => c.en_linea).map((c) => c.nombre));
       camList = d.camaras || [];
+      if (camList.some((c) => c.en_linea && !was.has(c.nombre))) { camGaveUp = false; camRenewN = 0; }   // a camera came back: renewals may start again
       if (d.estado !== "ok") { camMsg("El servicio de cámaras no responde" + (d.causa ? " · " + d.causa : "")); camClose(); }
       else if ($("cam-msg").textContent.startsWith("El servicio")) camMsg("");
       if (d.estado === "ok") {

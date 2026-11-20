@@ -593,6 +593,19 @@
   #cam-ver { display: block; width: 100%; margin: 0 0 var(--s3); }
   #cam-sheet input { width: 100%; margin: var(--s2) 0; border-radius: var(--r-control); border: 1px solid transparent; padding: var(--s3); background: var(--field); color: var(--label);
                      font: 600 22px var(--mono); letter-spacing: .3em; text-align: center; }
+  /* ---- casa: mapa (0.70.0) ---- */
+  .mp-entry { margin-bottom: var(--s4); }
+  .mp-entry .ep-card { width: 100%; }
+  .mp-entry .ep-card .v { font-size: var(--fs-small); line-height: 1.7; color: var(--label); }
+  .mp-stage { position: relative; height: min(62vh, 560px); border-radius: var(--r-card); overflow: hidden; background: var(--row); border: 1px solid var(--border); touch-action: none; }
+  .mp-stage canvas { display: block; width: 100%; height: 100%; }
+  .mp-stage .mp-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: var(--pad); text-align: center; color: var(--secondary); font-size: var(--fs-meta); }
+  .mp-bar { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin: var(--s3) 0; }
+  .mp-stat { font: var(--fs-meta) var(--mono); color: var(--secondary); margin: 0 2px; }
+  .mp-scan .k { font: var(--fs-meta) var(--mono); color: var(--secondary); }
+  .mp-scan .bad { color: var(--amber); font-size: var(--fs-meta); }
+  .mp-new { display: grid; gap: var(--s2); margin-top: var(--s3); }
+  .mp-new .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
   /* ---- casa: energía ---- */
   .ep-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin-bottom: var(--s4); }
   .ep-card { margin: 0; width: auto; display: block; text-align: left; padding: var(--s3) var(--pad); background: var(--row); color: var(--label);
@@ -842,6 +855,9 @@
       <button type="button" class="ep-card" id="casa-card-ahora"><span class="k">Ahora</span><span class="v">–</span></button>
       <button type="button" class="ep-card" id="casa-card-hoy"><span class="k">Hoy</span><span class="v">–</span></button>
     </div>
+    <div class="mp-entry" id="casa-mapa-entry" hidden>
+      <button type="button" class="ep-card" id="casa-card-mapa"><span class="k">Mapa de la casa</span><span class="v">–</span></button>
+    </div>
     <div id="casa-camaras" hidden>
       <div class="casa-area">Cámaras</div>
       <div class="casa-ha" id="cam-msg" role="status" hidden></div>
@@ -850,7 +866,30 @@
       <div class="cam-grid" id="cam-grid"></div>
     </div>
     <div id="casa-list"></div>
-    <div class="casa-foot"><button type="button" class="casa-btn" id="casa-org">Organizar</button></div>
+    <div class="casa-foot"><button type="button" class="casa-btn" id="casa-org">Organizar</button> <button type="button" class="casa-btn" id="casa-nueva">＋ Casa</button>
+      <form class="mp-new" id="casa-nueva-form" hidden>
+        <div class="note">Una casa sin Home Assistant: solo tendrá su mapa. Se agrega cuando lo apruebes en «Por aprobar».</div>
+        <input class="field" id="cn-nombre" maxlength="60" placeholder="Nombre (Barranquilla)" autocomplete="off">
+        <div class="two"><input class="field" id="cn-lat" inputmode="decimal" placeholder="Latitud (10.96)"><input class="field" id="cn-lon" inputmode="decimal" placeholder="Longitud (-74.80)"></div>
+        <div class="note">Las coordenadas son para el modo noche del mapa; basta la ciudad. Se guardan con dos decimales.</div>
+        <div class="casa-ha" id="cn-msg" role="status" hidden></div>
+        <button type="submit" id="cn-ok">Pedir aprobación</button>
+      </form>
+    </div>
+    </div>
+    <!-- mapa (0.70.0) -->
+    <div id="casa-mapa" hidden>
+      <div class="casa-head"><button type="button" class="casa-btn" id="mp-back" aria-label="Volver a la casa">‹ Casa</button><h2 id="mp-title">Mapa</h2></div>
+      <div class="mp-stage" id="mp-stage"><div class="mp-empty" id="mp-empty">Cargando…</div></div>
+      <div class="mp-bar">
+        <div class="ep-lv" role="group" aria-label="Vista"><button type="button" class="casa-pill" id="mp-planta" aria-pressed="true">Planta</button><button type="button" class="casa-pill" id="mp-3d" aria-pressed="false">3D</button></div>
+        <span class="mp-stat" id="mp-stat"></span>
+      </div>
+      <div class="casa-area">Escaneos</div>
+      <div class="casa-ha" id="mp-msg" role="status" hidden></div>
+      <div class="group" id="mp-scans"></div>
+      <div class="casa-tools"><button type="button" class="casa-btn" id="mp-subir">Subir escaneo (.glb)</button><input type="file" id="mp-file" accept=".glb,model/gltf-binary" hidden></div>
+      <div class="note">El original se guarda tal cual. Un equipo con el módulo «escaneo» (el Ryzen 9) lo optimiza cuando está libre.</div>
     </div>
     <!-- energía -->
     <div id="casa-energia" hidden>
@@ -2209,7 +2248,7 @@
   function showSignin(error) {
     key = null; role = null; clearTimeout(casaTimer);        // casa: the poll ends with the session
     camReset();                                               // cameras: player, peer, timers and the video session end with it
-    clearTimeout(epTimer); epOpen = false; epReq++; $("casa-energia").hidden = true; $("casa-main").hidden = false;   // energía too
+    clearTimeout(epTimer); epOpen = false; if (MP.on) mpShow(false); epReq++; $("casa-energia").hidden = true; $("casa-main").hidden = false;   // energía too
     try { localStorage.removeItem(KEY); } catch (e) {}
     for (const id of ["dashboard", "settings", "chat", "diary", "casa", "cerebro", "tabs", "composer", "guest-signout", "greet", "inbox-pill"]) $(id).hidden = true;
     cerebroShow(false); CB.data = null; CB.nodes = null; CB.hasta = null; $("cb-card").hidden = true;   // nothing of the brain outlives the session
@@ -2482,7 +2521,7 @@
   async function cbStart() {
     const msg = $("cb-msg");
     if (!CB.three) {
-      try { CB.three = await import(new URL("vendor/three.min.js?v=0.187.0", location.href).href); }
+      try { CB.three = await import(new URL(THREE_URL, location.href).href); }
       catch (e) { msg.hidden = false; msg.textContent = "No pude cargar el motor 3D del cerebro."; return; }
     }
     if (!CB.on) return;
@@ -2774,6 +2813,9 @@
     return r;
   }
   // --- casa ---------------------------------------------------------------
+  const THREE_URL = "vendor/three.min.js?v=0.187.0-mapa";      // Cerebro and Casa · Mapa share one bundle (0.70.0)
+  const MP = { on: false, three: null, r: null, scene: null, cam: null, ctl: null, ktx: null, root: null, box: null, vista: "planta",
+               eid: null, gen: 0, ro: null, raf: 0, timer: null };
   // Home Assistant devices. Rows are keyed by data-entity; every 5 s only the state/power text moves, and the list is rebuilt
   // only when the set (or order, favorites, hidden, organise mode) changes.
   let casaData = null, casaId = null, casaOrg = false, casaSigLast = null, casaTimer = null, casaBusy = false, casaReq = 0;
@@ -2781,7 +2823,8 @@
   const CASA_ES = { on: "encendida", off: "apagada", locked: "bloqueada", unlocked: "desbloqueada", open: "abierta", closed: "cerrada",
                     opening: "abriendo", closing: "cerrando", unavailable: "no disponible", unknown: "sin dato" };
   const CASA_HA = { sin_respuesta: "Home Assistant no responde", token_invalido: "El token de Home Assistant no es válido",
-                    sin_configurar: "Home Assistant no está configurado", error: "Home Assistant devolvió un error" };
+                    sin_configurar: "Home Assistant no está configurado", sin_ha: "Esta casa no tiene Home Assistant: solo el mapa",
+                    error: "Home Assistant devolvió un error" };
   function casaW(w) { return w >= 1000 ? (w / 1000).toLocaleString("es-CO", { maximumFractionDigits: 2 }) + " kW" : w.toLocaleString("es-CO", { maximumFractionDigits: 1 }) + " W"; }
   function casaEstado(d) {
     if (typeof d.potencia_w === "number") return casaW(d.potencia_w);
@@ -2902,6 +2945,7 @@
   }
   function casaRender(d) {
     casaData = d; casaId = d.casa; epCards(d);
+    $("casa-org").hidden = d.ha === "sin_ha";                // nothing to organize in a house that only has its map
     const all = [...d.favoritos, ...d.ocultos, ...d.areas.flatMap((a) => a.dispositivos)];
     for (const x of all) casaDev[x.entity_id] = x;
     const ha = $("casa-ha");
@@ -2944,7 +2988,7 @@
   }
   function casaLoop() {              // polls only while the tab is shown and the page is visible
     clearTimeout(casaTimer);
-    if (tab !== "casa" || document.hidden || !key || !unlocked) { camClose(); return; }
+    if (tab !== "casa" || document.hidden || !key || !unlocked) { camClose(); if (MP.on && (tab !== "casa" || !key)) mpShow(false); return; }
     loadCasa(); camTick();
     casaTimer = setTimeout(casaLoop, 5000);
   }
@@ -3189,7 +3233,7 @@
     } catch (e) { if (my === camGen) fallback(); }
   }
   async function camTick() {
-    if (camBusy || epOpen) { if (epOpen) camClose(); return; }
+    if (camBusy || epOpen || MP.on) { if (epOpen || MP.on) camClose(); return; }
     camBusy = true;
     try {
       if (!camDoor) {
@@ -3227,6 +3271,7 @@
   function epCards(d) {
     const box = $("casa-ahora"), e = d.energia;
     box.hidden = !d.casa || !e;
+    mpEntry(d);
     if (box.hidden) return;
     const set = (id, t, warn) => { const v = $(id).querySelector(".v"); if (v.textContent !== t) v.textContent = t; v.classList.toggle("warn", !!warn); };
     set("casa-card-ahora", typeof e.ahora_w === "number" ? casaW(e.ahora_w) : "–");
@@ -3509,6 +3554,202 @@
   }
   for (const id of ["casa-card-ahora", "casa-card-hoy"]) $(id).addEventListener("click", () => epShow(true));
   $("ep-back").addEventListener("click", () => epShow(false));
+  // --- casa: mapa (0.70.0) ------------------------------------------------
+  // The house scan, optimized by gltfpack (meshopt + KTX2), drawn with three.js. Drawn only when something changes (a
+  // touch, a resize, the view switch): 0 fps at rest. Loaded when the view opens, everything freed when it closes.
+  const mpBytes = (b) => b >= 1048576 ? (b / 1048576).toLocaleString("es-CO", { maximumFractionDigits: 1 }) + " MB" : Math.round(b / 1024) + " KB";
+  const MP_ESTADO = { procesando: "Procesando", listo: "Listo", fallo: "Falló" };
+  function mpEntry(d) {
+    const box = $("casa-mapa-entry"), m = d.mapa;
+    box.hidden = !d.casa || !m;
+    if (box.hidden) return;
+    const p = m.escaneos.find((x) => x.estado === "procesando"), f = m.escaneos[0] && m.escaneos[0].estado === "fallo";
+    const t = m.activo ? "Escaneo listo · " + mpBytes(m.activo.bytes_mapa || 0) + (p ? " · otro procesando" : "")
+            : p ? "Procesando el escaneo…" : f ? "El último escaneo falló" : "Sin escaneo: súbelo aquí";
+    const v = $("casa-card-mapa").querySelector(".v"); if (v.textContent !== t) v.textContent = t;
+  }
+  function mpMsg(t) { const m = $("mp-msg"); m.textContent = t || ""; m.hidden = !t; }
+  function mpEmpty(t) { const e = $("mp-empty"); if (!e) return; e.textContent = t || ""; e.hidden = !t; }
+  function mpDraw() { if (MP.r && !MP.raf) MP.raf = requestAnimationFrame(() => { MP.raf = 0; if (MP.r) MP.r.render(MP.scene, MP.cam); }); }
+  function mpFree() {                            // renderer, GPU buffers, textures and the Basis workers
+    cancelAnimationFrame(MP.raf); MP.raf = 0; MP.gen++;
+    if (MP.ro) { MP.ro.disconnect(); MP.ro = null; }
+    if (MP.ctl) { MP.ctl.dispose(); MP.ctl = null; }
+    if (MP.root) MP.root.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      for (const m of [].concat(o.material || [])) { if (m.map) m.map.dispose(); m.dispose(); }
+    });
+    if (MP.ktx) { MP.ktx.dispose(); MP.ktx = null; }
+    if (MP.r) { MP.r.dispose(); MP.r.forceContextLoss(); MP.r.domElement.remove(); MP.r = null; }
+    MP.scene = MP.cam = MP.root = MP.box = null; MP.eid = null;
+  }
+  function mpCamera() {                          // Planta: from above, ceiling cut; 3D: orbit around the house
+    const T = MP.three, b = MP.box, el = MP.r.domElement, w = el.clientWidth || 1, h = el.clientHeight || 1;
+    const c = b.getCenter(new T.Vector3()), s = b.getSize(new T.Vector3()), span = Math.max(s.x, s.z) * 1.08;
+    if (MP.ctl) { MP.ctl.dispose(); MP.ctl = null; }
+    if (MP.vista === "planta") {
+      const a = w / h, hw = a >= 1 ? span * a / 2 : span / 2, hh = a >= 1 ? span / 2 : span / a / 2;
+      MP.cam = new T.OrthographicCamera(-hw, hw, hh, -hh, 0.1, s.y + 50);
+      MP.cam.position.set(c.x, b.max.y + 20, c.z); MP.cam.up.set(0, 0, -1); MP.cam.lookAt(c.x, c.y, c.z);
+    } else {
+      MP.cam = new T.PerspectiveCamera(50, w / h, 0.05, 200);
+      // far enough that the whole house fits the narrower side of the screen (a phone held upright)
+      const half = Math.tan(25 * Math.PI / 180) * Math.min(1, w / h), d = span * 0.75 / half;
+      const dir = new T.Vector3(0.5, 0.75, 0.8).normalize();
+      MP.cam.position.set(c.x + dir.x * d, b.min.y + dir.y * d, c.z + dir.z * d);
+    }
+    const ctl = new T.OrbitControls(MP.cam, el);
+    ctl.target.set(c.x, MP.vista === "planta" ? c.y : b.min.y + s.y * 0.3, c.z);
+    ctl.enableDamping = false; ctl.screenSpacePanning = true; ctl.zoomToCursor = true;
+    if (MP.vista === "planta") { ctl.enableRotate = false; ctl.minZoom = 0.6; ctl.maxZoom = 12; ctl.touches = { ONE: 1, TWO: 2 }; ctl.mouseButtons.LEFT = 2; }   // one finger pans, two zoom (TOUCH.PAN, DOLLY_PAN, MOUSE.PAN)
+    else { ctl.minDistance = 0.5; ctl.maxDistance = span * 3; ctl.maxPolarAngle = Math.PI * 0.48; }
+    ctl.addEventListener("change", mpDraw);
+    ctl.update(); MP.ctl = ctl; mpDraw();
+  }
+  function mpResize() {
+    if (!MP.r) return;
+    const el = $("mp-stage"), w = el.clientWidth, h = el.clientHeight;
+    MP.r.setSize(w, h, false);
+    if (MP.box) mpCamera();
+  }
+  function mpKtx(T, r) {
+    // KTX2Loader builds its Basis worker from a blob, which would inherit the panel's policy, and the transcoder needs eval.
+    // The same worker is served as a file (vendor/basis/ktx2-worker.js, made by deploy/build_three.sh) with a policy of
+    // its own; only init changes, the rest is three 0.187.0's own loader.
+    const k = new T.KTX2Loader();
+    k.init = function () {
+      if (!this.transcoderPending) {
+        this.transcoderPending = fetch(new URL("vendor/basis/basis_transcoder.wasm?v=0.187.0", location.href).href)
+          .then((res) => { if (!res.ok) throw new Error("basis " + res.status); return res.arrayBuffer(); })
+          .then((bin) => {
+            this.transcoderBinary = bin;
+            this.workerPool.setWorkerCreator(() => {
+              const w = new Worker(new URL("vendor/basis/ktx2-worker.js?v=0.187.0", location.href).href), t = this.transcoderBinary.slice(0);
+              w.postMessage({ type: "init", config: this.workerConfig, transcoderBinary: t }, [t]);
+              return w;
+            });
+          });
+      }
+      return this.transcoderPending;
+    };
+    return k.detectSupport(r);
+  }
+  async function mpLoad(cid, x) {
+    if (MP.eid === x.id && MP.r) return;
+    mpFree(); const gen = MP.gen, t0 = performance.now();
+    mpEmpty("Cargando el mapa…");
+    if (!MP.three) {
+      try { MP.three = await import(new URL(THREE_URL, location.href).href); CB.three = CB.three || MP.three; }
+      catch (e) { mpEmpty("No pude cargar el motor 3D."); return; }
+    }
+    const T = MP.three;
+    if (gen !== MP.gen || !MP.on) return;
+    let r;
+    try { r = new T.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); }
+    catch (e) { mpEmpty("Este navegador no tiene WebGL: el mapa no se puede mostrar."); return; }
+    r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); r.localClippingEnabled = true;
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--row").trim() || "#111";
+    r.setClearColor(new T.Color(bg)); $("mp-stage").prepend(r.domElement); MP.r = r; MP.scene = new T.Scene();
+    const ktx = mpKtx(T, r); MP.ktx = ktx;
+    const loader = new T.GLTFLoader().setKTX2Loader(ktx).setMeshoptDecoder(T.MeshoptDecoder).setRequestHeader({ "X-Admin-Key": key });
+    let g;
+    try { g = await loader.loadAsync("api/casa/" + cid + "/escaneos/" + x.id + "/mapa.glb"); }
+    catch (e) { if (gen === MP.gen) { mpFree(); mpEmpty("No pude abrir el escaneo. Vuelve a intentarlo."); } return; }
+    if (gen !== MP.gen || !MP.on) { g.scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); return; }
+    MP.root = g.scene; MP.box = new T.Box3().setFromObject(MP.root); MP.eid = x.id;
+    // the scan already carries its light in the textures: shown as it is, never re-lit; the ceiling is cut off
+    const cut = new T.Plane(new T.Vector3(0, -1, 0), MP.box.max.y - Math.min(0.35, (MP.box.max.y - MP.box.min.y) * 0.15));
+    let tris = 0;
+    MP.root.traverse((o) => {
+      if (!o.isMesh) return;
+      const old = o.material, map = old && old.map;
+      if (map) map.colorSpace = T.SRGBColorSpace;
+      o.material = new T.MeshBasicMaterial({ map: map || null, color: map ? 0xffffff : 0x8a8a8a, side: T.DoubleSide, clippingPlanes: [cut] });
+      if (old) old.dispose();
+      tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+    });
+    MP.scene.add(MP.root);
+    mpEmpty(""); mpResize();
+    MP.ro = new ResizeObserver(mpResize); MP.ro.observe($("mp-stage"));
+    $("mp-stat").textContent = "Cargado en " + ((performance.now() - t0) / 1000).toLocaleString("es-CO", { maximumFractionDigits: 1 }) + " s · "
+      + mpBytes(x.bytes_mapa || 0) + " · " + Math.round(tris / 1000) + " mil triángulos";
+  }
+  function mpScans(cid, m) {
+    const rows = m.escaneos.map((x) => {
+      const r = el("div", "row mp-scan"), t = el("div", "t");
+      t.append(el("div", "", x.nombre + (x.activo ? " · base" : "")),
+               el("div", "k", new Date(x.fecha * 1000).toLocaleDateString("es-CO") + " · " + (MP_ESTADO[x.estado] || x.estado) + " · " + mpBytes(x.bytes_original) + (x.bytes_mapa ? " → " + mpBytes(x.bytes_mapa) : "")));
+      if (x.estado === "fallo" && x.motivo) t.append(el("div", "bad", x.motivo));
+      r.append(t);
+      if (x.estado === "fallo") r.append(casaBtn("Reintentar", async () => {
+        const e = await casaSend("POST", "api/casa/" + cid + "/escaneos/" + x.id + "/reintentar"); mpMsg(e || ""); mpRefresh();
+      }));
+      return r;
+    });
+    if (!rows.length) rows.push(el("div", "row", "Todavía no hay escaneos."));
+    $("mp-scans").replaceChildren(...rows);
+  }
+  async function mpRefresh() {
+    if (!MP.on || !casaId) return;
+    clearTimeout(MP.timer);
+    const cid = casaId;
+    try {
+      const r = await api("api/casa/" + cid + "/escaneos", { signal: AbortSignal.timeout(8000) });
+      if (!r.ok || !MP.on || cid !== casaId) return;
+      const m = await r.json();
+      mpScans(cid, m);
+      if (m.activo) mpLoad(cid, m.activo);
+      else { mpFree(); mpEmpty(m.escaneos.some((x) => x.estado === "procesando") ? "Procesando el escaneo. Aparece aquí cuando esté listo." : "Sube el escaneo de la casa (.glb de la app de LiDAR)."); }
+      if (m.escaneos.some((x) => x.estado === "procesando")) MP.timer = setTimeout(mpRefresh, 10000);
+    } catch (e) {}
+  }
+  function mpShow(on) {
+    MP.on = on; clearTimeout(MP.timer);
+    $("casa-mapa").hidden = !on; $("casa-main").hidden = on;
+    if (!on) { mpFree(); return; }
+    camClose(); window.scrollTo({ top: 0 }); mpMsg("");
+    const c = casaData && casaData.casas.find((x) => x.id === casaId);
+    $("mp-title").textContent = "Mapa" + (c ? " · " + c.nombre : "");
+    mpRefresh();
+  }
+  $("casa-card-mapa").addEventListener("click", () => mpShow(true));
+  $("mp-back").addEventListener("click", () => mpShow(false));
+  for (const [id, v] of [["mp-planta", "planta"], ["mp-3d", "3d"]]) $(id).addEventListener("click", () => {
+    MP.vista = v; $("mp-planta").setAttribute("aria-pressed", String(v === "planta")); $("mp-3d").setAttribute("aria-pressed", String(v === "3d"));
+    if (MP.box) mpCamera();
+  });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && MP.on) mpDraw(); });
+  $("mp-subir").addEventListener("click", () => $("mp-file").click());
+  $("mp-file").addEventListener("change", async () => {
+    const f = $("mp-file").files[0], cid = casaId; $("mp-file").value = "";
+    if (!f || !cid) return;
+    if (f.size > 100 * 1048576) { mpMsg("El escaneo pasa de 100 MB."); return; }
+    const up = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+    const PARTE = 4 * 1048576, n = Math.max(1, Math.ceil(f.size / PARTE)), btn = $("mp-subir"); btn.disabled = true;
+    try {
+      for (let i = 0; i < n; i++) {
+        mpMsg("Subiendo " + Math.round(i / n * 100) + " %…");
+        const r = await api("api/casa/" + cid + "/escaneos/parte?upload=" + up + "&i=" + i,
+                            { method: "PUT", body: f.slice(i * PARTE, (i + 1) * PARTE), headers: { "Content-Type": "application/octet-stream" } });
+        if (!r.ok) { mpMsg((await r.json().catch(() => ({}))).detail || "La subida falló."); return; }
+      }
+      const r = await api("api/casa/" + cid + "/escaneos", { method: "POST", body: JSON.stringify({ upload: up, nombre: f.name.replace(/\.glb$/i, "").slice(0, 80) || "escaneo" }) });
+      mpMsg(r.ok ? "Subido. Se optimiza en el Ryzen 9 cuando esté libre." : ((await r.json().catch(() => ({}))).detail || "La subida falló."));
+      mpRefresh();
+    } catch (e) { mpMsg("Se cortó la subida. Vuelve a elegir el archivo."); }
+    finally { btn.disabled = false; }
+  });
+  $("casa-nueva").addEventListener("click", () => { const f = $("casa-nueva-form"); f.hidden = !f.hidden; if (!f.hidden) $("cn-nombre").focus(); });
+  $("casa-nueva-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const num = (id) => { const v = $(id).value.trim().replace(",", "."); return v === "" ? null : Number(v); };
+    const body = { nombre: $("cn-nombre").value.trim(), lat: num("cn-lat"), lon: num("cn-lon") }, m = $("cn-msg");
+    if (!body.nombre || Number.isNaN(body.lat) || Number.isNaN(body.lon)) { m.textContent = "Revisa el nombre y las coordenadas."; m.hidden = false; return; }
+    const e = await casaSend("POST", "api/casas", body);
+    m.textContent = e || "Listo: apruébala en «Por aprobar»."; m.hidden = false;
+    if (!e) { $("cn-nombre").value = $("cn-lat").value = $("cn-lon").value = ""; }
+  });
+
   $("ep-tab").addEventListener("change", async () => {
     epErr(""); const sel = $("ep-tab"), e = await epPut("api/casa/" + casaId + "/energia/total", { entity_id: sel.value || null });
     if (e) { sel.blur(); sel.value = (epData && epData.tablero) || ""; epErr(e); return; }       // back to what the server has

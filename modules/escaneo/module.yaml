@@ -1,0 +1,5 @@
+name: escaneo
+version: 0.1.0
+os: [windows, macos, linux]
+tier: read          # Casa · Mapa (0.70.0): downloads a house scan from the core, optimizes it with gltfpack, uploads the result; touches no file of Sergio's
+needs: {}

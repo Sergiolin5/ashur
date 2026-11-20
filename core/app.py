@@ -52,8 +52,14 @@ from shared.protocol import (
 )
 
 UI_PAGE = Path(__file__).parent / "ui" / "index.html"
+# 0.70.0: Casa · Mapa decodes its scan with WebAssembly (meshopt here, Basis in a worker file). The Basis transcoder also
+# needs eval (emscripten embind): only its worker gets it, with a policy of its own (BASIS_WORKER_CSP), never the panel
+PANEL_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
+             "worker-src 'self'; img-src 'self' data:")
+BASIS_WORKER_CSP = "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'"
 APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", "/sw.js",   # public: the icon and manifest
-             "/vendor/three.min.js")                                                    # and three.js (MIT) for «Cerebro»
+             "/vendor/three.min.js",                                                    # and three.js (MIT) for «Cerebro»
+             "/vendor/basis/ktx2-worker.js", "/vendor/basis/basis_transcoder.wasm")      # 0.70.0: KTX2 textures of Casa · Mapa
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
@@ -279,7 +285,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.69.2", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.70.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -718,6 +724,10 @@ def create_app(
                     db.mudanza_finish(mid, "fallida", why[:300], now)
                 db.log(now, t["node_id"], "mudanza", {"id": mid, "estado": "hecha" if res.ok and not r.get("fallidos") else "fallida",
                                                       **{k: r[k] for k in ("copiados", "enlazados", "fallidos") if k in r}})
+        if t["module"] == "escaneo":                             # 0.70.0: the map arrived by PUT; a failure says why
+            eid = (json.loads(t["payload"]) if isinstance(t["payload"], str) else (t["payload"] or {})).get("escaneo_id")
+            if isinstance(eid, int) and db.escaneo_fallo(eid, (res.error or "") if not res.ok else "terminó sin entregar el mapa"):
+                db.log(now, t["node_id"], "escaneo", {"id": eid, "estado": "fallo", "motivo": (res.error or "sin mapa")[:160]})
         if t["module"] == "inventory" and res.ok and not (res.result or {}).get("stopped"):
             inventory_sweep(t)
         if t["module"] == "voice":
@@ -866,7 +876,7 @@ def create_app(
         """The status page the ZimaOS "open" button shows. Data needs the admin key."""
         return HTMLResponse(UI_PAGE.read_text(encoding="utf-8"),
                             headers={"Cache-Control": "no-store",
-                                     "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:"})
+                                     "Content-Security-Policy": PANEL_CSP})
 
     # --- home-screen app (iPhone "Agregar a pantalla de inicio") ------------
     @app.get("/sw.js")
@@ -1866,7 +1876,7 @@ def create_app(
 
     # --- casa (0.57.0): Home Assistant over REST; the token is read from the environment at each use and never stored ---
     CASA_TXT = {"sin_respuesta": "Home Assistant no responde", "token_invalido": "El token de Home Assistant no es válido",
-                "error": "Home Assistant devolvió un error"}
+                "sin_ha": "Esta casa todavía no tiene Home Assistant", "error": "Home Assistant devolvió un error"}
     def casa_txt(motivo: str, causa: str = "") -> str:
         t = CASA_TXT.get(motivo, CASA_TXT["error"])
         return f"{t} ({causa})" if causa else t
@@ -1884,6 +1894,8 @@ def create_app(
                                              "en_estado": "pendiente", "en_falla_t": None, "en_fuentes": None})
 
     def casa_client(row: dict, e: dict) -> HAClient:
+        if not row.get("ha_url"):                               # 0.70.0: a house without Home Assistant has only its map
+            raise HAError("sin_ha")
         token = env.get(row["ha_token_env"], "")
         if not token:
             raise HAError("token_invalido")
@@ -1970,9 +1982,11 @@ def create_app(
         if casa is not None and not row:
             raise HTTPException(404, "esa casa no existe")
         out = {"casas": [{"id": r["id"], "nombre": r["nombre"]} for r in rows], "casa": row["id"] if row else None,
-               "ha": "sin_configurar", "ha_causa": None, "visto": None}
-        if not row:
-            return {**out, "energia": {"ahora_w": None, "hoy_kwh": None, "total": "suma", "estadisticas": "pendiente"},
+               "ha": "sin_configurar", "ha_causa": None, "visto": None, "mapa": mapa_resumen(row) if row else None}
+        if row and not row.get("ha_url"):                       # 0.70.0: only the map, no controls and no energy
+            out["ha"] = "sin_ha"
+        if not row or not row.get("ha_url"):
+            return {**out, "energia": None if row else {"ahora_w": None, "hoy_kwh": None, "total": "suma", "estadisticas": "pendiente"},
                     **casa_mod.vista([], {}, {})}
         e, ha, causa, states, areas, devices, visto = casa_cache(row)
         disps = db.casa_disps(row["id"])
@@ -2172,7 +2186,8 @@ def create_app(
 
     def energia_due() -> None:
         for row in db.casas():
-            energia_casa(row)
+            if row.get("ha_url"):                               # 0.70.0: nothing to sync in a house without Home Assistant
+                energia_casa(row)
     app.state.energia_due = energia_due
 
     def casa_o_404(cid: int) -> dict:
@@ -2180,6 +2195,180 @@ def create_app(
         if not row:
             raise HTTPException(404, "esa casa no existe")
         return row
+
+    # --- casa · mapa (0.70.0): stage 1 of the design «Casa — mapa 3D» (2026-11-19) ----------------------------------------
+    # A house without Home Assistant, the scan uploaded in parts, optimized by gltfpack on a node with the `escaneo`
+    # module (the Ryzen 9) and served to the panel. The original is never touched; the map lives next to it.
+    data_root = Path(os.path.dirname(os.path.abspath(db_path)))
+    ESCANEO_MAX = 100 << 20                                      # Sergio's iPhone scans are ~20 MB; the design allows 100
+    ESCANEO_PARTE_MAX = 8 << 20
+    MAPA_MAX = 40 << 20                                          # the optimized map should be ~3 MB; anything near this is wrong
+
+    def escaneo_dir(cid: int, eid: int) -> Path:
+        return data_root / "casa" / str(cid) / "escaneos" / str(eid)
+
+    def escaneo_tmp(upload: str) -> Path:
+        d = data_root / "escaneos-tmp"
+        d.mkdir(exist_ok=True)
+        return d / (upload + ".glb")
+
+    def escaneo_publico(x: dict) -> dict:
+        return {k: x[k] for k in ("id", "nombre", "fecha", "alcance", "estado", "motivo", "bytes_original", "bytes_mapa", "activo")}
+
+    def mapa_resumen(row: dict) -> dict:
+        es = db.escaneos(row["id"])
+        activo = next((x for x in es if x["activo"] and x["estado"] == "listo"), None)
+        return {"activo": escaneo_publico(activo) if activo else None, "escaneos": [escaneo_publico(x) for x in es[:20]],
+                "lat": row.get("lat"), "lon": row.get("lon")}
+
+    def escaneo_encolar(eid: int) -> int:
+        return db.add_task("escaneo", {"escaneo_id": eid}, Weight.HEAVY.value, clock())
+
+    for _c in db.casas():                                        # a scan whose task was lost (database restored, task deleted)
+        for _x in db.escaneos(_c["id"]):
+            if _x["estado"] == "procesando" and not db.has_open_task("escaneo", "escaneo_id", _x["id"]):
+                escaneo_encolar(_x["id"])
+
+    class CasaNueva(BaseModel):
+        nombre: str = Field(min_length=1, max_length=60)
+        lat: Optional[float] = None
+        lon: Optional[float] = None
+
+    @app.post("/api/casas", dependencies=[Depends(require_admin)])
+    def casa_nueva(b: CasaNueva):
+        nombre = b.nombre.strip()
+        try:
+            lat, lon = casa_mod.coordenadas(b.lat, b.lon)
+        except ValueError as x:
+            raise HTTPException(422, str(x)) from None
+        if not nombre or db.casa_nombre_existe(nombre):
+            raise HTTPException(409, "Ya hay una casa con ese nombre.")
+        args = {"nombre": nombre, "lat": lat, "lon": lon}
+        with request_lock:
+            if (old := db.claude_request_pending_same("casa_nueva", args)):
+                return {"pedido": old}
+            if db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                raise HTTPException(409, "Ya hay 5 pedidos esperando; decide alguno primero.")
+            rid = db.claude_request_add(clock(), "casa_nueva", args, "Agregaste una casa sin Home Assistant: solo tendrá el mapa.")
+        db.log(clock(), None, "claude_request", {"id": rid, "action": "casa_nueva", "label": action_label("casa_nueva", args)})
+        return {"pedido": rid}
+
+    @app.put("/api/casa/{cid}/escaneos/parte", dependencies=[Depends(require_admin)])
+    async def escaneo_parte(cid: int, request: Request, upload: str = Query(pattern=r"^[0-9a-f]{32}$"), i: int = Query(ge=0, le=100)):
+        casa_o_404(cid)
+        data = await request.body()
+        if not data or len(data) > ESCANEO_PARTE_MAX:
+            raise HTTPException(413, "Cada parte tiene que pesar entre 1 byte y 8 MB.")
+        f = escaneo_tmp(upload)
+        now = time.time()
+        for old in f.parent.glob("*.glb"):                      # leftovers of an upload that never finished
+            if now - old.stat().st_mtime > 86400:
+                old.unlink(missing_ok=True)
+        if i == 0:
+            f.unlink(missing_ok=True)
+        elif not f.exists():
+            raise HTTPException(409, "Falta la primera parte: vuelve a elegir el archivo.")
+        size = f.stat().st_size if f.exists() else 0
+        if size + len(data) > ESCANEO_MAX:
+            f.unlink(missing_ok=True)
+            raise HTTPException(413, "El escaneo pasa de 100 MB.")
+        with f.open("ab") as h:
+            h.write(data)
+        return {"ok": True, "bytes": size + len(data)}
+
+    class EscaneoIn(BaseModel):
+        upload: str = Field(pattern=r"^[0-9a-f]{32}$")
+        nombre: str = Field(min_length=1, max_length=80)
+
+    @app.post("/api/casa/{cid}/escaneos", dependencies=[Depends(require_admin)])
+    def escaneo_subir(cid: int, b: EscaneoIn):
+        casa_o_404(cid)
+        f = escaneo_tmp(b.upload)
+        if not f.exists():
+            raise HTTPException(404, "Esa subida ya no está: vuelve a elegir el archivo.")
+        size = f.stat().st_size
+        with f.open("rb") as h:
+            head = h.read(12)
+        if not casa_mod.glb_ok(head, size):
+            f.unlink(missing_ok=True)
+            raise HTTPException(422, "Ese archivo no es un .glb completo. Exporta el escaneo otra vez como GLB.")
+        eid = db.escaneo_add(cid, b.nombre.strip(), clock(), size)
+        d = escaneo_dir(cid, eid)
+        d.mkdir(parents=True, exist_ok=True)
+        os.replace(f, d / "original.glb")
+        tid = escaneo_encolar(eid)
+        db.log(clock(), None, "escaneo", {"id": eid, "casa": cid, "estado": "procesando", "bytes": size, "task_id": tid})
+        return escaneo_publico(db.escaneo_get(eid))
+
+    @app.get("/api/casa/{cid}/escaneos", dependencies=[Depends(require_admin)])
+    def escaneos_list(cid: int):
+        return mapa_resumen(casa_o_404(cid))
+
+    def escaneo_de(cid: int, eid: int) -> dict:
+        x = db.escaneo_get(eid)
+        if not x or x["casa_id"] != cid:
+            raise HTTPException(404, "ese escaneo no existe")
+        return x
+
+    @app.get("/api/casa/{cid}/escaneos/{eid}/mapa.glb", dependencies=[Depends(require_admin)])
+    def escaneo_mapa(cid: int, eid: int):
+        x = escaneo_de(cid, eid)
+        f = escaneo_dir(cid, eid) / "mapa.glb"
+        if x["estado"] != "listo" or not f.is_file():
+            raise HTTPException(409, "Ese escaneo todavía no está listo.")
+        # same id, same bytes forever: a re-processed scan gets a new id, so the phone may keep it for a month
+        return FileResponse(f, media_type="model/gltf-binary", headers={"Cache-Control": "private, max-age=2592000, immutable"})
+
+    @app.post("/api/casa/{cid}/escaneos/{eid}/reintentar", dependencies=[Depends(require_admin)])
+    def escaneo_reintentar(cid: int, eid: int):
+        escaneo_de(cid, eid)
+        if not db.escaneo_reintentar(eid):
+            raise HTTPException(409, "Solo se reintenta un escaneo que falló.")
+        tid = escaneo_encolar(eid)
+        db.log(clock(), None, "escaneo", {"id": eid, "casa": cid, "estado": "procesando", "task_id": tid, "reintento": True})
+        return {"ok": True}
+
+    def escaneo_del_nodo(node_id: str, eid: int) -> dict:
+        """Only the node running this scan's task may read the original or hand in the map."""
+        x = db.escaneo_get(eid)
+        if not x or x["estado"] != "procesando" or not db.running_task_for(node_id, "escaneo", "escaneo_id", eid):
+            raise HTTPException(409, "ese escaneo no es tuyo ahora")
+        return x
+
+    @app.get("/nodes/{node_id}/escaneo/{eid}/original")
+    def escaneo_original(node_id: str, eid: int, node: dict = Depends(require_node)):
+        x = escaneo_del_nodo(node_id, eid)
+        return FileResponse(escaneo_dir(x["casa_id"], eid) / "original.glb", media_type="model/gltf-binary")
+
+    @app.put("/nodes/{node_id}/escaneo/{eid}/mapa")
+    async def escaneo_mapa_listo(node_id: str, eid: int, request: Request, size: int = Query(ge=20, le=MAPA_MAX),
+                                 sha256: str = Query(pattern=r"^[0-9a-f]{64}$"), node: dict = Depends(require_node)):
+        x = await asyncio.to_thread(escaneo_del_nodo, node_id, eid)
+        d = escaneo_dir(x["casa_id"], eid)
+        part = d / "mapa.glb.part"
+        import hashlib
+        h, n, head = hashlib.sha256(), 0, b""
+        try:
+            with part.open("wb") as out:
+                async for chunk in request.stream():
+                    n += len(chunk)
+                    if n > size:
+                        raise HTTPException(422, "el mapa trae más bytes de los que dijo")
+                    if len(head) < 12:
+                        head += chunk[:12 - len(head)]
+                    h.update(chunk)
+                    out.write(chunk)
+            if n != size or h.hexdigest() != sha256:
+                raise HTTPException(422, "el mapa llegó incompleto o distinto (tamaño o SHA-256)")
+            if not casa_mod.glb_ok(head, size):
+                raise HTTPException(422, "el mapa no es un .glb válido")
+            os.replace(part, d / "mapa.glb")
+        finally:
+            part.unlink(missing_ok=True)
+        await asyncio.to_thread(db.escaneo_listo, eid, size)
+        db.log(clock(), node_id, "escaneo", {"id": eid, "casa": x["casa_id"], "estado": "listo", "bytes": size,
+                                             "si": request.query_params.get("si")})
+        return {"ok": True}
 
     @app.get("/api/casa/{cid}/energia", dependencies=[Depends(require_admin)])
     def casa_energia(cid: int, resolucion: int = Query(default=1, ge=1, le=3),
@@ -2790,6 +2979,16 @@ def create_app(
     def vendor_three():
         return FileResponse(VENDOR / "three.min.js", media_type="text/javascript",
                             headers={"Cache-Control": "public, max-age=604800"})
+
+    @app.get("/vendor/basis/{name}")
+    def vendor_basis(name: str):
+        kinds = {"ktx2-worker.js": "text/javascript", "basis_transcoder.wasm": "application/wasm"}
+        if name not in kinds:
+            raise HTTPException(404, "Not Found")
+        h = {"Cache-Control": "public, max-age=604800"}
+        if name == "ktx2-worker.js":
+            h["Content-Security-Policy"] = BASIS_WORKER_CSP
+        return FileResponse(VENDOR / "basis" / name, media_type=kinds[name], headers=h)
 
     @app.get("/api/conversations/archivo", dependencies=[Depends(require_admin)])
     def conversation_archive():
@@ -5000,6 +5199,15 @@ def create_app(
                     return "not_done", "Ese tema ya no espera aprobación."
                 db.log(clock(), None, "tema_aprobado", {"tema": tid})
                 return "approved", "Listo en Ajustes → Apariencia. Todavía no está en uso: elígelo allí."
+            if action == "casa_nueva":                       # 0.70.0: a house without Home Assistant (map only)
+                a = req["args"]
+                nombre = str(a.get("nombre") or "").strip()
+                if not nombre or db.casa_nombre_existe(nombre):
+                    return "not_done", "Ya hay una casa con ese nombre."
+                lat, lon = casa_mod.coordenadas(a.get("lat"), a.get("lon"))
+                cid = db.casa_add(nombre, lat, lon)
+                db.log(clock(), None, "casa_nueva", {"casa": cid})
+                return "approved", f"La casa «{nombre}» ya está en Casa. Sube su escaneo desde ahí."
             if action == "cancelar_encargo":
                 return "approved", cancel_encargo(req["args"].get("encargo"))
             if action in ("pausar_cola", "reanudar_cola"):

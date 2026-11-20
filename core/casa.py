@@ -470,3 +470,27 @@ def totales(series: dict, medidos: list, tablero: Optional[str]) -> tuple:
     tab = [p for p in series.get(tablero) or [] if p["kwh"] is not None]
     total = [{"inicio": p["inicio"], "kwh": p["kwh"]} for p in tab]
     return total, [{"inicio": p["inicio"], "kwh": round(max(0.0, p["kwh"] - suma.get(p["inicio"], 0.0)), 6)} for p in tab]
+
+
+# --- casa · mapa (0.70.0) -------------------------------------------------------------------------------------------
+GLB_MAGIC = 0x46546C67        # "glTF"
+
+
+def glb_ok(head: bytes, size: int) -> bool:
+    """A binary glTF 2.0 whose header says exactly this many bytes (a cut upload or another file type fails)."""
+    if len(head) < 12 or size < 20:
+        return False
+    magic, version, length = int.from_bytes(head[0:4], "little"), int.from_bytes(head[4:8], "little"), int.from_bytes(head[8:12], "little")
+    return magic == GLB_MAGIC and version == 2 and length == size
+
+
+def coordenadas(lat, lon) -> tuple:
+    """Both or neither, inside the globe; anything else is a ValueError with words for the panel."""
+    if lat is None and lon is None:
+        return None, None
+    if lat is None or lon is None:
+        raise ValueError("Faltan la latitud o la longitud.")
+    lat, lon = float(lat), float(lon)
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError("Esas coordenadas no existen.")
+    return round(lat, 2), round(lon, 2)        # ~1 km: enough for the sun (about a second), never a street address

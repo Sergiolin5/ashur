@@ -13,11 +13,30 @@ from core.events import BOGOTA
 
 CARPETA = "ashur"
 PREFIJO = "ashur:"
+LOCAL = "solo local"            # the connector drops every line that says this (core/boveda/__init__.py)
 TEMAS = {"trabajo": "Trabajo y proyectos", "gustos": "Gustos y aficiones", "ashur": "Ashur mismo"}
 
 
 def fecha(ts) -> str:
     return dt.datetime.fromtimestamp(ts or 0, BOGOTA).strftime("%Y-%m-%d") if ts else ""
+
+
+def connector_view(rel: str, front: dict, body: str):
+    """What of an ashur/ note may go to Claude through the connector, with the same rules the rest of Ashur keeps:
+    «solo local» memories, the inbox, guests' profiles and conversations, and conversation summaries never leave.
+    None: the whole note stays home."""
+    if rel == f"{CARPETA}/Por revisar.md" or (rel.startswith(f"{CARPETA}/personas/") and rel != f"{CARPETA}/personas/Sergio.md"):
+        return None
+    if rel.startswith(f"{CARPETA}/conversaciones/") and front.get("con") != "[[Sergio]]":
+        return None
+    out, skip = [], False
+    for ln in body.splitlines():
+        if ln.startswith("## "):
+            skip = ln.strip() == "## Resumen"
+        if skip or LOCAL in ln:
+            continue
+        out.append(ln)
+    return "\n".join(out)
 
 
 def firma(db, persona_text: str) -> str:
@@ -81,7 +100,7 @@ def build(db, persona_text: str) -> dict:
             by_conv.setdefault(int(src[5:]), []).append(m)
 
     def mem_line(m: dict) -> str:
-        extra = [fecha(m["created"]), "solo local" if m["tier"] == "local" else "Claude puede verlo"]
+        extra = [fecha(m["created"]), LOCAL if m["tier"] == "local" else "Claude puede verlo"]
         src = str(m.get("source") or "")
         if src.startswith("conv:") and src[5:].isdigit() and int(src[5:]) in conv_stem:
             extra.append("de " + nota.link(conv_stem[int(src[5:])], "la conversación"))
@@ -136,7 +155,9 @@ def build(db, persona_text: str) -> dict:
             body += ["## Resumen", ""] + resumen + [""]
         learned = by_conv.get(cv["id"], [])
         if learned:
-            body += ["## Lo que Ashur aprendió", ""] + [f"- {' '.join(m['text'].split())} ^m{m['id']}" for m in learned]
+            body += ["## Lo que Ashur aprendió", ""] + [f"- {' '.join(m['text'].split())}"
+                                                        + (f" · {LOCAL}" if m["tier"] == "local" else "") + f" ^m{m['id']}"
+                                                        for m in learned]
         out[f"{CARPETA}/conversaciones/{conv_stem[cv['id']]}.md"] = (f"{PREFIJO}conv:{cv['id']}", nota.render(front, "\n".join(body)))
 
     # the inbox: what still waits for Sergio's yes

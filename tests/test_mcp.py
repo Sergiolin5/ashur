@@ -604,6 +604,16 @@ def test_connector_never_returns_private_material(tmp_path, fast_local):
              ("ashur_encargar", {"operacion": "resumir", "busqueda": "canario", "devolver_a_claude": True, "motivo": "prueba"}),
              ("ashur_ver_encargo", {"id": 1}),
              ("ashur_lote", {"pase": "tipo", "motivo": "prueba"}), ("ashur_ver_lote", {"id": 1})]
+    # 0.76.0: the vault mirrors all of Ashur's memory; the connector must keep the same promises
+    c.db.add_memory(now, "Un recuerdo compartible", "ashur")
+    c.db.proposal_add(now, "CANARIO-BANDEJA", "conv:1")
+    gid = c.db.add_guest(now, "Ana", "k-ana", 1.0)
+    c.db.add_memory(now, "CANARIO-INVITADO", "conv:x", owner=f"g{gid}")
+    c.app.state.boveda_ashur(force=True)
+    calls += [("ashur_buscar_nota", {"texto": "CANARIO"}), ("ashur_buscar_nota", {"texto": "recuerdo"}),
+              ("ashur_leer_nota", {"ruta": "ashur/memorias/Memoria - Sin tema.md"}),
+              ("ashur_leer_nota", {"ruta": "ashur/Por revisar.md"}),
+              ("ashur_leer_nota", {"ruta": f"ashur/personas/Ana (g{gid}).md"})]
     assert {n for n, _ in calls} == {t["name"] for t in rpc(c, "tools/list", headers={
         "Authorization": "Bearer " + c.key}).json()["result"]["tools"]}
     results = [tool_text(c, n, a) for n, a in calls]
@@ -613,8 +623,9 @@ def test_connector_never_returns_private_material(tmp_path, fast_local):
     assert outputs[4].startswith("Respuesta local.")                     # the local model really answered
     assert "CANARIO-VISIBLE.pdf" in outputs[2]                         # the search really ran over the inventory
     joined = "\n".join(outputs).upper()
+    assert "Un recuerdo compartible" in outputs[13]                      # the vault really was read
     for canary in ("CANARIO-DIARIO", "CANARIO-DOC", "CANARIO-LOCAL", "CANARIO-RESUMEN", "CANARIO-SENSIBLE",
-                   "CANARIO-OPINION", "CANARIO-PENDIENTE", "CANARIO-VOZ"):
+                   "CANARIO-OPINION", "CANARIO-PENDIENTE", "CANARIO-VOZ", "CANARIO-BANDEJA", "CANARIO-INVITADO"):
         assert canary not in joined
 
 

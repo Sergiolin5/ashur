@@ -234,6 +234,74 @@ def mount(app: FastAPI, d: Deps) -> dict:
 
     app.state.boveda_index = index
 
+    # --- the Ashur Connector (0.76.0): Claude searches and reads notes, read-only ---
+    from core.brain import health_split
+    from core.mcp import MAX_PENDING_REQUESTS, ToolError, action_label
+    LEER_MAX = 30_000
+    LIBERADA_S = 86400                        # a sergio/ note Sergio let Claude read stays readable for a day
+
+    def _ensure_index():
+        if not index.estado["listo"]:
+            g_refresh(wait=True)
+
+    def mcp_buscar(args: dict) -> str:
+        q = args.get("texto")
+        if not isinstance(q, str) or not 2 <= len(q.strip()) <= 200:
+            raise ToolError("«texto» debe tener de 2 a 200 caracteres.")
+        _ensure_index()
+        hits = grafo.search(base, index, q, 15)
+        if not hits:
+            return "No encontré notas con ese texto en la bóveda."
+        lines = []
+        for h in hits:
+            folder = h["ruta"].split("/", 1)[0]
+            # sergio/ is his files and ashur/ has memories that never leave: for both, the path only
+            frag = "" if folder in ("sergio", "ashur") else health_split(h["fragmento"])[0]
+            lines.append(f"- {h['ruta']} — {h['titulo']}" + (f"\n  «{frag}»" if frag else ""))
+        return ("Notas (léelas con ashur_leer_nota; las de sergio/ necesitan el sí de Sergio):\n" + "\n".join(lines))
+
+    def mcp_leer(args: dict) -> str:
+        ruta = args.get("ruta")
+        if not isinstance(ruta, str) or not ruta.endswith(".md") or len(ruta) > 600:
+            raise ToolError("«ruta» debe ser la ruta de una nota .md, como la da ashur_buscar_nota.")
+        try:
+            n = grafo.read_note(base, ruta, LEER_MAX)
+        except (ValueError, OSError):
+            raise ToolError("No existe esa nota en la bóveda.")
+        if ruta.split("/", 1)[0] == "sergio":
+            ok = float(d.db.setting(f"nota_liberada:{ruta}") or 0)
+            if d.clock() - ok > LIBERADA_S:
+                pend = d.db.claude_request_pending_same("leer_nota", {"ruta": ruta})
+                if pend:
+                    return f"Esa nota sale de tus archivos y ya espera el sí de Sergio (pedido #{pend})."
+                if d.db.claude_requests_pending_count() >= MAX_PENDING_REQUESTS:
+                    raise ToolError("Ya hay 5 pedidos esperando a Sergio; espera a que decida.")
+                rid = d.db.claude_request_add(d.clock(), "leer_nota", {"ruta": ruta}, "Claude quiere leer esta nota de tus archivos.")
+                d.db.log(d.clock(), None, "claude_request", {"id": rid, "action": "leer_nota",
+                                                             "label": action_label("leer_nota", {"ruta": ruta})})
+                return (f"Esa nota sale de los archivos de Sergio: le pedí permiso (pedido #{rid}, en «Por aprobar»). "
+                        "Cuando lo apruebe, vuelve a pedirla.")
+        front = dict(n["frontmatter"])
+        cuerpo = n["cuerpo"]
+        if ruta.split("/", 1)[0] == "ashur":
+            cuerpo = ashur_vault.connector_view(ruta, front, cuerpo)
+            if cuerpo is None:
+                raise ToolError("Esa nota es privada de Ashur (bandeja, invitados o sus conversaciones): no sale hacia Claude.")
+        body, held = health_split(cuerpo)
+        head = f"{ruta}\nOrigen: {front.get('origen', '?')}\n"
+        note = f"\n\n({len(held)} líneas de salud quitadas: no salen hacia Claude.)" if held else ""
+        cut = "\n\n…(recortada)" if n["recortada"] else ""
+        d.db.log(d.clock(), None, "boveda_nota_leida", {"carpeta": ruta.split("/", 1)[0]})
+        return head + "\n" + body.strip() + cut + note
+
+    def approve_leer(args: dict) -> tuple[str, str]:
+        ruta = args.get("ruta")
+        if not isinstance(ruta, str) or not os.path.isfile(nota.inside(base, ruta)):
+            return "not_done", "Esa nota ya no existe."
+        d.db.set_setting(f"nota_liberada:{ruta}", str(d.clock()))
+        return "approved", "Claude puede leer esa nota durante 24 horas."
+
+    app.state.boveda_mcp = {"buscar": mcp_buscar, "leer": mcp_leer, "aprobar_leer": approve_leer}
 
     @app.get("/api/boveda", dependencies=[Depends(d.require_admin)])
     def boveda_estado():

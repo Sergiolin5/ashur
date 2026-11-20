@@ -1,4 +1,5 @@
 """Encargos: the table and its DB methods."""
+import os
 import pytest
 
 from core.db import DB
@@ -1052,6 +1053,12 @@ def test_sweep_no_document_text_reaches_claude_unreleased(tmp_path, fast_local):
                 assert t.post(f"/api/claude-requests/{rid}/approve", headers=A).json()["status"] == "approved"
                 ids[(op, to_claude)] = eid
             run_all(c)
+        # 0.76.0: a sergio/ note holds document text too (a «nota» summary): unreadable until Sergio says so
+        note = "sergio/n1/d/gatos.txt.md"
+        vault = os.path.join(os.path.dirname(c.db.path), "vaults", "Ashur", note)
+        os.makedirs(os.path.dirname(vault), exist_ok=True)
+        with open(vault, "w", encoding="utf-8") as f:
+            f.write(f"# gatos.txt\n\nResumen: {canary} y los gatos.\n")
         tools = {x["name"] for x in c.post("/mcp", headers={"Authorization": "Bearer " + c.key},
                                            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]}
 
@@ -1064,6 +1071,7 @@ def test_sweep_no_document_text_reaches_claude_unreleased(tmp_path, fast_local):
                                          "motivo": "prueba"})]
             calls += [("ashur_ver_encargo", {"id": eid}) for eid in ids.values()]
             calls += [("ashur_lote", {"pase": "tipo", "motivo": "prueba"}), ("ashur_ver_lote", {"id": 1})]
+            calls += [("ashur_buscar_nota", {"texto": canary}), ("ashur_leer_nota", {"ruta": note})]   # 0.76.0: the vault
             assert {n for n, _ in calls} == tools
             out = []
             for n, a in calls:

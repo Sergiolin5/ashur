@@ -289,7 +289,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.75.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.76.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -5243,6 +5243,8 @@ def create_app(
                     return "not_done", "Ese archivo ya no espera aprender."
                 db.set_setting("archivo_aprender", str(cid))
                 return "approved", "Ashur aprenderá del chat anterior por tandas, con el modelo local."
+            if action == "leer_nota":                        # 0.76.0: a sergio/ note of the vault, for Claude to read
+                return app.state.boveda_mcp["aprobar_leer"](req["args"])
             if action == "tema":                             # 0.69.0: a theme Sergio uploaded, now selectable
                 tid = req["args"].get("tema")
                 if not isinstance(tid, int) or not db.tema_set_estado(tid, "aprobado"):
@@ -5789,6 +5791,17 @@ def create_app(
                  {"type": "object", "properties": {"consulta": {"type": "string", "minLength": 2, "maxLength": 100,
                                                                  "description": "Parte del nombre del archivo"}},
                   "required": ["consulta"], "additionalProperties": False}, buscar_archivo),
+            Tool("ashur_buscar_nota", "Busca notas en la bóveda de Obsidian de Ashur (ashur/, claude/, notion/ y sergio/) por "
+                 "título, ruta o texto. Solo lectura. De sergio/ (sus archivos) solo da la ruta.",
+                 {"type": "object", "properties": {"texto": {"type": "string", "minLength": 2, "maxLength": 200,
+                                                             "description": "Palabras a buscar"}},
+                  "required": ["texto"], "additionalProperties": False}, lambda a: app.state.boveda_mcp["buscar"](a)),
+            Tool("ashur_leer_nota", "Lee una nota de la bóveda por su ruta (como la da ashur_buscar_nota). Solo lectura. Las de "
+                 "sergio/ salen de los archivos de Sergio: la primera vez queda un pedido en «Por aprobar» y se leen cuando él lo apruebe. "
+                 "Las líneas de salud nunca se devuelven.",
+                 {"type": "object", "properties": {"ruta": {"type": "string", "minLength": 4, "maxLength": 600,
+                                                            "description": "Ruta de la nota, p. ej. notion/Inicio (1a2b3c4d).md"}},
+                  "required": ["ruta"], "additionalProperties": False}, lambda a: app.state.boveda_mcp["leer"](a)),
             Tool("ashur_ver_pedido", "Cómo va un pedido que Claude dejó para que Sergio lo apruebe.",
                  {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"],
                   "additionalProperties": False}, ver_pedido),

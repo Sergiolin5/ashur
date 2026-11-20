@@ -2481,6 +2481,11 @@
     put(gc, rc.concat(bovLoteRows(j, ["personas"])));
     if (!ac.childElementCount) ac.append(bovBtn("Importar ahora", async () => { await api("api/boveda/claude/importar", { method: "POST" }); loadBoveda(); }),
                                          bovBtn("Buscar personas (modelo local)", () => bovLote("personas", gc)));
+    const [gs, as] = bovSection("sergio", "Tus archivos (sergio/)", "Todos tus documentos e imágenes, en lotes que se reanudan donde quedaron si un equipo falla o se apaga. Resúmenes y OCR solo con tus modelos locales (qwen2.5 y qwen2.5vl en sm-rtx), nunca con Claude. Los archivos de programas y juegos se anotan por su ruta, sin modelo.");
+    const rs = bovLoteRows(j, ["nota", "ocr"]);
+    put(gs, rs.length ? rs : [row({ title: "Sin lotes todavía", detail: "Cada lote espera tu sí en Por aprobar antes de usar un equipo." })]);
+    if (!as.childElementCount) as.append(bovBtn("Leer el texto de mis imágenes (OCR)", () => bovLote("ocr", gs)),
+                                         bovBtn("Resumir todos mis documentos", () => bovLote("nota", gs)));
   }
   function alertNote(g, text) { put(g, [row({ dot: "offline", title: text })]); }
   $("bov-notion-run").onclick = () => bovNotion(false);

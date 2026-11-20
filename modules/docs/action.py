@@ -5,6 +5,7 @@ files, program and system folders are never read. Nothing on disk is changed.
 Incremental: a local state file remembers each document's modification time, so a weekly
 pass only reads what changed, and a pass cut short resumes without starting over.
 """
+import base64
 import json
 import os
 import time
@@ -30,7 +31,32 @@ BATCH_FILES = 100
 BATCH_CHARS = 1_500_000
 
 
+def images(payload: dict) -> dict:
+    """0.74.0: one file as JPEG pages for the core's OCR (the vision model runs on another device). An image is one
+    page; a PDF, its first pages. Read only; never a cloud-only file (reading it would download it)."""
+    path = payload.get("path") or ""
+    if not os.path.isfile(path):
+        raise FileNotFoundError("ya no está")
+    if cloud_only(path):
+        raise RuntimeError("solo en la nube")
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        raise RuntimeError("falta pymupdf en este equipo")
+    max_px = int(payload.get("max_px") or 1600)
+    out = []
+    with fitz.open(path) as doc:
+        for page in list(doc)[:max(1, int(payload.get("paginas") or 1))]:
+            r = page.rect
+            zoom = min(4.0, max_px / max(r.width, r.height, 1))
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+            out.append(base64.b64encode(pix.tobytes("jpeg", jpg_quality=82)).decode("ascii"))
+    return {"images": out}
+
+
 def run(payload: dict, ctx) -> dict:
+    if payload.get("op") == "imagenes":
+        return images(payload)
     restore = lower_priority()                  # reading documents must not starve the machine's other jobs
     try:
         return _run(payload, ctx)

@@ -312,6 +312,13 @@ CREATE TABLE IF NOT EXISTS temas (        -- 0.69.0: panel themes; data + filter
     sha256 TEXT NOT NULL UNIQUE, estado TEXT NOT NULL DEFAULT 'pendiente',   -- pendiente | aprobado | rechazado
     manifest TEXT NOT NULL, avisos TEXT NOT NULL DEFAULT '[]'
 );
+CREATE TABLE IF NOT EXISTS notion_map (    -- 0.71.0: one Notion page or database -> its note in the vault (core/boveda)
+    page_id TEXT PRIMARY KEY, kind TEXT NOT NULL, ruta TEXT NOT NULL, editado TEXT NOT NULL, hash TEXT NOT NULL,
+    sincronizado REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS vault_fuentes (  -- 0.71.0: every other generated note: where it came from -> where it lives
+    origen TEXT PRIMARY KEY, ruta TEXT NOT NULL, hash TEXT NOT NULL, ts REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS session_log (
     ts          REAL NOT NULL,
     node_id     TEXT,

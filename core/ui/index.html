@@ -984,6 +984,7 @@
         <button type="button" class="menu-item" data-page="memory"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7 4 4 0 0 0 5 5 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3z"/><path d="M15 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7 4 4 0 0 1-5 5"/></svg></span><span class="mi-text"><b>Memoria</b><small>Recuerdos, resúmenes e importar</small></span><span class="mi-go" aria-hidden="true">›</span></button>
         <button type="button" class="menu-item" data-page="estilo"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3"/></svg></span><span class="mi-text"><b>Tu estilo</b><small>Tus chats de WhatsApp y cómo escribes</small></span><span class="mi-go" aria-hidden="true">›</span></button>
         <button type="button" class="menu-item" data-page="formulario"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></span><span class="mi-text"><b>Formulario</b><small id="form-sub">Para que Ashur te conozca</small></span><span class="mi-go" aria-hidden="true">›</span></button>
+        <button type="button" class="menu-item" data-page="boveda"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></span><span class="mi-text"><b>Obsidian</b><small id="bov-sub">Notion, la memoria de Ashur, Claude y tus archivos como notas</small></span><span class="mi-go" aria-hidden="true">›</span></button>
         <button type="button" class="menu-item" data-page="time"><span class="mi-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M9.5 3h5"/></svg></span><span class="mi-text"><b>Mi tiempo</b><small id="time-sub">Empiezo, termino y en qué se va la semana</small></span><span class="mi-go" aria-hidden="true">›</span></button>
       </div>
       <h2 class="menu-h">Ashur</h2>
@@ -1106,6 +1107,23 @@
       <div class="note">Ashur lee el texto de Word, Excel, PowerPoint, PDF y archivos de texto de los equipos que tengan el módulo docs, solo cuando están libres. Lo sensible (claves, bóvedas, perfiles del navegador) no se lee. La búsqueda es local: nada de esto sale a Claude salvo que marques «Compartir fragmentos» en un mensaje.</div>
     </section>
 
+    </div>
+
+    <div class="page" data-page="boveda" hidden>
+      <div class="page-head"><button type="button" class="back" aria-label="Volver a Ajustes">‹ Ajustes</button><div class="page-title">Obsidian</div></div>
+    <section>
+      <h2>Notion</h2>
+      <div class="group" id="bov-notion"></div>
+      <div class="group" style="margin-top:12px"><button class="link" id="bov-notion-run" type="button">Sincronizar Notion ahora</button>
+        <button class="link" id="bov-notion-full" type="button" hidden>Aprobar la migración completa</button></div>
+      <div class="note">Solo lectura: Ashur nunca crea, edita ni borra nada en Notion. Cada día a las 18:00 trae lo que cambió; una página sin cambios no se vuelve a pedir.</div>
+    </section>
+    <div id="bov-extra"></div>
+    <section>
+      <h2>Dónde vive</h2>
+      <div class="group" id="bov-raiz"></div>
+      <div class="note">Una sola bóveda con las carpetas ashur/, sergio/, claude/ y notion/. Todo lo de aquí se genera desde otra fuente y cada nota dice de dónde salió en «origen».</div>
+    </section>
     </div>
 
     <div class="page" data-page="memory" hidden>
@@ -2342,6 +2360,7 @@
     if (name === "estilo") loadEstilo();
     if (name === "formulario") loadForm();
     if (name === "apariencia") loadTemas();
+    if (name === "boveda") loadBoveda();
     $("menu").hidden = !!name; $("signout-row").hidden = !!name;
     for (const pg of document.querySelectorAll("#settings .page")) pg.hidden = pg.dataset.page !== name;
     window.scrollTo({ top: 0 });
@@ -2395,6 +2414,36 @@
     } catch (e) { temaNota("No pude descargarlo."); }
   }
   const TEMA_ESTADO = { pendiente: "Espera tu sí en «Por aprobar»", aprobado: "Aprobado", rechazado: "Rechazado" };
+  // --- 0.71.0: la bóveda de Obsidian (core/boveda). Solo muestra y lanza; el núcleo decide.
+  const BOV_ESTADO = { ok: "al día", con_errores: "con errores", fallo: "falló", esperando_aprobacion: "espera tu aprobación", corriendo: "corriendo" };
+  let bovTimer = null;
+  async function loadBoveda() {
+    clearTimeout(bovTimer);
+    let j;
+    try { const r = await api("api/boveda"); if (!r.ok) return; j = await r.json(); } catch (e) { return; }
+    const n = j.notion, u = n.ultimo, rows = [];
+    if (!n.configurado) rows.push(row({ title: "Sin configurar", detail: "Pon NOTION_TOKEN en el entorno de la app (ZimaOS) y comparte con la integración las páginas raíz." }));
+    else if (n.corriendo) rows.push(row({ title: "Sincronizando…", detail: "Puede tardar en la primera migración." }));
+    if (u) {
+      rows.push(row({ title: (BOV_ESTADO[u.estado] || u.estado) + " · " + whenText(u.ts), detail: (u.paginas ?? "?") + " páginas y " + (u.bases ?? "?") + " bases vistas · " + (u.cambios ?? 0) + " notas cambiaron · " + (u.adjuntos ?? 0) + " adjuntos nuevos" + (u.segundos != null ? " · " + u.segundos + " s" : ""), value: u.motivo || "" }));
+      for (const e of (u.errores || []).slice(0, 5)) rows.push(row({ dot: "light", title: e }));
+    } else if (n.configurado) rows.push(row({ title: "Nunca sincronizado", detail: "La primera vez te muestro cuántas páginas y bases encontré; con más de 2.000 espero tu aprobación." }));
+    put($("bov-notion"), rows);
+    $("bov-notion-run").disabled = !n.configurado || n.corriendo;
+    $("bov-notion-full").hidden = !(u && u.estado === "esperando_aprobacion");
+    put($("bov-raiz"), [row({ title: j.raiz, detail: j.carpetas.join(" · ") })]);
+    if (typeof loadBovedaExtra === "function") loadBovedaExtra(j);
+    if (n.corriendo || (j.trabajando)) bovTimer = setTimeout(() => { if (!document.querySelector('#settings .page[data-page="boveda"]').hidden) loadBoveda(); }, 4000);
+  }
+  async function bovNotion(completa) {
+    const r = await api("api/boveda/notion/sync", { method: "POST", body: JSON.stringify({ completa }) });
+    if (!r.ok) alertNote($("bov-notion"), await detailOf(r, "No pude empezar la sincronización."));
+    setTimeout(loadBoveda, 600);
+  }
+  function alertNote(g, text) { put(g, [row({ dot: "offline", title: text })]); }
+  $("bov-notion-run").onclick = () => bovNotion(false);
+  $("bov-notion-full").onclick = () => bovNotion(true);
+
   async function loadTemas() {
     try {
       const j = await (await api("api/temas")).json();

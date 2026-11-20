@@ -25,6 +25,8 @@ services:
       # ASHUR_HA_URL: "http://127.0.0.1:8123"
       # ASHUR_HA_TOKEN: en ZimaOS (app settings > environment), never in this file
       # ASHUR_CAMARAS_URL: "http://127.0.0.1:1984"   # go2rtc (deploy/zimaos-camaras-compose.yaml); unset = no cameras
+      # VAULTS_ROOT: /data/vaults        # 0.71.0: the Obsidian vault «Ashur» (default: next to the database)
+      # NOTION_TOKEN: en ZimaOS (app settings > environment), never in this file; read-only Notion -> vault at 18:00
     deploy:
       resources:
         limits:

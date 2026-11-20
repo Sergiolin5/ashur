@@ -43,6 +43,7 @@ from zoneinfo import ZoneInfo
 from core.db import DB, hash_token
 from core.encargos import CLAUDE_CUT, MAX_DOCS, MAX_UNFINISHED, MAX_WINDOWS, OPERATIONS, WINDOW, EncargoError, best_fragments, resolve_docs, stale_note
 from core import temas as temas_mod
+from core import boveda
 from core.mcp import ACTIONS, MAX_PENDING_REQUESTS, OWN_TOOL, McpDeps, Tool, ToolError, action_label, hhmm, mount_mcp
 from core.push import Keys as PushKeys, make_sender, question_for
 from core.totp import Totp, uri as totp_uri
@@ -187,6 +188,7 @@ def create_app(
     camaras_url: Optional[str] = None,
     camaras_client_fn: Optional[Callable[[str], Go2rtc]] = None,
     env: Mapping[str, str] = os.environ,
+    notion_http: Any = None,
 ) -> FastAPI:
     if not enroll_key or not admin_key:
         raise RuntimeError("ASHUR_ENROLL_KEY and ASHUR_ADMIN_KEY must be set (see .env.example)")
@@ -266,6 +268,7 @@ def create_app(
                         app.state.learning_tick()                 # 0.62–0.64: one local learning job per tick
                         cerebro_mod.similar_edges(db.vectors(conv.EMBED_MODEL), set())   # 0.65.0: warm, incremental
                         app.state.openjarvis_due()                # scheduled OpenJarvis runs; nothing when every flag is off
+                        app.state.boveda_due()                    # 0.71.0: Notion at 18:00, the vault's own refreshes
                         # casa: each house's statistics on its own calendar, in its own thread (a backfill of many
                         # 20 s calls must not hold up the sweep); a house still syncing is skipped by its own lock
                         threading.Thread(target=lambda: _quiet(app.state.energia_due), daemon=True, name="casa-energia").start()
@@ -285,7 +288,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.70.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.71.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -5774,6 +5777,11 @@ def create_app(
                  {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"],
                   "additionalProperties": False}, ver_encargo),
         ]
+
+    # 0.71.0: the Obsidian vault (core/boveda): Notion, Ashur's memory, claude.ai exports and Sergio's files, one way
+    boveda_hooks = boveda.mount(app, boveda.Deps(db=db, clock=clock, require_admin=require_admin, env=env,
+                                                 vaults_root=boveda.vaults_root(env, db_path), notion_http=notion_http))
+    app.state.boveda_due = lambda: [_quiet(h) for h in boveda_hooks.values()]
 
     mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,
                            log=lambda event, d: db.log(clock(), None, event, d), tools=mcp_tools()))

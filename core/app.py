@@ -288,7 +288,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.71.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.72.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -5780,7 +5780,8 @@ def create_app(
 
     # 0.71.0: the Obsidian vault (core/boveda): Notion, Ashur's memory, claude.ai exports and Sergio's files, one way
     boveda_hooks = boveda.mount(app, boveda.Deps(db=db, clock=clock, require_admin=require_admin, env=env,
-                                                 vaults_root=boveda.vaults_root(env, db_path), notion_http=notion_http))
+                                                 vaults_root=boveda.vaults_root(env, db_path), notion_http=notion_http,
+                                                 persona=brain.persona_file))
     app.state.boveda_due = lambda: [_quiet(h) for h in boveda_hooks.values()]
 
     mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,

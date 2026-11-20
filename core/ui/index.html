@@ -2440,6 +2440,26 @@
     if (!r.ok) alertNote($("bov-notion"), await detailOf(r, "No pude empezar la sincronización."));
     setTimeout(loadBoveda, 600);
   }
+  // ashur/, claude/ y sergio/: una sección por carpeta, dibujada desde /api/boveda
+  function bovSection(id, title, note) {
+    let sec = $("bov-sec-" + id);
+    if (!sec) {
+      sec = el("section"); sec.id = "bov-sec-" + id;
+      const g = el("div", "group"); g.id = "bov-" + id;
+      const acts = el("div", "group"); acts.style.marginTop = "12px"; acts.id = "bov-acts-" + id;
+      sec.append(el("h2", null, title), g, acts, el("div", "note", note));
+      $("bov-extra").append(sec);
+    }
+    return [$("bov-" + id), $("bov-acts-" + id)];
+  }
+  function bovBtn(text, fn) { const b = el("button", "link", text); b.type = "button"; b.onclick = fn; return b; }
+  function loadBovedaExtra(j) {
+    const [ga, aa] = bovSection("ashur", "La memoria de Ashur (ashur/)", "Un espejo de solo lectura: la base de Ashur sigue siendo la fuente. Se regenera solo cuando algo cambia; editar estas notas no cambia la memoria.");
+    const a = j.ashur;
+    put(ga, [a ? row({ title: (a.notas ?? 0) + " notas · " + whenText(a.ts), detail: (a.cambios ?? 0) + " cambiaron, " + (a.borradas ?? 0) + " borradas en la última pasada" }) : row({ title: "Todavía sin generar" })]);
+    if (!aa.childElementCount) aa.append(bovBtn("Regenerar ahora", async () => { await api("api/boveda/ashur", { method: "POST" }); loadBoveda(); }));
+    if (typeof loadBovedaMas === "function") loadBovedaMas(j);
+  }
   function alertNote(g, text) { put(g, [row({ dot: "offline", title: text })]); }
   $("bov-notion-run").onclick = () => bovNotion(false);
   $("bov-notion-full").onclick = () => bovNotion(true);

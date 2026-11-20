@@ -14,7 +14,7 @@ from typing import Callable, Mapping
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from core.boveda import nota, notion
+from core.boveda import ashur as ashur_vault, nota, notion
 from core.events import BOGOTA
 
 NOTION_HORA = (18, 0)                 # Sergio's choice: the daily incremental sync at 18:00 America/Bogota
@@ -28,6 +28,7 @@ class Deps:
     env: Mapping[str, str]
     vaults_root: str
     notion_http: object = None        # tests hand a fake transport; None = the real api.notion.com
+    persona: Callable[[], str] = lambda: ""
 
 
 def vaults_root(env: Mapping[str, str], db_path: str) -> str:
@@ -76,12 +77,38 @@ def mount(app: FastAPI, d: Deps) -> dict:
         d.db.set_setting("notion_auto_dia", day)          # marked first: a slow or failed run is not repeated every minute
         threading.Thread(target=notion_run, kwargs={"motivo": "18:00"}, daemon=True, name="notion-sync").start()
 
+    ashur_lock = threading.Lock()
+
+    def ashur_run(force: bool = False) -> dict:
+        """Regenerate ashur/ when anything it shows changed (or when asked)."""
+        if not ashur_lock.acquire(blocking=False):
+            return {"estado": "corriendo"}
+        try:
+            persona = d.persona() or ""
+            f = ashur_vault.firma(d.db, persona)
+            if not force and d.db.setting("boveda_ashur_firma") == f:
+                return {"estado": "sin_cambios"}
+            report = ashur_vault.export(d.db, persona, base, d.clock())
+            report.update(estado="ok", ts=d.clock())
+            d.db.set_setting("boveda_ashur_firma", f)
+            d.db.set_setting("boveda_ashur_ultimo", json.dumps(report))
+            if report["cambios"] or report["borradas"]:
+                d.db.log(d.clock(), None, "boveda_ashur", {k: report[k] for k in ("notas", "cambios", "borradas")})
+            return report
+        finally:
+            ashur_lock.release()
+
+    @app.post("/api/boveda/ashur", dependencies=[Depends(d.require_admin)])
+    def boveda_ashur_now():
+        return ashur_run(force=True)
+
     @app.get("/api/boveda", dependencies=[Depends(d.require_admin)])
     def boveda_estado():
         last = d.db.setting("notion_ultimo")
         return {"raiz": base, "carpetas": list(nota.CARPETAS),
                 "notion": {"configurado": bool(d.env.get("NOTION_TOKEN")), "corriendo": state["notion_running"],
-                           "ultimo": json.loads(last) if last else None, "hora": "%02d:%02d" % NOTION_HORA}}
+                           "ultimo": json.loads(last) if last else None, "hora": "%02d:%02d" % NOTION_HORA},
+                "ashur": json.loads(d.db.setting("boveda_ashur_ultimo") or "null")}
 
     @app.post("/api/boveda/notion/sync", dependencies=[Depends(d.require_admin)])
     def boveda_notion_sync(body: NotionSyncIn):
@@ -94,4 +121,5 @@ def mount(app: FastAPI, d: Deps) -> dict:
         return {"ok": True}
 
     app.state.notion_run = notion_run                 # tests run it synchronously
-    return {"notion_due": notion_due}
+    app.state.boveda_ashur = ashur_run
+    return {"notion_due": notion_due, "ashur_due": ashur_run}

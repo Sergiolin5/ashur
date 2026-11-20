@@ -49,6 +49,14 @@ def prompt_tipo(names: list[str], kinds: list[str]) -> str:
         "Decide solo por lo que dicen el texto y la ruta, sin inventar.")
 
 PASSES = {"tipo": "clasificar por tipo y autor", "voz": "leer lo que escribió Sergio"}
+# 0.73.0: the Obsidian vault's passes (core/boveda/trabajos.py). Not offered to Claude's ashur_lote: they are
+# launched from Ajustes → Obsidian, and their items are conversations and images, not only indexed documents.
+VAULT_PASSES = {"personas": "personas en tus conversaciones de Claude"}
+
+
+def label(pase: str) -> str:
+    return PASSES.get(pase) or VAULT_PASSES.get(pase) or pase
+
 VOZ_CHARS = 6000             # one window per document: the 7B's context, with room for the prompt and the answer
 VOZ_ITEMS = 4
 

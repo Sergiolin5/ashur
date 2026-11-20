@@ -288,7 +288,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.72.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.73.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -1391,6 +1391,33 @@ def create_app(
             db.clear_payload(tid)
 
     app.state.local_vision = local_vision
+
+    def node_call(node_id: str, module: str, payload: dict, wait_s: float = 180) -> dict:
+        """0.74.0: one task for one device (the one that holds a file) and its result. A device that is off or busy
+        past wait_s is NoLocalDevice (the caller leaves the item for later); a failed task is LocalFailed. The result
+        is wiped from the task once read: it can be images."""
+        n = db.get_node(node_id)
+        if not n or n["mode"] not in ("full", "light") or module not in (n.get("modules") or []):
+            raise NoLocalDevice(f"{node_id} no está disponible.")
+        tid = db.add_task(module, payload, Weight.LIGHT.value, clock(), target=node_id)
+        deadline = time.monotonic() + wait_s
+        try:
+            while time.monotonic() < deadline:
+                t = db.get_task(tid)
+                if t["status"] == "done":
+                    return (t["result"] or {}).get("result") or {}
+                if t["status"] in ("failed", "cancelled"):
+                    raise LocalFailed(f"La tarea falló en {node_id}.", node_id)
+                time.sleep(0.2)
+            db.cancel_task(tid, "timeout", clock())
+            raise NoLocalDevice(f"{node_id} no respondió a tiempo.")
+        finally:
+            db.clear_payload(tid)
+            with db.lock:
+                db.conn.execute("UPDATE tasks SET result = NULL WHERE id = ? AND status IN ('done', 'failed', 'cancelled')", (tid,))
+                db.conn.commit()
+
+    app.state.node_call = node_call
 
     # 0.67.2: a device that said it lacks the embedding model gets no embeddings for an hour (the mac-m1 failed 68).
     EMBED_MISSING_FOR_S = 3600
@@ -4842,15 +4869,20 @@ def create_app(
     def lote_summary(L: dict) -> str:
         if lote_summaries.get(L["id"], (None,))[0] == L["updated"]:
             return lote_summaries[L["id"]][1]
+        if L["pase"] in lotes.VAULT_PASSES:                 # 0.73.0: its result is the notes in the vault
+            text = (f"Lote #{L['id']} ({lotes.label(L['pase'])}): {L['done']} hechos, {L['skipped']} saltados, "
+                    f"{L['failed']} fallidos. Las notas quedaron en la bóveda de Obsidian.")
+            lote_summaries[L["id"]] = (L["updated"], text)
+            return text
         rows = [r for r in db.signals(L["pase"]) if lotes.in_scope(r[0], r[1], L["scope"])]
-        head = (f"Lote #{L['id']} ({lotes.PASSES.get(L['pase'], L['pase'])}; {lotes.scope_label(L['scope'])}): "
+        head = (f"Lote #{L['id']} ({lotes.label(L['pase'])}; {lotes.scope_label(L['scope'])}): "
                 f"{L['done']} hechos, {L['skipped']} sin texto, {L['failed']} fallidos.")
         summarize = lotes.summary_voz if L["pase"] == "voz" else lotes.summary_tipo
         lote_summaries[L["id"]] = (L["updated"], head + "\n" + summarize(rows, L["scope"]))
         return lote_summaries[L["id"]][1]
 
     def lote_row(L: dict) -> dict:
-        out = dict(L, label=f"{lotes.PASSES.get(L['pase'], L['pase'])} · {lotes.scope_label(L['scope'])}")
+        out = dict(L, label=f"{lotes.label(L['pase'])} · {lotes.scope_label(L['scope'])}")
         started = float(db.setting(f"lote_started:{L['id']}") or 0)
         if L["status"] in ("queued", "running", "paused"):
             left, per = max(L["total"] - L["done"] - L["failed"] - L["skipped"], 0), db.setting("lote_s_per_doc")
@@ -4879,6 +4911,8 @@ def create_app(
                 if L["status"] != "paused":
                     db.lote_set(lid, expect=L["status"], status="paused")
                 return False
+            if L["pase"] in lotes.VAULT_PASSES:               # 0.73.0: the vault's passes have their own items
+                return app.state.boveda_lote_step(L)
             if lote_queue["id"] != lid:                       # first start, or the core restarted: what is left to do
                 pending = [d for d in db.lote_pending(L["pase"], lid if L["scope"].get("rehacer") else None,
                                                       mine_only=L["pase"] == "voz", also_done=tuple(L["scope"].get("sigue", ())),
@@ -5058,6 +5092,8 @@ def create_app(
             raise HTTPException(404, "No existe ese lote.")
         if not (L["status"] == "failed" or (L["status"] in ("done", "kept", "released") and L["failed"])):
             raise HTTPException(409, "Solo se reintenta un lote que falló o que dejó documentos fallidos.")
+        if L["pase"] in lotes.VAULT_PASSES:
+            raise HTTPException(409, "Lanza uno nuevo desde Ajustes → Obsidian: toma solo lo que falta.")
         scope = dict(L["scope"])
         if scope.get("rehacer"):
             scope["sigue"] = list(scope.get("sigue", ())) + [lid]
@@ -5252,7 +5288,7 @@ def create_app(
                                   "to_claude": e["to_claude"], "estimate": encargo_estimate(e)}
             lid = r["args"].get("lote")
             if r["action"] == "lote" and isinstance(lid, int) and (L := db.lote_get(lid)):
-                row["lote"] = {"label": f"{lotes.PASSES.get(L['pase'], L['pase'])} · {lotes.scope_label(L['scope'])}",
+                row["lote"] = {"label": f"{lotes.label(L['pase'])} · {lotes.scope_label(L['scope'])}",
                                "documents": L["total"], "by_model": int(db.setting(f"lote_model:{lid}") or L["total"]),
                                "estimate": lote_estimate(int(db.setting(f"lote_model:{lid}") or L["total"]))}
             out.append(row)
@@ -5781,7 +5817,8 @@ def create_app(
     # 0.71.0: the Obsidian vault (core/boveda): Notion, Ashur's memory, claude.ai exports and Sergio's files, one way
     boveda_hooks = boveda.mount(app, boveda.Deps(db=db, clock=clock, require_admin=require_admin, env=env,
                                                  vaults_root=boveda.vaults_root(env, db_path), notion_http=notion_http,
-                                                 persona=brain.persona_file))
+                                                 persona=brain.persona_file, unit=encargo_unit, vision=local_vision,
+                                                 node_call=node_call, errors=(NoLocalDevice, (LocalFailed, LocalUnavailable))))
     app.state.boveda_due = lambda: [_quiet(h) for h in boveda_hooks.values()]
 
     mount_mcp(app, McpDeps(key_ok=mcp_key_ok, clock=clock,

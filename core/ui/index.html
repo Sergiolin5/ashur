@@ -2460,6 +2460,28 @@
     if (!aa.childElementCount) aa.append(bovBtn("Regenerar ahora", async () => { await api("api/boveda/ashur", { method: "POST" }); loadBoveda(); }));
     if (typeof loadBovedaMas === "function") loadBovedaMas(j);
   }
+  const BOV_LOTE = { queued: "en cola", running: "corriendo", paused: "en pausa", done: "terminado", kept: "terminado", released: "terminado",
+                    failed: "falló", cancelled: "cancelado", pending_approval: "espera tu sí en Por aprobar", rejected: "rechazado" };
+  function bovLoteRows(j, pases) {
+    return j.lotes.filter((L) => pases.includes(L.pase)).slice(0, 2).map((L) =>
+      row({ title: "Lote #" + L.id + " · " + (BOV_LOTE[L.estado] || L.estado), detail: L.hechos + " de " + L.total + " hechos" + (L.fallidos ? " · " + L.fallidos + " fallidos" : "") + (L.saltados ? " · " + L.saltados + " saltados (equipo apagado o sin texto)" : "") }));
+  }
+  async function bovLote(pase, g) {
+    const r = await api("api/boveda/lote", { method: "POST", body: JSON.stringify({ pase }) });
+    if (!r.ok) { alertNote(g, await detailOf(r, "No pude crear el lote.")); return; }
+    const k = await r.json();
+    put(g, [row({ title: "Lote #" + k.lote + ": " + k.pendientes + " por hacer", detail: "Espera tu sí en Ajustes → Por aprobar." })]);
+    setTimeout(loadBoveda, 1500);
+  }
+  function loadBovedaMas(j) {
+    const [gc, ac] = bovSection("claude", "Tus conversaciones con Claude (claude/)", "Deja el ZIP de tu exportación de claude.ai en la carpeta inbox/ del servidor (" + j.claude.inbox + "). Importarlo dos veces no duplica nada. Las personas las busca tu modelo local, nunca Claude.");
+    const u = j.claude.ultimo, rc = [];
+    if (u) rc.push(row({ title: (BOV_ESTADO[u.estado] || u.estado) + " · " + (u.archivo || "") + " · " + whenText(u.ts), detail: u.estado === "fallo" ? (u.errores || []).join(" ") : (u.conversaciones ?? 0) + " conversaciones, " + (u.proyectos ?? 0) + " proyectos · " + (u.cambios ?? 0) + " notas cambiaron" }));
+    else rc.push(row({ title: j.claude.zips.length ? j.claude.zips.length + " ZIP en inbox/ sin importar" : "Ningún ZIP en inbox/ todavía" }));
+    put(gc, rc.concat(bovLoteRows(j, ["personas"])));
+    if (!ac.childElementCount) ac.append(bovBtn("Importar ahora", async () => { await api("api/boveda/claude/importar", { method: "POST" }); loadBoveda(); }),
+                                         bovBtn("Buscar personas (modelo local)", () => bovLote("personas", gc)));
+  }
   function alertNote(g, text) { put(g, [row({ dot: "offline", title: text })]); }
   $("bov-notion-run").onclick = () => bovNotion(false);
   $("bov-notion-full").onclick = () => bovNotion(true);

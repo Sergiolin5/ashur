@@ -145,10 +145,27 @@ CREATE TABLE IF NOT EXISTS sha_servidor (  -- what /DATA/Consolidado already hol
 CREATE TABLE IF NOT EXISTS casas (            -- casa (0.57.0): one per Home Assistant; the token lives in ZimaOS, never here
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre            TEXT NOT NULL,
-    ha_url            TEXT NOT NULL UNIQUE,
-    ha_token_env      TEXT NOT NULL,
+    ha_url            TEXT UNIQUE,            -- 0.70.0: null = a house without Home Assistant (map only)
+    ha_token_env      TEXT,
     tz                TEXT NOT NULL DEFAULT 'America/Bogota',
-    nivel_energia_def INTEGER NOT NULL DEFAULT 1 CHECK (nivel_energia_def IN (1, 2, 3))
+    nivel_energia_def INTEGER NOT NULL DEFAULT 1 CHECK (nivel_energia_def IN (1, 2, 3)),
+    lat               REAL,                   -- 0.70.0: for the map's night mode; null = no automatic night
+    lon               REAL
+);
+CREATE TABLE IF NOT EXISTS casa_escaneos (    -- casa · mapa (0.70.0): each LiDAR scan uploaded; files under <data>/casa/<casa>/escaneos/<id>/
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    casa_id      INTEGER NOT NULL REFERENCES casas(id),
+    nombre       TEXT NOT NULL,
+    fecha        REAL NOT NULL,
+    alcance      TEXT NOT NULL DEFAULT 'casa' CHECK (alcance IN ('casa', 'habitacion')),
+    habitacion_id INTEGER,                    -- stage 2 onwards, for a room re-scan
+    estado       TEXT NOT NULL DEFAULT 'procesando' CHECK (estado IN ('procesando', 'listo', 'fallo')),
+    motivo       TEXT,                        -- why processing failed, in fixed words
+    bytes_original INTEGER NOT NULL,
+    bytes_mapa   INTEGER,
+    transform    TEXT,                        -- 4×4 into the house frame (JSON, stage 5); null = the house frame itself
+    error_m      REAL,
+    activo       INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS casa_dispositivos ( -- only what Ashur adds on top of Home Assistant
     casa_id       INTEGER NOT NULL REFERENCES casas(id),
@@ -432,6 +449,18 @@ class DB:
         ucols = {r["name"] for r in self.conn.execute("PRAGMA table_info(usage)")}
         if "user" not in ucols:
             self.conn.execute("ALTER TABLE usage ADD COLUMN user TEXT NOT NULL DEFAULT 'sergio'")
+        ccols = {r["name"]: r for r in self.conn.execute("PRAGMA table_info(casas)")}
+        if ccols and (ccols["ha_url"]["notnull"] or "lat" not in ccols):
+            # 0.70.0: a house without Home Assistant (Barranquilla before its HA). SQLite cannot drop NOT NULL in place:
+            # the table is rebuilt with the same ids (foreign keys are off, so the children keep pointing at them)
+            self.conn.execute("""CREATE TABLE casas_070 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT NOT NULL, ha_url TEXT UNIQUE, ha_token_env TEXT,
+                tz TEXT NOT NULL DEFAULT 'America/Bogota',
+                nivel_energia_def INTEGER NOT NULL DEFAULT 1 CHECK (nivel_energia_def IN (1, 2, 3)), lat REAL, lon REAL)""")
+            self.conn.execute("INSERT INTO casas_070 (id, nombre, ha_url, ha_token_env, tz, nivel_energia_def) "
+                              "SELECT id, nombre, ha_url, ha_token_env, tz, nivel_energia_def FROM casas")
+            self.conn.execute("DROP TABLE casas")
+            self.conn.execute("ALTER TABLE casas_070 RENAME TO casas")
 
     # --- session log -----------------------------------------------------
     def log(self, ts: float, node_id: Optional[str], event: str, detail: dict | None = None):
@@ -1229,6 +1258,19 @@ class DB:
             self.conn.execute("DELETE FROM sha_servidor WHERE sha256 = ?", (sha,))
             self.conn.commit()
 
+    def running_task_for(self, node_id: str, module: str, key: str, value: int) -> bool:
+        """A task of `module` with payload key == value that this node is running now."""
+        with self.lock:
+            rows = self.conn.execute("SELECT payload FROM tasks WHERE module = ? AND status = 'running' AND node_id = ?",
+                                     (module, node_id)).fetchall()
+        for (p,) in rows:
+            try:
+                if json.loads(p or "{}").get(key) == value:
+                    return True
+            except ValueError:
+                continue
+        return False
+
     def has_open_task(self, module: str, key: str, value: int) -> bool:
         """A queued or running task of `module` whose payload has key == value."""
         with self.lock:
@@ -1276,13 +1318,69 @@ class DB:
     def casas(self) -> list[dict]:
         with self.lock:
             return [dict(r) for r in self.conn.execute(
-                "SELECT id, nombre, ha_url, ha_token_env, tz, nivel_energia_def FROM casas ORDER BY id").fetchall()]
+                "SELECT id, nombre, ha_url, ha_token_env, tz, nivel_energia_def, lat, lon FROM casas ORDER BY id").fetchall()]
 
     def casa_get(self, cid: int) -> Optional[dict]:
         with self.lock:
             r = self.conn.execute(
-                "SELECT id, nombre, ha_url, ha_token_env, tz, nivel_energia_def FROM casas WHERE id = ?", (cid,)).fetchone()
+                "SELECT id, nombre, ha_url, ha_token_env, tz, nivel_energia_def, lat, lon FROM casas WHERE id = ?", (cid,)).fetchone()
             return dict(r) if r else None
+
+    def casa_add(self, nombre: str, lat: Optional[float], lon: Optional[float]) -> int:
+        """0.70.0: a house without Home Assistant (only after Sergio approves it in «Por aprobar»)."""
+        with self.lock:
+            cid = self.conn.execute("INSERT INTO casas (nombre, lat, lon) VALUES (?, ?, ?)", (nombre, lat, lon)).lastrowid
+            self.conn.commit()
+            return cid
+
+    def casa_nombre_existe(self, nombre: str) -> bool:
+        with self.lock:
+            return self.conn.execute("SELECT 1 FROM casas WHERE lower(nombre) = lower(?)", (nombre,)).fetchone() is not None
+
+    # --- casa · mapa (0.70.0) ----------------------------------------------
+    def escaneo_add(self, casa_id: int, nombre: str, fecha: float, bytes_original: int) -> int:
+        with self.lock:
+            eid = self.conn.execute("INSERT INTO casa_escaneos (casa_id, nombre, fecha, bytes_original) VALUES (?, ?, ?, ?)",
+                                    (casa_id, nombre, fecha, bytes_original)).lastrowid
+            self.conn.commit()
+            return eid
+
+    def escaneo_get(self, eid: int) -> Optional[dict]:
+        with self.lock:
+            r = self.conn.execute("SELECT * FROM casa_escaneos WHERE id = ?", (eid,)).fetchone()
+            return dict(r) if r else None
+
+    def escaneos(self, casa_id: int) -> list[dict]:
+        with self.lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT * FROM casa_escaneos WHERE casa_id = ? ORDER BY id DESC", (casa_id,)).fetchall()]
+
+    def escaneo_listo(self, eid: int, bytes_mapa: int) -> bool:
+        """Processing finished. The house's first ready whole-house scan becomes the active one (it defines the frame)."""
+        with self.lock:
+            r = self.conn.execute("SELECT casa_id, alcance FROM casa_escaneos WHERE id = ? AND estado = 'procesando'", (eid,)).fetchone()
+            if not r:
+                return False
+            activo = r["alcance"] == "casa" and self.conn.execute(
+                "SELECT 1 FROM casa_escaneos WHERE casa_id = ? AND activo = 1", (r["casa_id"],)).fetchone() is None
+            self.conn.execute("UPDATE casa_escaneos SET estado = 'listo', motivo = NULL, bytes_mapa = ?, activo = ? WHERE id = ?",
+                              (bytes_mapa, int(activo), eid))
+            self.conn.commit()
+            return True
+
+    def escaneo_fallo(self, eid: int, motivo: str) -> bool:
+        with self.lock:
+            n = self.conn.execute("UPDATE casa_escaneos SET estado = 'fallo', motivo = ? WHERE id = ? AND estado = 'procesando'",
+                                  (motivo[:300], eid)).rowcount
+            self.conn.commit()
+            return n == 1
+
+    def escaneo_reintentar(self, eid: int) -> bool:
+        with self.lock:
+            n = self.conn.execute("UPDATE casa_escaneos SET estado = 'procesando', motivo = NULL WHERE id = ? AND estado = 'fallo'",
+                                  (eid,)).rowcount
+            self.conn.commit()
+            return n == 1
 
     def casa_disp_set(self, casa_id: int, entity_id: str, **cambios) -> None:
         bad = [k for k in cambios if k not in self.CASA_DISP_FIELDS]

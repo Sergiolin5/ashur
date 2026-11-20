@@ -474,28 +474,33 @@
   /* 0.68.0: the brain fills the screen; three quiet pills float over it instead of two rows of tabs */
   #cerebro { position: relative; }
   .cb-top { position: absolute; top: 10px; left: 0; right: 0; z-index: 2; justify-content: center; padding: 0 var(--s3, 16px); pointer-events: none; flex-wrap: nowrap; }
-  .cb-top .cb-seg { display: none !important; }
   .cb-pill { pointer-events: auto; width: auto; margin: 0; padding: 7px 14px; border-radius: var(--r-pill, 999px); border: 1px solid rgba(198,194,255,.18);
              background: rgba(23,21,58,.55); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); color: #d9d7ff; font-size: var(--fs-small, 13px); }
   .cb-pill:active { background: rgba(88,86,214,.55); }
-  .cb-pill.cb-i { width: 32px; padding: 7px 0; font-style: italic; font-family: Georgia, serif; }
   .cb-pill[aria-pressed="true"] { background: #5856D6; color: #fff; }
   #cerebro:not(.ley) .cb-legend { display: none; }
   #cerebro.ley .cb-count { bottom: 40px; }
-  .cb-seg { display: flex; background: var(--row); border-radius: var(--r-pill, 999px); padding: 3px; }
-  .cb-seg button { width: auto; margin: 0; padding: 6px 11px; border: 0; border-radius: var(--r-pill, 999px); background: transparent; color: var(--secondary); font-size: var(--fs-small, 13px); }
-  .cb-seg button[aria-pressed="true"] { background: #5856D6; color: #fff; }
   .cb-stage { position: relative; height: calc(100dvh - 200px - var(--safe-b, 0px)); min-height: 340px; background: radial-gradient(ellipse at center, #17153a 0%, #0b0a1f 70%); border-radius: 18px; overflow: hidden; touch-action: none; }
-  #cb-canvas { width: 100%; height: 100%; display: block; }
   .cb-count { position: absolute; left: 0; right: 0; text-align: center; bottom: 12px; font-size: 12px; color: #b9b6ea; letter-spacing: .02em; pointer-events: none; }
   .cb-legend { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: #9b98c9; pointer-events: none; }
-  .cb-legend span::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--c); margin-right: 5px; box-shadow: 0 0 6px var(--c); }
   .cb-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #c9c6f5; font-size: 14px; }
   .cb-card { margin: 10px var(--s3, 16px) 0; padding: 14px 16px; background: var(--row); border-radius: 16px; border: 1px solid rgba(88,86,214,.35); }
   .cb-kind { font-size: 12px; color: #a5a2ff; text-transform: none; margin-bottom: 4px; }
   .cb-text { font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
   .cb-meta { font-size: 12px; color: var(--secondary); margin-top: 6px; }
   .cb-actions { display: flex; gap: 16px; margin-top: 8px; }
+  /* 0.75.0: the vault graph (sigma.js) */
+  #cb-sigma { position: absolute; inset: 0; }
+  .cb-buscar { min-width: 0; flex: 1 1 auto; max-width: 220px; -webkit-appearance: none; appearance: none; }
+  .cb-buscar::placeholder { color: #9b98c9; }
+  select.cb-pill { -webkit-appearance: none; appearance: none; max-width: 150px; }
+  .cb-legend { pointer-events: auto; }
+  .cb-legend button { width: auto; margin: 0; padding: 3px 9px; border: 1px solid rgba(198,194,255,.18); border-radius: 999px; background: rgba(23,21,58,.55); color: #d9d7ff; font-size: 11px; }
+  .cb-legend button::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--c); margin-right: 5px; box-shadow: 0 0 6px var(--c); }
+  .cb-legend button[aria-pressed="false"] { opacity: .4; }
+  #cerebro .cb-card { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3; margin: 0; max-height: 58%; overflow: auto;
+                      background: rgba(23,21,58,.88); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  .cb-body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; color: var(--label, inherit); }
   .form-sec { margin: 0 0 var(--s3); }
   .form-sec summary { cursor: pointer; padding: 12px 14px; background: var(--row); border-radius: 12px; display: flex; justify-content: space-between; }
   .form-sec[open] summary { border-radius: 12px 12px 0 0; }
@@ -831,19 +836,18 @@
 
   <div id="cerebro" hidden>
     <div class="cb-top">
-      <button type="button" class="cb-pill" id="cb-vista" aria-label="Cambiar de vista">Núcleo</button>
-      <button type="button" class="cb-pill" id="cb-filtro" aria-label="Qué mostrar">Todo</button>
-      <button type="button" class="cb-pill cb-i" id="cb-ley" aria-pressed="false" aria-label="Mostrar la leyenda">i</button>
-      <div class="cb-seg" role="group" aria-label="Vista"><button type="button" id="cb-nucleo" aria-pressed="true">Núcleo</button><button type="button" id="cb-red" aria-pressed="false">Red</button></div>
-      <div class="cb-seg" role="group" aria-label="Filtro" id="cb-filtros"><button type="button" data-f="todo" aria-pressed="true">Todo</button><button type="button" data-f="yo" aria-pressed="false">Tuyos</button><button type="button" data-f="inv" aria-pressed="false">Invitados</button><button type="button" data-f="hoy" aria-pressed="false">Hoy</button></div>
+      <input type="search" class="cb-pill cb-buscar" id="cb-buscar" placeholder="Buscar nota" aria-label="Buscar una nota por título o ruta" autocomplete="off">
+      <select class="cb-pill" id="cb-tag" aria-label="Filtrar por tag"><option value="">Todos los tags</option></select>
+      <button type="button" class="cb-pill" id="cb-ley" aria-pressed="false" aria-label="Carpetas y leyenda">Carpetas</button>
     </div>
-    <div class="cb-stage" id="cb-stage"><canvas id="cb-canvas" aria-label="El cerebro de Ashur en 3D: arrastra para girar, pellizca para acercar, toca un punto para verlo"></canvas>
+    <div class="cb-stage" id="cb-stage"><div id="cb-sigma" aria-label="Tu bóveda de Obsidian como grafo: arrastra para moverte, pellizca para acercar, toca un punto para leer la nota"></div>
       <div class="cb-count" id="cb-count"></div>
-      <div class="cb-legend" aria-hidden="true"><span style="--c:#8f8cff">trabajo</span><span style="--c:#4fd1b5">gustos</span><span style="--c:#c6c2ff">Ashur</span><span style="--c:#6f6e86">privado</span><span style="--c:#ff9e7a">personas</span><span style="--c:#7cb8ff">conversaciones</span><span style="--c:#f48fb8">aprendido</span></div>
+      <div class="cb-legend" id="cb-legend"></div>
       <div class="cb-msg" id="cb-msg" hidden></div>
     </div>
     <div class="cb-card" id="cb-card" hidden><div class="cb-kind" id="cb-kind"></div><div class="cb-text" id="cb-text"></div><div class="cb-meta" id="cb-meta"></div>
-      <div class="cb-actions"><button type="button" class="link" id="cb-mem" hidden>Abrir en Memoria</button><button type="button" class="link" id="cb-close">Cerrar</button></div></div>
+      <div class="cb-body" id="cb-body"></div>
+      <div class="cb-actions"><button type="button" class="link" id="cb-mas" hidden>Ver toda la nota</button><button type="button" class="link" id="cb-close">Cerrar</button></div></div>
   </div>
 
   <div id="casa" hidden>
@@ -2269,7 +2273,7 @@
     clearTimeout(epTimer); epOpen = false; if (MP.on) mpShow(false); epReq++; $("casa-energia").hidden = true; $("casa-main").hidden = false;   // energía too
     try { localStorage.removeItem(KEY); } catch (e) {}
     for (const id of ["dashboard", "settings", "chat", "diary", "casa", "cerebro", "tabs", "composer", "guest-signout", "greet", "inbox-pill"]) $(id).hidden = true;
-    cerebroShow(false); CB.data = null; CB.nodes = null; CB.hasta = null; $("cb-card").hidden = true;   // nothing of the brain outlives the session
+    cbReset();                                              // nothing of the brain outlives the session
     clearTimeout(AV.speakTimer); AV.speakTimer = 0; AV.thinking = 0; avatarNeeds(0);                 // nor the avatar's badge or state
     $("thread").replaceChildren(); lastDay = null;
     if (NATIVE) {                                             // the app asks for the key, not the panel
@@ -2563,7 +2567,7 @@
     a.classList.toggle("needs", needs);
     $("avatar-badge").hidden = !needs; $("avatar-badge").textContent = needs ? String(AV.needs) : "";
     a.setAttribute("aria-label", AV.thinking ? "Ashur está pensando" : listening ? "Ashur te escucha" : speaking ? "Ashur está respondiendo"
-      : needs ? "Ashur te necesita: " + AV.needs + " por aprobar" : guest ? "Ashur" : "Ashur: abrir el cerebro");
+      : needs ? "Ashur te necesita: " + AV.needs + " por aprobar" : guest ? "Ashur" : "Ashur: abrir el grafo de tu bóveda");
   }
   function avatarNeeds(n) { AV.needs = n || 0; avatarRender(); }
   function avatarThink(on) { AV.thinking = Math.max(0, AV.thinking + (on ? 1 : -1)); avatarListen(); }   // the box was just emptied
@@ -2591,277 +2595,169 @@
     const dx = st.left + st.width / 2 - (from.left + from.width / 2), dy = st.top + st.height / 2 - (from.top + from.height / 2);
     requestAnimationFrame(() => { fly.style.transform = `translate(${dx}px, ${dy}px) scale(3.2)`; fly.style.opacity = "0"; });
     setTimeout(() => fly.remove(), 500);
-    CB.lit && CB.lit.set("core", 1);                      // and the core it became lights up
   });
 
-  // --- 0.65.0: Cerebro — Ashur's memory in 3D (three.js, served by the core, loaded only here) --------------
-  const CB = { on: false, three: null, ready: false, data: null, mode: "nucleo", filtro: "todo", hasta: null,
-               lit: new Map(), sel: -1, poll: null, raf: 0, last: 0, idle: 0, rotX: -0.25, rotY: 0, dist: 21, drag: null };
-  const CB_COL = { core: "#c9c6ff", trabajo: "#8f8cff", gustos: "#4fd1b5", ashur: "#c6c2ff", privado: "#6f6e86",
-                   "sin tema": "#55546c", persona: "#ff9e7a", conversacion: "#7cb8ff", trato: "#f48fb8", correccion: "#ffb86b", rasgo: "#b6a6ff", guestmem: "#ffc2a8" };
-  const CB_KIND = { core: "Ashur", persona: "Persona", conversacion: "Conversación", recuerdo: "Recuerdo", trato: "Trato aprendido",
-                    correccion: "Corrección", rasgo: "Rasgo de su persona" };
-  function cbColor(n) {
-    if (n.tipo === "recuerdo") return n.dueño && n.dueño !== "yo" ? CB_COL.guestmem : (CB_COL[n.grupo] || CB_COL["sin tema"]);
-    return CB_COL[n.tipo] || "#ffffff";
-  }
+  // --- 0.75.0: Cerebro — the Obsidian vault as a graph (sigma.js + graphology, WebGL, served by the core) ----------
+  // Every node is a .md file of the vault, every edge a [[wikilink]] or a shared tag; colour by folder. Layout runs in
+  // vendor/grafo-worker.js (ForceAtlas2) so the phone stays smooth. Nothing here survives signing out.
+  const CB = { on: false, three: null, lib: null, sigma: null, graph: null, data: null, worker: null,
+               off: new Set(), tag: "", q: "", sel: null, loading: false, poll: 0 };
+  const CB_COL = { ashur: "#c6c2ff", sergio: "#4fd1b5", claude: "#ff9e7a", notion: "#7cb8ff" };
+  const CB_NAME = { ashur: "Ashur", sergio: "Tus archivos", claude: "Claude", notion: "Notion" };
+  function cbColor(folder) { return CB_COL[folder] || "#8f8cff"; }
   function cerebroShow(on) {
     CB.on = on;
-    if (!on) { clearInterval(CB.poll); CB.poll = null; cancelAnimationFrame(CB.raf); return; }
+    if (!on) { clearTimeout(CB.poll); if (CB.worker) CB.worker.postMessage({ tipo: "parar" }); return; }
     cbStart();
+  }
+  function cbReset() {
+    cerebroShow(false);
+    if (CB.worker) { CB.worker.terminate(); CB.worker = null; }
+    if (CB.sigma) { CB.sigma.kill(); CB.sigma = null; }
+    CB.graph = null; CB.data = null; CB.sel = null; $("cb-card").hidden = true;
   }
   document.addEventListener("visibilitychange", () => {   // stop when the phone locks; resume if the tab is still the one shown
     if (document.hidden) { if (CB.on) cerebroShow(false); }
     else if (document.body.dataset.tab === "cerebro" && key && role === "admin") cerebroShow(true);
   });
+  function cbMsg(t) { const m = $("cb-msg"); m.hidden = !t; m.textContent = t || ""; }
   async function cbStart() {
-    const msg = $("cb-msg");
-    if (!CB.three) {
-      try { CB.three = await import(new URL(THREE_URL, location.href).href); }
-      catch (e) { msg.hidden = false; msg.textContent = "No pude cargar el motor 3D del cerebro."; return; }
+    if (!CB.lib) {
+      try { CB.lib = await import(new URL("vendor/grafo.min.js?v=3.0.3", location.href).href); }
+      catch (e) { cbMsg("No pude cargar el motor del grafo."); return; }
     }
-    if (!CB.on) return;
-    if (!CB.ready && !cbInit()) return;
-    await cbLoad();
-    if (!CB.on) return;
-    if (CB.hasta === null) { try { CB.hasta = (await (await api("api/cerebro/actividad")).json()).hasta; } catch (e) {} }
-    if (!CB.on) return;
-    clearInterval(CB.poll); CB.poll = setInterval(cbActivity, 2000);
-    cancelAnimationFrame(CB.raf); CB.raf = requestAnimationFrame(cbFrame);
+    if (!CB.on || CB.loading) return;
+    if (!CB.data) await cbLoad();
   }
-  function cbSprite() {
-    const c = document.createElement("canvas"); c.width = c.height = 64;
-    const g = c.getContext("2d"), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.18, "rgba(255,255,255,.95)");
-    r.addColorStop(0.35, "rgba(255,255,255,.35)"); r.addColorStop(1, "rgba(255,255,255,0)");
-    g.fillStyle = r; g.fillRect(0, 0, 64, 64);
-    return new CB.three.CanvasTexture(c);
-  }
-  function cbInit() {
-    const T = CB.three, cv = $("cb-canvas");
-    let gl;
-    try { gl = new T.WebGLRenderer({ canvas: cv, antialias: true, alpha: true, powerPreference: "low-power" }); }
-    catch (e) { const m = $("cb-msg"); m.hidden = false; m.textContent = "Este navegador no tiene WebGL, así que no puedo dibujar el cerebro en 3D."; return false; }
-    gl.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    CB.gl = gl; CB.scene = new T.Scene(); CB.cam = new T.PerspectiveCamera(55, 1, 0.1, 200);
-    CB.root = new T.Group(); CB.scene.add(CB.root);
-    CB.tex = cbSprite();
-    CB.mat = new T.ShaderMaterial({
-      uniforms: { map: { value: CB.tex }, scale: { value: 300 } },
-      vertexShader: "attribute float size; attribute vec3 color; attribute float lit; varying vec3 vC; varying float vL;" +
-        "uniform float scale; void main(){ vC=color; vL=lit; vec4 mv=modelViewMatrix*vec4(position,1.0);" +
-        "gl_PointSize=size*(1.0+lit*1.4)*scale/-mv.z; gl_Position=projectionMatrix*mv; }",
-      fragmentShader: "uniform sampler2D map; varying vec3 vC; varying float vL; void main(){ vec4 t=texture2D(map,gl_PointCoord);" +
-        "gl_FragColor=vec4(mix(vC,vec3(1.0),vL*0.55),t.a*(0.75+vL*0.25)); if(gl_FragColor.a<0.02) discard; }",
-      transparent: true, depthWrite: false, blending: T.AdditiveBlending });
-    CB.lmat = new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, blending: T.AdditiveBlending, depthWrite: false });
-    const st = $("cb-stage");
-    st.addEventListener("pointerdown", (e) => { st.setPointerCapture(e.pointerId); (CB.ptr = CB.ptr || new Map()).set(e.pointerId, [e.clientX, e.clientY]); CB.moved = 0; CB.idle = 0; });
-    st.addEventListener("pointermove", (e) => {
-      if (!CB.ptr || !CB.ptr.has(e.pointerId)) return;
-      const [px, py] = CB.ptr.get(e.pointerId);
-      if (CB.ptr.size === 1) { CB.rotY += (e.clientX - px) * 0.008; CB.rotX = Math.max(-1.4, Math.min(1.4, CB.rotX + (e.clientY - py) * 0.008)); }
-      else if (CB.ptr.size === 2) {
-        const pts = [...CB.ptr.values()], o = pts.find((p) => p !== CB.ptr.get(e.pointerId)) || pts[0];
-        const d0 = Math.hypot(px - o[0], py - o[1]), d1 = Math.hypot(e.clientX - o[0], e.clientY - o[1]);
-        CB.dist = Math.max(5, Math.min(40, CB.dist * (d0 / Math.max(1, d1))));
-      }
-      CB.moved += Math.abs(e.clientX - px) + Math.abs(e.clientY - py);
-      CB.ptr.set(e.pointerId, [e.clientX, e.clientY]);
-    });
-    const up = (e) => { if (CB.ptr) { if (CB.ptr.size === 1 && CB.moved < 8) cbPick(e); CB.ptr.delete(e.pointerId); } };
-    st.addEventListener("pointerup", up); st.addEventListener("pointercancel", up);
-    st.addEventListener("wheel", (e) => { e.preventDefault(); CB.dist = Math.max(5, Math.min(40, CB.dist * (1 + e.deltaY * 0.001))); }, { passive: false });
-    $("cb-nucleo").addEventListener("click", () => cbMode("nucleo"));
-    $("cb-red").addEventListener("click", () => cbMode("red"));
-    $("cb-filtros").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; CB.filtro = b.dataset.f;
-      for (const x of $("cb-filtros").querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b)); cbBuild(); });
-    $("cb-close").addEventListener("click", () => { CB.sel = -1; $("cb-card").hidden = true; });
-    // the pills drive the original controls, which stay as the single source of state
-    const FL = { todo: "Todo", yo: "Tuyos", inv: "Invitados", hoy: "Hoy" };
-    $("cb-vista").addEventListener("click", () => { const red = CB.mode !== "red"; $(red ? "cb-red" : "cb-nucleo").click(); $("cb-vista").textContent = red ? "Red" : "Núcleo"; });
-    $("cb-filtro").addEventListener("click", () => {
-      const bs = [...$("cb-filtros").querySelectorAll("button")], i = bs.findIndex((b) => b.dataset.f === CB.filtro), nx = bs[(i + 1) % bs.length];
-      nx.click(); $("cb-filtro").textContent = FL[nx.dataset.f] || nx.textContent;
-    });
-    $("cb-ley").addEventListener("click", () => { const on = $("cerebro").classList.toggle("ley"); $("cb-ley").setAttribute("aria-pressed", String(on)); });
-    $("cb-mem").addEventListener("click", () => { showTab("settings"); showPage("memory"); });
-    CB.ready = true;
-    return true;
-  }
-  function cbMode(m) { CB.mode = m; $("cb-nucleo").setAttribute("aria-pressed", String(m === "nucleo")); $("cb-red").setAttribute("aria-pressed", String(m === "red")); CB.settle = 0; cbTargets(); }
   async function cbLoad() {
-    const m = $("cb-msg");
-    if (!CB.data) { m.hidden = false; m.textContent = "Cargando el cerebro…"; }
+    CB.loading = true;
     try {
-      const r = await api("api/cerebro");
-      if (!r.ok) throw new Error(String(r.status));
-      CB.data = await r.json(); cbBuild();
-    } catch (e) {
-      if (!CB.data) { m.hidden = false; m.textContent = "No pude cargar el cerebro. Lo intento de nuevo en unos segundos."; setTimeout(() => { if (CB.on && !CB.data) cbLoad(); }, 5000); }
-    }
-  }
-  function cbVisible(n) {
-    const f = CB.filtro;
-    if (f === "todo") return true;
-    if (n.tipo === "core") return true;
-    if (f === "yo") return n.id === "yo" || n.dueño === "yo" || (n.tipo === "conversacion" && n.grupo === "yo") || ["trato", "correccion", "rasgo"].includes(n.tipo);
-    if (f === "inv") return (n.tipo === "persona" && n.id !== "yo") || (n.dueño && n.dueño !== "yo") || (n.tipo === "conversacion" && n.grupo !== "yo");
-    if (f === "hoy") return (n.fecha || 0) > Date.now() / 1000 - 86400 || n.tipo === "persona";
-    return true;
+      const r = await api("api/boveda/grafo");
+      if (!r.ok) { cbMsg("No pude leer la bóveda."); return; }
+      const j = await r.json();
+      if (!CB.on) return;
+      if (j.listo === false) {                              // the first scan reads every note: show it, ask again soon
+        cbMsg("Leyendo tu bóveda… " + (j.leidas || 0).toLocaleString("es-CO") + " notas");
+        clearTimeout(CB.poll); CB.poll = setTimeout(() => { CB.loading = false; cbStart(); }, 2000);
+        return;
+      }
+      cbMsg(j.nodos.length ? "" : "La bóveda está vacía todavía: sincroniza Notion o importa algo en Ajustes → Obsidian.");
+      CB.data = j; cbBuild();
+    } catch (e) { cbMsg("No pude leer la bóveda."); }
+    finally { CB.loading = false; }
   }
   function cbBuild() {
-    const T = CB.three, D = CB.data; if (!D || !T) return;
-    const prev = new Map((CB.nodes || []).map((n) => [n.id, n]));
-    CB.nodes = D.nodos.filter(cbVisible).map((n) => { const p = prev.get(n.id);
-      return Object.assign({}, n, { x: p ? p.x : (Math.random() - .5) * 2, y: p ? p.y : (Math.random() - .5) * 2, z: p ? p.z : (Math.random() - .5) * 2, vx: 0, vy: 0, vz: 0, born: p ? 0 : (CB.data && prev.size ? 1 : 0) }); });
-    CB.index = new Map(CB.nodes.map((n, i) => [n.id, i]));
-    CB.edges = D.aristas.filter(([a, b]) => CB.index.has(a) && CB.index.has(b)).map(([a, b, k]) => [CB.index.get(a), CB.index.get(b), k]);
-    const N = CB.nodes.length;
-    if (CB.pts) { CB.root.remove(CB.pts); CB.pts.geometry.dispose(); }
-    if (CB.lines) { CB.root.remove(CB.lines); CB.lines.geometry.dispose(); }
-    const g = new T.BufferGeometry();
-    g.setAttribute("position", new T.BufferAttribute(new Float32Array(N * 3), 3));
-    g.setAttribute("color", new T.BufferAttribute(new Float32Array(N * 3), 3));
-    g.setAttribute("size", new T.BufferAttribute(new Float32Array(N), 1));
-    g.setAttribute("lit", new T.BufferAttribute(new Float32Array(N), 1));
-    const col = new T.Color();
-    CB.nodes.forEach((n, i) => {
-      col.set(cbColor(n)); g.attributes.color.setXYZ(i, col.r, col.g, col.b);
-      g.attributes.size.setX(i, n.tipo === "core" ? 2.6 : n.tipo === "persona" ? 1.5 : n.tipo === "conversacion" ? 0.95 : ["trato", "correccion", "rasgo"].includes(n.tipo) ? 0.9 : 0.75);
+    const D = CB.data, L = CB.lib, n = D.nodos.length;
+    const deg = new Uint32Array(n);
+    for (const [a, b] of D.aristas) { deg[a]++; deg[b]++; }
+    const g = new L.Graph({ type: "undirected", multi: false });
+    const centers = {}, nf = D.carpetas.length;
+    D.carpetas.forEach((f, i) => { const t = (i / Math.max(1, nf)) * Math.PI * 2; centers[i] = [Math.cos(t) * 100, Math.sin(t) * 100]; });
+    const R = 30 + Math.sqrt(n) * 2;
+    D.nodos.forEach(([ruta, titulo, f, tags], i) => {
+      const [cx, cy] = centers[f], t = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * R;
+      g.addNode(i, { x: cx + Math.cos(t) * rr, y: cy + Math.sin(t) * rr, size: 1.6 + Math.log2(1 + deg[i]) * 1.4,
+                     label: titulo, color: cbColor(D.carpetas[f]), f, tags, ruta });
     });
-    CB.pts = new T.Points(g, CB.mat); CB.root.add(CB.pts);
-    const lg = new T.BufferGeometry();
-    lg.setAttribute("position", new T.BufferAttribute(new Float32Array(CB.edges.length * 6), 3));
-    lg.setAttribute("color", new T.BufferAttribute(new Float32Array(CB.edges.length * 6), 3));
-    CB.lines = new T.LineSegments(lg, CB.lmat); CB.root.add(CB.lines);
-    CB.settle = 0; cbTargets();
-    const t = D.totales, last = CB.lastThought ? " · pensó " + cbAgo(CB.lastThought) : "";
-    $("cb-count").textContent = t.recuerdos + " recuerdos · " + t.personas + (t.personas === 1 ? " persona" : " personas") + " · " + t.conversaciones + " conversaciones" + last;
-    $("cb-msg").hidden = N > 2; if (N <= 2) $("cb-msg").textContent = "Todavía no hay recuerdos que mostrar.";
-  }
-  function cbAgo(ts) { const m = Math.round((Date.now() / 1000 - ts) / 60); return m < 1 ? "ahora" : "hace " + m + " min"; }
-  function cbFib(i, n) { const y = 1 - (i + .5) / n * 2, r = Math.sqrt(1 - y * y), th = i * 2.39996; return [Math.cos(th) * r, y, Math.sin(th) * r]; }
-  function cbTargets() {
-    if (!CB.nodes) return;
-    const TEMA_DIR = { trabajo: [1, .2, .2], gustos: [-1, .2, .3], ashur: [.1, 1, -.2], privado: [0, -1, .2], "sin tema": [.2, -.3, -1] };
-    const persons = CB.nodes.filter((n) => n.tipo === "persona");
-    const pdir = new Map(persons.map((p, i) => [p.id, p.id === "yo" ? [0, 0, 1] : cbFib(i, persons.length + 1)]));
-    const groups = {};
-    for (const n of CB.nodes) { const k = n.tipo + "|" + (n.tipo === "recuerdo" ? (n.dueño === "yo" ? n.grupo : n.dueño) : n.tipo === "conversacion" ? n.grupo : ""); (groups[k] = groups[k] || []).push(n); }
-    for (const [k, list] of Object.entries(groups)) {
-      list.forEach((n, i) => {
-        if (n.tipo === "core") { n.tx = n.ty = n.tz = 0; return; }
-        let dir, R, spread;
-        if (["trato", "correccion", "rasgo"].includes(n.tipo)) { const f = cbFib(i, list.length); dir = f; R = 1.9; spread = 0; }
-        else if (n.tipo === "persona") { dir = pdir.get(n.id); R = 3.3; spread = 0; }
-        else if (n.tipo === "conversacion") { dir = pdir.get(n.grupo) || [0, 0, 1]; R = 4.6; spread = 0.9; }
-        else { dir = n.dueño === "yo" ? (TEMA_DIR[n.grupo] || TEMA_DIR["sin tema"]) : (pdir.get(n.dueño) || [0, 0, -1]); R = 6.6 + (i % 5) * 0.35; spread = Math.min(1.25, 0.35 + list.length / 160); }
-        const f = cbFib(i, Math.max(1, list.length));
-        let x = dir[0] + f[0] * spread, y = dir[1] + f[1] * spread, z = dir[2] + f[2] * spread;
-        const L = Math.hypot(x, y, z) || 1; n.tx = x / L * R; n.ty = y / L * R; n.tz = z / L * R;
-      });
-    }
-  }
-  function cbLayout() {
-    const ns = CB.nodes; if (!ns) return;
-    if (CB.mode === "nucleo") { for (const n of ns) { n.x += (n.tx - n.x) * .08; n.y += (n.ty - n.y) * .08; n.z += (n.tz - n.z) * .08; } return; }
-    if (CB.settle > 420) return;                       // the network stops once it settles: no battery for nothing
-    CB.settle++;
-    const N = ns.length, k = Math.min(36, N - 1);
-    for (let i = 0; i < N; i++) {
-      const a = ns[i];
-      for (let s = 0; s < k; s++) {
-        const b = ns[(i * 7 + s * 13 + CB.settle) % N]; if (b === a) continue;
-        const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z, d2 = dx * dx + dy * dy + dz * dz + .25, f = 0.035 * Math.min(4, N / k) / d2;
-        a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
-      }
-    }
-    for (const [i, j] of CB.edges) {
-      const a = ns[i], b = ns[j], dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, d = Math.hypot(dx, dy, dz) || 1, f = (d - 1.4) * 0.02;
-      a.vx += dx / d * f; a.vy += dy / d * f; a.vz += dz / d * f; b.vx -= dx / d * f; b.vy -= dy / d * f; b.vz -= dz / d * f;
-    }
-    for (const n of ns) {
-      if (n.tipo === "core") { n.x = n.y = n.z = 0; continue; }
-      n.vx -= n.x * .012; n.vy -= n.y * .012; n.vz -= n.z * .012;
-      n.vx *= .8; n.vy *= .8; n.vz *= .8;
-      const sp = Math.hypot(n.vx, n.vy, n.vz); if (sp > .25) { n.vx *= .25 / sp; n.vy *= .25 / sp; n.vz *= .25 / sp; }
-      n.x += n.vx; n.y += n.vy; n.z += n.vz;
-    }
-  }
-  function cbFrame(ts) {
-    if (!CB.on) return;
-    CB.raf = requestAnimationFrame(cbFrame);
-    if (ts - CB.last < 33) return;                     // 30 fps is enough and keeps the phone cool
-    CB.last = ts;
-    const st = $("cb-stage"), w = st.clientWidth, h = st.clientHeight;
-    if (CB.w !== w || CB.h !== h) { CB.w = w; CB.h = h; CB.gl.setSize(w, h, false); CB.cam.aspect = w / Math.max(1, h); CB.cam.updateProjectionMatrix(); CB.mat.uniforms.scale.value = h * 0.9; }
-    if (!CB.nodes) return;
-    cbLayout();
-    if (!CB.ptr || !CB.ptr.size) { CB.idle++; if (CB.idle > 90) CB.rotY += 0.0022; }
-    CB.root.rotation.set(CB.rotX, CB.rotY, 0);
-    const fit = CB.cam.aspect < 0.85 ? 0.85 / CB.cam.aspect : 1;   // a tall phone screen needs the camera further back
-    CB.cam.position.set(0, 0, CB.dist * fit); CB.cam.lookAt(0, 0, 0);
-    const pos = CB.pts.geometry.attributes.position, lit = CB.pts.geometry.attributes.lit, now = performance.now() / 1000;
-    CB.nodes.forEach((n, i) => {
-      pos.setXYZ(i, n.x, n.y, n.z);
-      let L = CB.lit.get(n.id) || 0;
-      if (n.tipo === "core") L = Math.max(L, 0.25 + Math.sin(now * 1.6) * 0.15);
-      if (i === CB.sel) L = Math.max(L, 0.9);
-      lit.setX(i, L);
+    for (const [a, b, k] of D.aristas) if (!g.hasEdge(a, b)) g.addEdge(a, b, { k, color: k ? "rgba(140,138,200,.18)" : "rgba(180,178,255,.32)", size: k ? 0.4 : 0.6 });
+    if (CB.sigma) CB.sigma.kill();
+    CB.graph = g;
+    CB.sigma = new L.Sigma(g, $("cb-sigma"), {
+      renderEdgeLabels: false, labelColor: { color: "#e6e4ff" }, labelSize: 11, labelDensity: 0.6, labelRenderedSizeThreshold: 7,
+      defaultEdgeColor: "rgba(180,178,255,.3)", hideEdgesOnMove: n > 5000, zIndex: true,
+      nodeReducer: (node, a) => {
+        const hidden = CB.off.has(D.carpetas[a.f]) || (CB.tag !== "" && !a.tags.includes(+CB.tag));
+        if (hidden) return { ...a, hidden: true };
+        const hit = CB.q && (a.label.toLowerCase().includes(CB.q) || a.ruta.toLowerCase().includes(CB.q));
+        if (CB.q && !hit) return { ...a, color: "#2c2b4a", label: "", size: Math.min(a.size, 2), zIndex: 0 };
+        if (String(node) === String(CB.sel)) return { ...a, highlighted: true, size: a.size * 1.8, zIndex: 2 };
+        return hit ? { ...a, highlighted: true, zIndex: 1 } : a;
+      },
+      edgeReducer: (edge, a) => {
+        const [s, t] = CB.graph.extremities(edge), A = CB.graph.getNodeAttributes(s), B = CB.graph.getNodeAttributes(t);
+        const off = (x) => CB.off.has(D.carpetas[x.f]) || (CB.tag !== "" && !x.tags.includes(+CB.tag));
+        return off(A) || off(B) ? { ...a, hidden: true } : a;
+      },
     });
-    for (const [id, v] of CB.lit) { const nv = v - 0.012; if (nv <= 0) CB.lit.delete(id); else CB.lit.set(id, nv); }
-    pos.needsUpdate = lit.needsUpdate = true;
-    const lp = CB.lines.geometry.attributes.position, lc = CB.lines.geometry.attributes.color;
-    CB.edges.forEach(([i, j, k], e) => {
-      const a = CB.nodes[i], b = CB.nodes[j];
-      lp.setXYZ(e * 2, a.x, a.y, a.z); lp.setXYZ(e * 2 + 1, b.x, b.y, b.z);
-      const L = Math.max(CB.lit.get(a.id) || 0, CB.lit.get(b.id) || 0, (i === CB.sel || j === CB.sel) ? .8 : 0);
-      const base = k === "parecido" ? .16 : k === "aprendido en" ? .05 : .11, v = base + L * .8;
-      lc.setXYZ(e * 2, v * .62, v * .6, v); lc.setXYZ(e * 2 + 1, v * .62, v * .6, v);
-    });
-    lp.needsUpdate = lc.needsUpdate = true;
-    CB.gl.render(CB.scene, CB.cam);
+    CB.sigma.on("clickNode", ({ node }) => cbOpen(node));
+    CB.sigma.on("clickStage", () => { CB.sel = null; $("cb-card").hidden = true; CB.sigma.refresh(); });
+    cbLegend(); cbTags(); cbCount(); cbLayout();
   }
-  function cbPick(e) {
-    const T = CB.three, r = $("cb-stage").getBoundingClientRect();
-    const m = new T.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    CB.pts.geometry.computeBoundingSphere();          // the layout moves: a stale sphere makes later taps miss
-    const rc = new T.Raycaster(); rc.params.Points.threshold = 0.28; rc.setFromCamera(m, CB.cam);
-    const hit = rc.intersectObject(CB.pts)[0];
-    if (!hit) { CB.sel = -1; $("cb-card").hidden = true; return; }
-    CB.sel = hit.index; const n = CB.nodes[hit.index];
-    const links = CB.edges.filter(([a, b]) => a === hit.index || b === hit.index).length;
-    $("cb-kind").textContent = (n.tipo === "recuerdo" ? "Recuerdo · " + (n.dueño === "yo" ? n.grupo : "de " + ((CB.nodes[CB.index.get(n.dueño)] || {}).texto || "un invitado")) : CB_KIND[n.tipo] || n.tipo)
-      + (n.tier === "local" ? " · solo local" : "");
-    $("cb-text").textContent = n.texto;
-    const bits = [];
-    if (n.fecha) bits.push(new Date(n.fecha * 1000).toLocaleDateString("es-CO", { day: "numeric", month: "short", year: "numeric" }));
-    if (n.fuente) bits.push("de " + n.fuente);
-    bits.push(links + (links === 1 ? " conexión" : " conexiones"));
-    $("cb-meta").textContent = bits.join(" · ");
-    $("cb-mem").hidden = n.tipo !== "recuerdo";
+  function cbLayout() {                                     // ForceAtlas2 in a worker; positions stream back
+    if (CB.worker) CB.worker.terminate();
+    let w;
+    try { w = new Worker(new URL("vendor/grafo-worker.js?v=0.10.1", location.href).href); } catch (e) { return; }
+    CB.worker = w;
+    const g = CB.graph, n = g.order, x = new Float32Array(n), y = new Float32Array(n), sizes = new Float32Array(n);
+    g.forEachNode((k, a) => { x[k] = a.x; y[k] = a.y; sizes[k] = a.size; });
+    const edges = new Uint32Array(CB.data.aristas.length * 2);
+    CB.data.aristas.forEach(([a, b], i) => { edges[2 * i] = a; edges[2 * i + 1] = b; });
+    w.onmessage = (e) => {
+      if (e.data.tipo !== "pos" || CB.graph !== g) return;
+      const { x, y } = e.data;
+      g.updateEachNodeAttributes((k, a) => { a.x = x[k]; a.y = y[k]; return a; }, { attributes: ["x", "y"] });
+    };
+    w.postMessage({ tipo: "empezar", x, y, sizes, edges, iteraciones: n > 20000 ? 120 : 400 }, [x.buffer, y.buffer, sizes.buffer, edges.buffer]);
+  }
+  function cbLegend() {
+    const box = $("cb-legend"), D = CB.data, count = {};
+    for (const nd of D.nodos) count[nd[2]] = (count[nd[2]] || 0) + 1;
+    box.replaceChildren(...D.carpetas.map((f, i) => {
+      const b = el("button", null, (CB_NAME[f] || f) + " · " + (count[i] || 0).toLocaleString("es-CO"));
+      b.type = "button"; b.style.setProperty("--c", cbColor(f)); b.setAttribute("aria-pressed", String(!CB.off.has(f)));
+      b.onclick = () => { CB.off.has(f) ? CB.off.delete(f) : CB.off.add(f); b.setAttribute("aria-pressed", String(!CB.off.has(f))); CB.sigma.refresh(); cbCount(); };
+      return b;
+    }));
+  }
+  function cbTags() {
+    const D = CB.data, freq = new Map();
+    for (const nd of D.nodos) for (const t of nd[3]) freq.set(t, (freq.get(t) || 0) + 1);
+    const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 300);
+    const sel = $("cb-tag");
+    sel.replaceChildren(el("option", null, "Todos los tags"), ...top.map(([t, c]) => { const o = el("option", null, "#" + D.tags[t] + " · " + c); o.value = String(t); return o; }));
+    sel.firstChild.value = "";
+    sel.value = CB.tag && freq.has(+CB.tag) ? CB.tag : "";
+  }
+  function cbCount() {
+    const D = CB.data;
+    let shown = 0;
+    if (CB.graph) CB.graph.forEachNode((k, a) => { if (!CB.off.has(D.carpetas[a.f]) && (CB.tag === "" || a.tags.includes(+CB.tag))) shown++; });
+    $("cb-count").textContent = (shown === D.nodos.length ? "" : shown.toLocaleString("es-CO") + " de ") + D.nodos.length.toLocaleString("es-CO") + " notas · "
+      + D.aristas.length.toLocaleString("es-CO") + " enlaces · " + D.archivos_md.toLocaleString("es-CO") + " archivos .md";
+  }
+  async function cbOpen(node) {
+    const a = CB.graph.getNodeAttributes(node), D = CB.data;
+    CB.sel = node; CB.sigma.refresh();
+    $("cb-kind").textContent = (CB_NAME[D.carpetas[a.f]] || D.carpetas[a.f]) + " · " + CB.graph.degree(node) + " enlaces";
+    $("cb-text").textContent = a.label; $("cb-meta").textContent = a.ruta; $("cb-body").textContent = "Abriendo…"; $("cb-mas").hidden = true;
     $("cb-card").hidden = false;
-    $("cb-card").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    try {
+      const r = await api("api/boveda/nota?ruta=" + encodeURIComponent(a.ruta));
+      if (CB.sel !== node) return;
+      if (!r.ok) { $("cb-body").textContent = "No pude abrir la nota."; return; }
+      const j = await r.json(), body = j.cuerpo.trim(), cut = 4000;
+      const origen = j.frontmatter && j.frontmatter.origen ? "Origen: " + j.frontmatter.origen : "";
+      $("cb-meta").textContent = a.ruta + (origen ? " · " + origen : "");
+      $("cb-body").textContent = body.length > cut ? body.slice(0, cut) + "…" : body;
+      $("cb-mas").hidden = body.length <= cut;
+      $("cb-mas").onclick = () => { $("cb-body").textContent = body + (j.recortada ? "\n\n…(nota muy larga, recortada)" : ""); $("cb-mas").hidden = true; };
+    } catch (e) { $("cb-body").textContent = "No pude abrir la nota."; }
   }
-  async function cbActivity() {
-    if (!CB.on || CB.hasta === null) return;
-    let r; try { r = await (await api("api/cerebro/actividad?desde=" + CB.hasta)).json(); } catch (e) { return; }
-    CB.hasta = r.hasta;
-    let reload = false;
-    for (const ev of r.eventos) {
-      if (ev.tipo === "pensó") {                          // light the speaker, the core and every memory it used
-        CB.lastThought = ev.ts;
-        CB.lit.set(ev.quien, 1); CB.lit.set("core", 1);
-        (ev.recuerdos || []).forEach((id, k) => setTimeout(() => CB.lit.set("m" + id, 1), 150 + k * 90));
-      } else if (ev.tipo === "corrigió") { CB.lit.set("m" + ev.recuerdo, 1); }
-      else if (ev.tipo === "cerró") { CB.lit.set(ev.conversacion, 1); }
-      else { reload = true; CB.lit.set("core", 1); }      // learned something, or its persona changed: new nodes
-    }
-    if (reload) await cbLoad();
-    if (r.eventos.length && CB.data) { const t = CB.data.totales;
-      $("cb-count").textContent = t.recuerdos + " recuerdos · " + t.personas + (t.personas === 1 ? " persona" : " personas") + " · " + t.conversaciones + " conversaciones" + (CB.lastThought ? " · pensó " + cbAgo(CB.lastThought) : ""); }
-  }
+  $("cb-close").addEventListener("click", () => { CB.sel = null; $("cb-card").hidden = true; if (CB.sigma) CB.sigma.refresh(); });
+  $("cb-ley").addEventListener("click", () => { const on = !$("cerebro").classList.contains("ley"); $("cerebro").classList.toggle("ley", on); $("cb-ley").setAttribute("aria-pressed", String(on)); });
+  $("cb-tag").addEventListener("change", () => { CB.tag = $("cb-tag").value; if (CB.sigma) { CB.sigma.refresh(); cbCount(); } });
+  $("cb-buscar").addEventListener("input", () => { CB.q = $("cb-buscar").value.trim().toLowerCase(); if (CB.sigma) CB.sigma.refresh(); });
+  $("cb-buscar").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !CB.graph || !CB.q) return;
+    e.preventDefault();
+    const vis = (a) => !CB.off.has(CB.data.carpetas[a.f]);
+    let hit = CB.graph.findNode((k, a) => vis(a) && a.label.toLowerCase() === CB.q);         // the exact title first
+    if (hit === undefined) hit = CB.graph.findNode((k, a) => vis(a) && (a.label.toLowerCase().includes(CB.q) || a.ruta.toLowerCase().includes(CB.q)));
+    if (hit === undefined) return;
+    const p = CB.sigma.getNodeDisplayData(hit);
+    if (p) CB.sigma.getCamera().animate({ x: p.x, y: p.y, ratio: 0.15 }, { duration: 500 });
+    cbOpen(hit);
+  });
 
   // --- chat ---------------------------------------------------------------
   const money = new Intl.NumberFormat("es-CO", { style: "currency", currency: "USD", minimumFractionDigits: 2 });

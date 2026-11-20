@@ -12,11 +12,14 @@ import zipfile
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
-from fastapi import Depends, FastAPI, HTTPException
+import gzip
+
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from core import lotes
-from core.boveda import ashur as ashur_vault, claude_export, nota, notion, trabajos
+from core.boveda import ashur as ashur_vault, claude_export, grafo, nota, notion, trabajos
 from core.events import BOGOTA
 
 NOTION_HORA = (18, 0)                 # Sergio's choice: the daily incremental sync at 18:00 America/Bogota
@@ -176,6 +179,61 @@ def mount(app: FastAPI, d: Deps) -> dict:
         rid = d.db.claude_request_add(d.clock(), "lote", {"lote": lid}, reason)
         d.db.log(d.clock(), None, "claude_request", {"id": rid, "action": "lote", "label": action_label("lote", {"lote": lid})})
         return {"lote": lid, "pedido": rid, "pendientes": n}
+
+    # --- the graph «Cerebro» draws (0.75.0) ---
+    index = grafo.Index(base)
+    g_state = {"json": None, "at": 0.0, "thread": None}
+
+    def g_build() -> None:
+        try:
+            g = index.scan()
+            g_state["json"] = gzip.compress(json.dumps(g, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 5)
+            g_state["at"] = time.monotonic()
+        except Exception as ex:
+            d.db.log(d.clock(), None, "periodic_failed", {"error": f"grafo: {type(ex).__name__}"})
+
+    def g_refresh(wait: bool = False) -> None:
+        th = g_state["thread"]
+        if th and th.is_alive():
+            if wait:
+                th.join()
+            return
+        g_state["thread"] = threading.Thread(target=g_build, daemon=True, name="boveda-grafo")
+        g_state["thread"].start()
+        if wait:
+            g_state["thread"].join()
+
+    app.state.boveda_grafo = lambda: (g_refresh(wait=True), json.loads(gzip.decompress(g_state["json"])))[1]
+
+    @app.get("/api/boveda/grafo", dependencies=[Depends(d.require_admin)])
+    def boveda_grafo(request: Request, fresco: bool = False):
+        """The whole vault as nodes and edges. The first build runs in the background (the panel polls); later calls
+        answer at once with the last graph and refresh it behind (every 30 s at most), or wait with fresco=1."""
+        if g_state["json"] is None or fresco:
+            g_refresh(wait=fresco)
+            if g_state["json"] is None:
+                return {"listo": False, "leidas": index.estado["leidas"]}
+        elif time.monotonic() - g_state["at"] > 30:
+            g_refresh()
+        if "gzip" in request.headers.get("accept-encoding", ""):
+            return Response(g_state["json"], media_type="application/json", headers={"Content-Encoding": "gzip"})
+        return Response(gzip.decompress(g_state["json"]), media_type="application/json")
+
+    @app.get("/api/boveda/nota", dependencies=[Depends(d.require_admin)])
+    def boveda_nota(ruta: str):
+        try:
+            return grafo.read_note(base, ruta)
+        except (ValueError, FileNotFoundError, IsADirectoryError):
+            raise HTTPException(404, "No existe esa nota en la bóveda.")
+
+    @app.get("/api/boveda/buscar", dependencies=[Depends(d.require_admin)])
+    def boveda_buscar(q: str, n: int = 20):
+        if not index.estado["listo"]:
+            g_refresh(wait=True)
+        return grafo.search(base, index, q, max(1, min(n, 50)))
+
+    app.state.boveda_index = index
+
 
     @app.get("/api/boveda", dependencies=[Depends(d.require_admin)])
     def boveda_estado():

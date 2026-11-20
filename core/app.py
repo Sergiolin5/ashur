@@ -60,7 +60,8 @@ PANEL_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src '
 BASIS_WORKER_CSP = "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'"
 APP_FILES = ("/manifest.webmanifest", "/apple-touch-icon.png", "/icon-512.png", "/sw.js",   # public: the icon and manifest
              "/vendor/three.min.js",                                                    # and three.js (MIT) for «Cerebro»
-             "/vendor/basis/ktx2-worker.js", "/vendor/basis/basis_transcoder.wasm")      # 0.70.0: KTX2 textures of Casa · Mapa
+             "/vendor/basis/ktx2-worker.js", "/vendor/basis/basis_transcoder.wasm",      # 0.70.0: KTX2 textures of Casa · Mapa
+             "/vendor/grafo.min.js", "/vendor/grafo-worker.js")                         # 0.75.0: the vault graph
 PUBLIC_MAX_FAILURES = 10
 PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
@@ -288,7 +289,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.74.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.75.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -3008,6 +3009,16 @@ def create_app(
     @app.get("/vendor/three.min.js")
     def vendor_three():
         return FileResponse(VENDOR / "three.min.js", media_type="text/javascript",
+                            headers={"Cache-Control": "public, max-age=604800"})
+
+    @app.get("/vendor/grafo.min.js")
+    def vendor_grafo():                                     # 0.75.0: sigma.js + graphology (MIT) for «Cerebro»
+        return FileResponse(VENDOR / "grafo.min.js", media_type="text/javascript",
+                            headers={"Cache-Control": "public, max-age=604800"})
+
+    @app.get("/vendor/grafo-worker.js")
+    def vendor_grafo_worker():                              # 0.75.0: ForceAtlas2 (MIT) in a worker file
+        return FileResponse(VENDOR / "grafo-worker.js", media_type="text/javascript",
                             headers={"Cache-Control": "public, max-age=604800"})
 
     @app.get("/vendor/basis/{name}")

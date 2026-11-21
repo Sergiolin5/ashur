@@ -331,7 +331,7 @@ def test_go2rtc_caido(tmp_path):
 
 def test_version(tmp_path):
     app, tail, pub, clock, fake = _app(tmp_path)
-    assert app.version == "0.76.0"
+    assert app.version == "0.76.1"
 
 
 # ---- fixes after security review ----

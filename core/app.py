@@ -67,6 +67,8 @@ PUBLIC_FAIL_WINDOW_S = 600
 PUBLIC_LOCK_S = 900
 CASA_CONTROL_LOCK_S = 10    # a control waits this long for the house lock, then 409 (busy)
 CAMARA_MEDIOS = re.compile(r"/api/casa/camaras/[a-z0-9-]{1,32}/(foto\.jpg|hls/(stream\.m3u8|playlist\.m3u8|init\.mp4|segment\.m4s|segment\.ts))")
+# 0.76.1: el panel y los invitados cargan el tema activo antes de entrar, también por Funnel (solo el activo)
+TEMA_PUBLICO = re.compile(r"/api/temas/(activo|(\d{1,9})/(tema\.css|assets/[a-z0-9_-]{1,40}\.[a-z0-9]{2,5}))")
 VIDEO_SESION_S = 900
 VIDEO_SESIONES_MAX = 32
 INVENTORY_EVERY_S = float(os.environ.get("ASHUR_INVENTORY_EVERY_DAYS", "7")) * 86400
@@ -289,7 +291,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.76.0", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.76.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -367,6 +369,11 @@ def create_app(
                 medio = request.method == "GET" and bool(v) and not k and CAMARA_MEDIOS.fullmatch(path) is not None
                 if medio and video_sesion(v, True) is None:
                     return JSONResponse({"detail": "La sesión de video venció"}, status_code=401)
+                tm = TEMA_PUBLICO.fullmatch(path) if request.method == "GET" and not k else None
+                if tm:
+                    act = tema_activo()
+                    if tm.group(1) == "activo" or (act and tm.group(2) and int(tm.group(2)) == act["id"]):
+                        medio = True                     # passes without a key and never counts as a wrong one
                 if not medio and not _same(k, admin_key) and not db.guest_by_key(k):
                     failures[:] = [t for t in failures if now - t < PUBLIC_FAIL_WINDOW_S] + [now]
                     if len(failures) >= PUBLIC_MAX_FAILURES:

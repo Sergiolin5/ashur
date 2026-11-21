@@ -355,3 +355,23 @@ def test_luz_subido_a_mano_antes_queda_aprobado_y_su_pedido_cerrado(tmp_path):
     assert act["nombre"] == "Luz"
     pedido = [q for q in c2.get("/api/claude-requests", headers=A).json() if q["id"] == rid][0]
     assert pedido["status"] == "approved"
+
+
+# --- 0.76.1: por Funnel, el panel carga el tema activo antes de entrar ----------------------------------------------
+def test_funnel_entrega_el_tema_activo_sin_clave_y_sin_contar_fallos(tmp_path):
+    app = create_app(str(tmp_path / "t.db"), "e", "a", clock=VirtualClock(), sweep_every_s=None, public_port=8001,
+                     brain_settings=BrainSettings(monthly_budget_usd=10, brain="local-first"))
+    tail, pub = TestClient(app), TestClient(app, base_url="http://testserver:8001")
+    r = subir(tail, {"manifest.json": manifest(nombre="Mio", fondos={"chat": "assets/s.webp"}), "assets/s.webp": WEBP}).json()
+    otro = subir(tail, {"manifest.json": manifest(nombre="Otro", fondos={"chat": "assets/o.webp"}), "assets/o.webp": WEBP}).json()
+    tail.post(f"/api/claude-requests/{r['pedido']}/approve", headers=A)
+    tail.post("/api/temas/activar", headers=A, json={"id": r["id"]})
+    for _ in range(12):                                   # más que el tope de fallos de la puerta pública
+        assert pub.get("/api/temas/activo").json() == {"id": r["id"], "nombre": "Mio"}
+        assert pub.get(f"/api/temas/{r['id']}/tema.css").status_code == 200
+        assert pub.get(f"/api/temas/{r['id']}/assets/s.webp").status_code == 200
+    # lo que no es el tema activo sigue cerrado por Funnel
+    assert pub.get(f"/api/temas/{otro['id']}/tema.css").status_code == 401
+    assert pub.get(f"/api/temas/{otro['id']}/assets/o.webp").status_code == 401
+    assert pub.get("/api/temas").status_code == 401
+    assert pub.get("/api/temas/activo", headers=A).status_code == 200   # la puerta no quedó bloqueada

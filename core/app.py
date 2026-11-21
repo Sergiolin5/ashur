@@ -291,7 +291,7 @@ def create_app(
             task.cancel()
 
     # no /docs or /openapi.json: there is nothing to browse, and it maps the core for strangers
-    app = FastAPI(title="Ashur core", version="0.76.1", lifespan=lifespan,
+    app = FastAPI(title="Ashur core", version="0.76.2", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
     app.state.sweep = sweep
@@ -5417,6 +5417,9 @@ def create_app(
         sha = hashlib.sha256(data).hexdigest()
         if (old := db.tema_by_sha(sha)):
             raise HTTPException(409, f"Ese tema ya está subido (#{old['id']}, {old['estado']}).")
+        nombre = p.manifest["nombre"].strip().casefold()
+        if (dup := next((t for t in db.temas() if t["estado"] != "rechazado" and t["nombre"].strip().casefold() == nombre), None)):
+            raise HTTPException(409, f"Ya hay un tema «{dup['nombre']}» (#{dup['id']}). Cambia «nombre» en manifest.json y súbelo otra vez.")
         tid = tema_guardar(p, sha)
         rid = db.claude_request_add(clock(), "tema", {"tema": tid, "nombre": p.manifest["nombre"], "autor": p.manifest["autor"]},
                                     "Subiste un tema. Pruébalo antes de aprobar: solo trae colores, imágenes y CSS filtrado.")

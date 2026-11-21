@@ -16,7 +16,7 @@ DARK_OK = {"--bg": "#05070D", "--row": "#0B1020", "--label": "#FFF8E7", "--secon
 
 
 def manifest(**over):
-    m = {"formato": 1, "nombre": "Luz", "autor": "Claude", "version": "1.0", "descripcion": "prueba",
+    m = {"formato": 1, "nombre": "Prueba", "autor": "Claude", "version": "1.0", "descripcion": "prueba",
          "esquemas": {"oscuro": dict(DARK_OK)}}
     m.update(over)
     return m
@@ -41,11 +41,11 @@ def pkg(css=None, m=None, assets=None, prefix=""):
 # --- paquete -----------------------------------------------------------------------------------------
 def test_tema_minimo_valido():
     p = pkg()
-    assert p.manifest["nombre"] == "Luz" and p.avisos == []
+    assert p.manifest["nombre"] == "Prueba" and p.avisos == []
 
 
 def test_carpeta_raiz_comun_se_acepta():
-    assert pkg(prefix="mi-tema/").manifest["nombre"] == "Luz"
+    assert pkg(prefix="mi-tema/").manifest["nombre"] == "Prueba"
 
 
 def test_sin_manifest_rechazado():
@@ -259,10 +259,10 @@ def test_flujo_completo(tmp_path):
     # no se puede usar antes de aprobar
     assert c.post("/api/temas/activar", headers=A, json={"id": tid}).status_code == 409
     pedido = [q for q in c.get("/api/claude-requests", headers=A).json() if q["id"] == rid][0]
-    assert pedido["action"] == "tema" and "Luz" in pedido["label"]
+    assert pedido["action"] == "tema" and "Prueba" in pedido["label"]
     assert c.post(f"/api/claude-requests/{rid}/approve", headers=A).json()["status"] == "approved"
     assert c.post("/api/temas/activar", headers=A, json={"id": tid}).json() == {"activo": tid}
-    assert c.get("/api/temas/activo").json() == {"id": tid, "nombre": "Luz"}
+    assert c.get("/api/temas/activo").json() == {"id": tid, "nombre": "Prueba"}
     css = c.get(f"/api/temas/{tid}/tema.css")                                    # ya activo: sin clave (invitados)
     assert css.status_code == 200 and f'html[data-tema="{tid}"]' in css.text and css.headers["x-content-type-options"] == "nosniff"
     a = c.get(f"/api/temas/{tid}/assets/s.webp")
@@ -313,7 +313,7 @@ def test_descargas(tmp_path):
     assert temas.leer_zip(c.get("/api/temas/base.zip", headers=A).content).manifest["nombre"] == "Predeterminado"
     tid = subir(c, {"manifest.json": manifest(), "theme.css": ":root{--t-x:#fff} .row{color:var(--t-x)}"}).json()["id"]
     again = temas.leer_zip(c.get(f"/api/temas/{tid}/zip", headers=A).content)
-    assert again.manifest["nombre"] == "Luz" and "--t-x" in again.css
+    assert again.manifest["nombre"] == "Prueba" and "--t-x" in again.css
     assert c.get("/api/temas/base.zip").status_code == 401
 
 
@@ -375,3 +375,15 @@ def test_funnel_entrega_el_tema_activo_sin_clave_y_sin_contar_fallos(tmp_path):
     assert pub.get(f"/api/temas/{otro['id']}/assets/o.webp").status_code == 401
     assert pub.get("/api/temas").status_code == 401
     assert pub.get("/api/temas/activo", headers=A).status_code == 200   # la puerta no quedó bloqueada
+
+
+# --- 0.76.2: dos temas no pueden llamarse igual (decisión de Sergio, 2026-11-21) -----------------------------------
+def test_nombre_repetido_se_rechaza_al_subir(tmp_path):
+    c = app_client(tmp_path)                                   # Luz viene incluido
+    r = subir(c, {"manifest.json": manifest(nombre="  luz ")})
+    assert r.status_code == 409 and "Luz" in r.json()["detail"] and "manifest.json" in r.json()["detail"]
+    ok = subir(c, {"manifest.json": manifest(nombre="Luz 2")})
+    assert ok.status_code == 200
+    # un tema rechazado libera su nombre
+    assert c.post(f"/api/claude-requests/{ok.json()['pedido']}/reject", headers=A).status_code == 200
+    assert subir(c, {"manifest.json": manifest(nombre="Luz 2", version="1.1")}).status_code == 200
